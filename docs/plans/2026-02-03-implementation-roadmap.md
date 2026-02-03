@@ -60,6 +60,7 @@ All paths converge at the PTY. Output fans out to all consumers.
 | Async runtime | Tokio | Industry standard, excellent ecosystem |
 | Web framework | Axum | Best WebSocket ergonomics, tower middleware |
 | PTY library | portable-pty | Cross-platform, maintained by Wezterm author |
+| Terminal raw mode | crossterm | Clean guard pattern, good Tokio integration |
 | Terminal parser | vte | Battle-tested by Alacritty (Phase 2) |
 
 ### Alternatives Considered
@@ -79,6 +80,14 @@ All paths converge at the PTY. Output fans out to all consumers.
 | **vte** (chosen) | Battle-tested by Alacritty, fast, focused on parsing only, flexible `Perform` trait | Must build state machine on top | Best for our needs - parsing without opinions |
 | termwiz | Higher-level, includes terminal emulator state machine, also from Wezterm author | Larger dependency, more batteries-included than needed | Consider if vte proves insufficient |
 | Custom parser (VT100/xterm specs) | Maximum control, exactly what we need | Significant effort, easy to get wrong, specs are complex | Not worth it unless we have very unusual requirements |
+
+**Terminal Raw Mode:**
+
+| Option | Pros | Cons | Verdict |
+|--------|------|------|---------|
+| **crossterm** (chosen) | High-level API, clean guard pattern for raw mode, handles signal restoration, good Tokio integration, cross-platform | Adds a dependency | Best ergonomics for our use case |
+| termios crate | Direct termios access, thin wrapper, no extra abstractions | Manual signal handler setup, more boilerplate for guard pattern, Unix-only | Good if we need precise termios control |
+| nix crate | Maximum control, also provides termios plus other Unix primitives | Even more manual work, must implement cleanup guards ourselves | Only if we need low-level Unix primitives beyond termios |
 
 ---
 
