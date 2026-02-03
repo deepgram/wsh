@@ -62,6 +62,24 @@ All paths converge at the PTY. Output fans out to all consumers.
 | PTY library | portable-pty | Cross-platform, maintained by Wezterm author |
 | Terminal parser | vte | Battle-tested by Alacritty (Phase 2) |
 
+### Alternatives Considered
+
+**PTY Libraries:**
+
+| Option | Pros | Cons | Verdict |
+|--------|------|------|---------|
+| **portable-pty** (chosen) | Cross-platform (Linux, macOS, Windows), well-maintained by Wezterm author, handles edge cases | Slightly higher-level abstraction | Best balance of capability and maintenance |
+| pty-process | Tokio-native async PTY handling, thinner abstraction, more control | Linux/macOS only, smaller community | Good option if we hit portable-pty limitations |
+| nix crate (forkpty/openpty) | Maximum control, no abstraction overhead | Significant code to write, must handle platform differences manually | Only if we need very low-level control |
+
+**Terminal Parsers:**
+
+| Option | Pros | Cons | Verdict |
+|--------|------|------|---------|
+| **vte** (chosen) | Battle-tested by Alacritty, fast, focused on parsing only, flexible `Perform` trait | Must build state machine on top | Best for our needs - parsing without opinions |
+| termwiz | Higher-level, includes terminal emulator state machine, also from Wezterm author | Larger dependency, more batteries-included than needed | Consider if vte proves insufficient |
+| Custom parser (VT100/xterm specs) | Maximum control, exactly what we need | Significant effort, easy to get wrong, specs are complex | Not worth it unless we have very unusual requirements |
+
 ---
 
 ## API Design
