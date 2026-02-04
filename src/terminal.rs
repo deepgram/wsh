@@ -1,4 +1,4 @@
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode, size};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -29,4 +29,13 @@ impl Drop for RawModeGuard {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
     }
+}
+
+/// Get the current terminal size.
+///
+/// Returns (rows, cols) to match PtySize convention.
+/// Note: crossterm::terminal::size() returns (cols, rows), so we swap them.
+pub fn terminal_size() -> anyhow::Result<(u16, u16)> {
+    let (cols, rows) = size()?;
+    Ok((rows, cols))
 }

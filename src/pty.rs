@@ -29,19 +29,12 @@ pub struct Pty {
 }
 
 impl Pty {
-    pub fn spawn() -> Result<Self, PtyError> {
+    pub fn spawn(rows: u16, cols: u16) -> Result<Self, PtyError> {
         let pty_system = native_pty_system();
 
-        // Get terminal size from environment or use defaults
         let size = PtySize {
-            rows: std::env::var("LINES")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(24),
-            cols: std::env::var("COLUMNS")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(80),
+            rows,
+            cols,
             pixel_width: 0,
             pixel_height: 0,
         };

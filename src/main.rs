@@ -36,7 +36,9 @@ async fn main() -> Result<(), WshError> {
     // Enable raw mode - guard restores on drop
     let _raw_guard = terminal::RawModeGuard::new()?;
 
-    let pty = pty::Pty::spawn()?;
+    let (rows, cols) = terminal::terminal_size().unwrap_or((24, 80));
+    tracing::info!(rows, cols, "Terminal size");
+    let pty = pty::Pty::spawn(rows, cols)?;
     tracing::info!("PTY spawned");
 
     let mut pty_reader = pty.take_reader()?;
