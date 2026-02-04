@@ -49,7 +49,7 @@ async fn main() -> Result<(), WshError> {
     let (input_tx, mut input_rx) = mpsc::channel::<Bytes>(64);
 
     // PTY reader task: read from PTY, write to stdout, broadcast
-    let pty_reader_handle = tokio::task::spawn_blocking(move || {
+    let mut pty_reader_handle = tokio::task::spawn_blocking(move || {
         let mut stdout = std::io::stdout();
         let mut buf = [0u8; 4096];
 
@@ -127,17 +127,32 @@ async fn main() -> Result<(), WshError> {
         axum::serve(listener, app).await.unwrap();
     });
 
-    // Wait for PTY reader to finish (shell exited)
-    pty_reader_handle.await?;
+    // Signal handling for graceful shutdown
+    let shutdown = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+        tracing::info!("Received Ctrl+C, shutting down");
+    };
 
-    // Drop input_tx to signal PTY writer to stop
+    // Wait for either: PTY reader to finish (shell exited) OR shutdown signal
+    tokio::select! {
+        result = &mut pty_reader_handle => {
+            match result {
+                Ok(()) => tracing::info!("Shell exited"),
+                Err(e) => tracing::error!(?e, "PTY reader task failed"),
+            }
+        }
+        _ = shutdown => {
+            tracing::info!("Shutdown signal received");
+            pty_reader_handle.abort();
+        }
+    }
+
+    // Clean up all tasks
     drop(input_tx);
     let _ = pty_writer_handle.await;
-
-    // stdin_handle will exit when stdin closes or we exit
     stdin_handle.abort();
-
-    // Stop the API server
     server_handle.abort();
 
     tracing::info!("wsh exiting");
