@@ -114,7 +114,10 @@ async fn main() -> Result<(), WshError> {
     });
 
     // Axum server
-    let app = api::router();
+    let state = api::AppState {
+        input_tx: input_tx.clone(),
+    };
+    let app = api::router(state);
     let addr: SocketAddr = "127.0.0.1:8080".parse().expect("valid socket address");
     tracing::info!(%addr, "API server listening");
 
