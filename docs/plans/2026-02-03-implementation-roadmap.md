@@ -4,6 +4,20 @@ This document describes the implementation plan for wsh, from proof-of-concept t
 
 ---
 
+## Status
+
+| Phase | Status | Notes |
+|-------|--------|-------|
+| Phase 1: Proof-of-Concept | **Complete** | All core data flow working, 35 tests passing |
+| Phase 2: Terminal Parsing & State | Not started | |
+| Phase 3: API Hardening & Documentation | Not started | |
+| Phase 4: Web UI | Not started | |
+| Phase 5: Headless Mode & Agent Hooks | Not started | |
+
+**Last updated:** 2026-02-03
+
+---
+
 ## Proof-of-Concept Goal
 
 Establish the core data flow: PTY ↔ wsh ↔ API clients.
@@ -256,14 +270,20 @@ For transparent passthrough, the local terminal needs raw mode.
 
 ## Phased Roadmap
 
-### Phase 1: Proof-of-Concept
+### Phase 1: Proof-of-Concept ✓ COMPLETE
 
-- PTY spawn with portable-pty
-- Local stdin/stdout passthrough in raw mode
-- Axum server on 127.0.0.1:8080
-- `/ws/raw`, `POST /input`, `GET /health`
-- Graceful shutdown, signal handling
-- No parsing, no state, no auth
+- [x] PTY spawn with portable-pty
+- [x] Local stdin/stdout passthrough in raw mode (crossterm)
+- [x] Axum server on 127.0.0.1:8080
+- [x] `/ws/raw`, `POST /input`, `GET /health`
+- [x] Graceful shutdown, signal handling (Ctrl+C)
+- [x] Dynamic terminal size detection
+- [x] Comprehensive test coverage (35 tests)
+- No parsing, no state, no auth (as planned)
+
+**Implementation notes:**
+- Uses tokio broadcast channel (capacity 64) for output fanout
+- Raw mode guard uses RAII pattern for safe cleanup
 
 ### Phase 2: Terminal Parsing & State
 
@@ -302,4 +322,4 @@ For transparent passthrough, the local terminal needs raw mode.
 |---------|---------|-------|
 | Bind address | 127.0.0.1:8080 | Localhost only, no auth required |
 | Shell | `$SHELL` or `/bin/sh` | User's default shell |
-| Broadcast buffer | TBD | Tokio broadcast channel capacity |
+| Broadcast buffer | 64 | Tokio broadcast channel capacity |

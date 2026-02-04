@@ -38,7 +38,7 @@ nix develop -c sh -c "cargo run"
 This starts wsh which:
 1. Puts your terminal in raw mode
 2. Spawns your `$SHELL` in a PTY
-3. Starts an HTTP/WebSocket server on `127.0.0.1:3000`
+3. Starts an HTTP/WebSocket server on `127.0.0.1:8080`
 4. Passes through all keyboard input and terminal output
 
 Use `Ctrl+C` to exit gracefully.
@@ -62,7 +62,7 @@ nix develop -c sh -c "cargo test --test pty_integration"
 ### Health Check
 
 ```bash
-curl http://127.0.0.1:3000/health
+curl http://127.0.0.1:8080/health
 # {"status":"ok"}
 ```
 
@@ -72,13 +72,13 @@ Send keystrokes to the PTY:
 
 ```bash
 # Send a command
-curl -X POST http://127.0.0.1:3000/input -d 'echo hello'
+curl -X POST http://127.0.0.1:8080/input -d 'echo hello'
 
 # Send Enter key
-curl -X POST http://127.0.0.1:3000/input -d $'\n'
+curl -X POST http://127.0.0.1:8080/input -d $'\n'
 
 # Send Ctrl+C
-curl -X POST http://127.0.0.1:3000/input -d $'\x03'
+curl -X POST http://127.0.0.1:8080/input -d $'\x03'
 ```
 
 ### WebSocket Stream
@@ -87,7 +87,7 @@ Connect to `/ws/raw` for bidirectional raw terminal I/O:
 
 ```bash
 # Using websocat (install: cargo install websocat)
-websocat ws://127.0.0.1:3000/ws/raw
+websocat ws://127.0.0.1:8080/ws/raw
 ```
 
 Binary messages sent to the WebSocket are written to the PTY. PTY output is broadcast as binary messages to all connected clients.
@@ -104,15 +104,15 @@ nix develop -c sh -c "cargo run"
 **Terminal 2 - Send commands via API:**
 ```bash
 # Send 'ls' command
-curl -X POST http://127.0.0.1:3000/input -d 'ls'
-curl -X POST http://127.0.0.1:3000/input -d $'\n'
+curl -X POST http://127.0.0.1:8080/input -d 'ls'
+curl -X POST http://127.0.0.1:8080/input -d $'\n'
 ```
 
 You'll see the `ls` command execute in Terminal 1, with output appearing both locally and available to any WebSocket clients.
 
 **Terminal 3 - Watch via WebSocket:**
 ```bash
-websocat ws://127.0.0.1:3000/ws/raw
+websocat ws://127.0.0.1:8080/ws/raw
 ```
 
 Now any output in Terminal 1 streams to Terminal 3, and typing in Terminal 3 sends input to Terminal 1.
