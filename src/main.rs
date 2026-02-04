@@ -1,9 +1,5 @@
-mod api;
-mod broker;
-mod pty;
-mod terminal;
-
 use bytes::Bytes;
+use wsh::{api, broker, pty, terminal};
 use std::io::{Read, Write};
 use std::net::SocketAddr;
 use thiserror::Error;
