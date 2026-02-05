@@ -19,19 +19,23 @@ use tokio::sync::{broadcast, mpsc};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tower::ServiceExt;
 use wsh::api::{router, AppState};
+use wsh::broker::Broker;
+use wsh::parser::Parser;
 use wsh::shutdown::ShutdownCoordinator;
 
 /// Creates a test application with channels for input/output.
 /// Returns the router, input receiver, and output sender for test verification.
 fn create_test_app() -> (axum::Router, mpsc::Receiver<Bytes>, broadcast::Sender<Bytes>) {
     let (input_tx, input_rx) = mpsc::channel(64);
-    let (output_tx, _) = broadcast::channel(64);
+    let broker = Broker::new();
+    let parser = Parser::spawn(&broker, 80, 24, 1000);
     let state = AppState {
         input_tx,
-        output_rx: output_tx.clone(),
+        output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),
+        parser,
     };
-    (router(state), input_rx, output_tx)
+    (router(state), input_rx, broker.sender())
 }
 
 /// Starts the server on a random available port and returns the address.
@@ -99,11 +103,13 @@ async fn test_api_input_to_pty() {
 async fn test_api_input_multiple_requests() {
     // Test that multiple sequential inputs are all forwarded correctly
     let (input_tx, mut input_rx) = mpsc::channel(64);
-    let (output_tx, _) = broadcast::channel(64);
+    let broker = Broker::new();
+    let parser = Parser::spawn(&broker, 80, 24, 1000);
     let state = AppState {
         input_tx,
-        output_rx: output_tx,
+        output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),
+        parser,
     };
     let app = router(state);
 
@@ -169,11 +175,14 @@ async fn test_websocket_upgrade_response() {
 #[tokio::test]
 async fn test_websocket_receives_pty_output() {
     let (input_tx, _input_rx) = mpsc::channel(64);
-    let (output_tx, _) = broadcast::channel(64);
+    let broker = Broker::new();
+    let output_tx = broker.sender();
+    let parser = Parser::spawn(&broker, 80, 24, 1000);
     let state = AppState {
         input_tx,
         output_rx: output_tx.clone(),
         shutdown: ShutdownCoordinator::new(),
+        parser,
     };
     let app = router(state);
 
@@ -212,11 +221,13 @@ async fn test_websocket_receives_pty_output() {
 #[tokio::test]
 async fn test_websocket_sends_input_to_pty() {
     let (input_tx, mut input_rx) = mpsc::channel(64);
-    let (output_tx, _) = broadcast::channel(64);
+    let broker = Broker::new();
+    let parser = Parser::spawn(&broker, 80, 24, 1000);
     let state = AppState {
         input_tx,
-        output_rx: output_tx,
+        output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),
+        parser,
     };
     let app = router(state);
 
@@ -251,11 +262,13 @@ async fn test_websocket_sends_input_to_pty() {
 async fn test_websocket_text_input_to_pty() {
     // Test that text messages are also handled
     let (input_tx, mut input_rx) = mpsc::channel(64);
-    let (output_tx, _) = broadcast::channel(64);
+    let broker = Broker::new();
+    let parser = Parser::spawn(&broker, 80, 24, 1000);
     let state = AppState {
         input_tx,
-        output_rx: output_tx,
+        output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),
+        parser,
     };
     let app = router(state);
 
@@ -288,11 +301,14 @@ async fn test_websocket_text_input_to_pty() {
 async fn test_websocket_bidirectional_communication() {
     // Test that WebSocket can both send and receive simultaneously
     let (input_tx, mut input_rx) = mpsc::channel(64);
-    let (output_tx, _) = broadcast::channel(64);
+    let broker = Broker::new();
+    let output_tx = broker.sender();
+    let parser = Parser::spawn(&broker, 80, 24, 1000);
     let state = AppState {
         input_tx,
         output_rx: output_tx.clone(),
         shutdown: ShutdownCoordinator::new(),
+        parser,
     };
     let app = router(state);
 
@@ -344,11 +360,14 @@ async fn test_websocket_bidirectional_communication() {
 async fn test_websocket_multiple_outputs() {
     // Test that multiple PTY outputs are all received by WebSocket
     let (input_tx, _input_rx) = mpsc::channel(64);
-    let (output_tx, _) = broadcast::channel(64);
+    let broker = Broker::new();
+    let output_tx = broker.sender();
+    let parser = Parser::spawn(&broker, 80, 24, 1000);
     let state = AppState {
         input_tx,
         output_rx: output_tx.clone(),
         shutdown: ShutdownCoordinator::new(),
+        parser,
     };
     let app = router(state);
 

@@ -186,6 +186,7 @@ pub fn router(state: AppState) -> Router {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::broker::Broker;
     use axum::{
         body::Body,
         http::{Request, StatusCode},
@@ -197,11 +198,13 @@ mod tests {
     /// send failures.
     fn create_test_state() -> (AppState, mpsc::Receiver<Bytes>) {
         let (input_tx, input_rx) = mpsc::channel(64);
-        let (output_tx, _) = broadcast::channel(64);
+        let broker = Broker::new();
+        let parser = Parser::spawn(&broker, 80, 24, 1000);
         let state = AppState {
             input_tx,
-            output_rx: output_tx,
+            output_rx: broker.sender(),
             shutdown: ShutdownCoordinator::new(),
+            parser,
         };
         (state, input_rx)
     }

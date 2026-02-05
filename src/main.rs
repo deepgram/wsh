@@ -19,7 +19,7 @@ use std::net::SocketAddr;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use wsh::{api, broker, pty, shutdown::ShutdownCoordinator, terminal};
+use wsh::{api, broker, parser::Parser, pty, shutdown::ShutdownCoordinator, terminal};
 
 #[derive(Error, Debug)]
 pub enum WshError {
@@ -72,6 +72,9 @@ async fn main() -> Result<(), WshError> {
 
     let broker = broker::Broker::new();
 
+    // Create parser for terminal state tracking
+    let parser = Parser::spawn(&broker, cols as usize, rows as usize, 10_000);
+
     // Channel for input from all sources (stdin, HTTP, WebSocket) -> PTY writer
     let (input_tx, input_rx) = mpsc::channel::<Bytes>(64);
 
@@ -88,6 +91,7 @@ async fn main() -> Result<(), WshError> {
         input_tx,
         output_rx: broker.sender(),
         shutdown: shutdown.clone(),
+        parser: parser.clone(),
     };
     let app = api::router(state);
     let addr: SocketAddr = "127.0.0.1:8080".parse().expect("valid socket address");
