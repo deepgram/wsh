@@ -9,12 +9,12 @@ This document describes the implementation plan for wsh, from proof-of-concept t
 | Phase | Status | Notes |
 |-------|--------|-------|
 | Phase 1: Proof-of-Concept | **Complete** | All core data flow working, 35 tests passing |
-| Phase 2: Terminal Parsing & State | Not started | |
+| Phase 2: Terminal Parsing & State | **Complete** | Parser module with avt, HTTP + WebSocket endpoints |
 | Phase 3: API Hardening & Documentation | Not started | |
 | Phase 4: Web UI | Not started | |
 | Phase 5: Headless Mode & Agent Hooks | Not started | |
 
-**Last updated:** 2026-02-03
+**Last updated:** 2026-02-05
 
 ---
 
@@ -285,13 +285,22 @@ For transparent passthrough, the local terminal needs raw mode.
 - Uses tokio broadcast channel (capacity 64) for output fanout
 - Raw mode guard uses RAII pattern for safe cleanup
 
-### Phase 2: Terminal Parsing & State
+### Phase 2: Terminal Parsing & State ✓ COMPLETE
 
-- Integrate vte parser
-- Build terminal state machine (cursor, screen buffer, scrollback)
-- Add `/ws/json` with structured events
-- Add `GET /screen`, `GET /scrollback` endpoints
+- [x] Integrate terminal parser (avt crate, wrapper around vte)
+- [x] Build terminal state machine (cursor, screen buffer, scrollback)
+- [x] Add `/ws/json` with structured events (subscribe protocol)
+- [x] Add `GET /screen`, `GET /scrollback` HTTP endpoints
+- [x] Unit tests for parser module
+- [x] Integration tests for new endpoints
 - This unlocks meaningful agent integration
+
+**Implementation notes:**
+- Uses avt crate for terminal state machine (built on vte parser)
+- Parser maintains 80x24 virtual terminal with 10,000 line scrollback
+- `/ws/json` supports subscribe/unsubscribe for screen and scrollback updates
+- Screen endpoint returns current visible content with cursor position
+- Scrollback endpoint returns historical output as styled lines
 
 ### Phase 3: API Hardening & Documentation
 
