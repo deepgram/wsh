@@ -73,3 +73,6 @@ impl Parser {
         BroadcastStream::new(self.event_tx.subscribe()).filter_map(|result| result.ok())
     }
 }
+
+#[cfg(test)]
+mod tests;
