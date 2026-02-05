@@ -22,6 +22,7 @@
             rustToolchain
             pkg-config
             curl
+            jq
             websocat
           ];
         };
