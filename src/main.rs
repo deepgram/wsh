@@ -101,7 +101,7 @@ async fn main() -> Result<(), WshError> {
     spawn_pty_writer(pty_writer, input_rx);
     spawn_stdin_reader(input_tx.clone());
 
-    // Start API server
+    // Start API server with graceful shutdown support
     let state = api::AppState {
         input_tx,
         output_rx: broker.sender(),
@@ -111,22 +111,36 @@ async fn main() -> Result<(), WshError> {
     let app = api::router(state);
     tracing::info!(addr = %args.bind, "API server listening");
 
+    // Channel to signal the server to begin graceful shutdown
+    let (server_shutdown_tx, server_shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+
     let bind_addr = args.bind;
-    tokio::spawn(async move {
+    let server_handle = tokio::spawn(async move {
         let listener = tokio::net::TcpListener::bind(bind_addr).await.unwrap();
-        axum::serve(listener, app).await.unwrap();
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async {
+                server_shutdown_rx.await.ok();
+            })
+            .await
+            .unwrap();
     });
 
     // Wait for exit condition
     wait_for_exit(child_exit_rx, pty_reader_handle).await;
 
-    // Gracefully shut down connected clients
+    // Gracefully shut down: signal WebSocket handlers to close, then wait for them
     let active = shutdown.active_count();
     if active > 0 {
         tracing::info!(active, "signaling clients to disconnect");
         shutdown.shutdown();
         shutdown.wait_for_all_closed().await;
         tracing::debug!("all clients disconnected");
+    }
+
+    // Signal server to stop accepting connections and wait for it to finish
+    let _ = server_shutdown_tx.send(());
+    if let Err(e) = server_handle.await {
+        tracing::warn!(?e, "server task panicked");
     }
 
     // Restore terminal and exit

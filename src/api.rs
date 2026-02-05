@@ -99,12 +99,12 @@ async fn handle_ws_raw(socket: WebSocket, state: AppState) {
             _ = shutdown_rx.changed() => {
                 if *shutdown_rx.borrow() {
                     tracing::debug!("WebSocket received shutdown signal, closing");
-                    // Send close frame to client
                     let close_frame = CloseFrame {
                         code: axum::extract::ws::close_code::NORMAL,
                         reason: "server shutting down".into(),
                     };
                     let _ = ws_tx.send(Message::Close(Some(close_frame))).await;
+                    let _ = ws_tx.flush().await;
                     break;
                 }
             }
@@ -155,6 +155,13 @@ async fn handle_ws_json(socket: WebSocket, state: AppState) {
             }
             _ = shutdown_rx.changed() => {
                 if *shutdown_rx.borrow() {
+                    tracing::debug!("WebSocket received shutdown signal during subscribe");
+                    let close_frame = CloseFrame {
+                        code: axum::extract::ws::close_code::NORMAL,
+                        reason: "server shutting down".into(),
+                    };
+                    let _ = ws_tx.send(Message::Close(Some(close_frame))).await;
+                    let _ = ws_tx.flush().await;
                     return;
                 }
             }
@@ -230,11 +237,13 @@ async fn handle_ws_json(socket: WebSocket, state: AppState) {
 
             _ = shutdown_rx.changed() => {
                 if *shutdown_rx.borrow() {
+                    tracing::debug!("WebSocket handler received shutdown signal");
                     let close_frame = CloseFrame {
                         code: axum::extract::ws::close_code::NORMAL,
                         reason: "server shutting down".into(),
                     };
                     let _ = ws_tx.send(Message::Close(Some(close_frame))).await;
+                    let _ = ws_tx.flush().await;
                     break;
                 }
             }
