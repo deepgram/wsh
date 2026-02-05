@@ -287,7 +287,7 @@ On a desktop browser, the UI works identically but assumes a physical keyboard i
 
 `wsh` v1 delivers the core: a transparent PTY wrapper with an API, bundled with a production-quality web UI. But the architecture is designed to grow. Here's where it goes next.
 
-**Phase 2: Server Mode**
+**Follow-up Package: Server Mode**
 
 The initial release runs in standalone mode - one `wsh` invocation, one session, one web UI. Server mode introduces a persistent daemon:
 
@@ -298,7 +298,7 @@ The initial release runs in standalone mode - one `wsh` invocation, one session,
 
 This transforms `wsh` from a tool you run into infrastructure you rely on.
 
-**Phase 3: Voice Integration**
+**Follow-up Package: Voice Integration**
 
 Mobile interaction shouldn't require typing. Voice integration adds:
 
@@ -308,7 +308,7 @@ Mobile interaction shouldn't require typing. Voice integration adds:
 
 Voice is inherently high-level. Saying "approve" is easier than finding the `y` key on a phone keyboard.
 
-**Phase 4: Agent Hooks**
+**Follow-up Package: Agent Hooks**
 
 The API already exposes terminal I/O to external consumers. Agent hooks formalize this:
 
@@ -318,7 +318,7 @@ The API already exposes terminal I/O to external consumers. Agent hooks formaliz
 
 Imagine an agent that watches your Claude Code session, summarizes what it's doing, and asks you via voice notification whether to approve a file edit - while you're away from your desk.
 
-**Phase 5: Gesture Input**
+**Follow-up Package: Gesture Input**
 
 For power users on mobile, gestures provide faster access to common operations:
 
@@ -328,7 +328,7 @@ For power users on mobile, gestures provide faster access to common operations:
 
 Gestures complement rather than replace the modifier bar - an optimization for those who want it.
 
-**Phase 6: Plugin Architecture**
+**Follow-up Package: Plugin Architecture**
 
 Context-aware enhancements without tight coupling:
 
