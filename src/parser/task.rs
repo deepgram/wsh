@@ -96,10 +96,14 @@ fn handle_query(
             let (cols, rows) = vt.size();
             let cursor = vt.cursor();
 
+            let total_lines = vt.lines().count();
+            let first_line_index = total_lines.saturating_sub(rows);
             let lines: Vec<_> = vt.view().map(|l| format_line(l, styled)).collect();
 
             QueryResponse::Screen(ScreenResponse {
                 epoch,
+                first_line_index,
+                total_lines,
                 lines,
                 cursor: Cursor {
                     row: cursor.row,

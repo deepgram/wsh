@@ -28,6 +28,8 @@ pub enum QueryResponse {
 #[derive(Debug, Clone, Serialize)]
 pub struct ScreenResponse {
     pub epoch: u64,
+    pub first_line_index: usize,
+    pub total_lines: usize,
     pub lines: Vec<FormattedLine>,
     pub cursor: Cursor,
     pub cols: usize,

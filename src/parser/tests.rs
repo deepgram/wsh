@@ -172,3 +172,30 @@ async fn test_line_event_includes_total_lines() {
         _ => panic!("expected Line event, got {:?}", event),
     }
 }
+
+#[tokio::test]
+async fn test_screen_response_includes_line_indices() {
+    let broker = Broker::new();
+    let parser = Parser::spawn(&broker, 80, 5, 100); // Small screen
+
+    // Send enough lines to create scrollback
+    for i in 0..10 {
+        broker.publish(bytes::Bytes::from(format!("Line {}\r\n", i)));
+    }
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+    let response = parser
+        .query(Query::Screen { format: Format::Plain })
+        .await
+        .unwrap();
+
+    match response {
+        QueryResponse::Screen(screen) => {
+            // With 10 lines and 5-row screen, first_line_index should be 5
+            // (lines 0-4 in scrollback, lines 5-9 visible)
+            assert!(screen.first_line_index > 0, "should have scrollback");
+            assert_eq!(screen.total_lines, screen.first_line_index + screen.lines.len());
+        }
+        _ => panic!("expected Screen response"),
+    }
+}
