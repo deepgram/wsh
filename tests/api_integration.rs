@@ -462,3 +462,75 @@ async fn test_health_wrong_method_returns_error() {
 
     assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
 }
+
+#[tokio::test]
+async fn test_websocket_line_event_includes_total_lines() {
+    // Setup similar to other WebSocket tests
+    let (input_tx, _input_rx) = mpsc::channel(64);
+    let broker = Broker::new();
+    let output_tx = broker.sender();
+    let parser = Parser::spawn(&broker, 80, 24, 1000);
+    let state = AppState {
+        input_tx,
+        output_rx: output_tx.clone(),
+        shutdown: ShutdownCoordinator::new(),
+        parser,
+    };
+    let app = router(state);
+
+    let addr = start_test_server(app).await;
+    let ws_url = format!("ws://{}/ws/json", addr);
+
+    // Connect WebSocket client
+    let (mut ws_stream, _response) = connect_async(&ws_url)
+        .await
+        .expect("Failed to connect WebSocket");
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Read "connected" message
+    let _ = ws_stream.next().await;
+
+    // Subscribe to lines
+    let subscribe_msg = serde_json::json!({"events": ["lines"]});
+    ws_stream
+        .send(Message::Text(subscribe_msg.to_string()))
+        .await
+        .unwrap();
+
+    // Read "subscribed" confirmation
+    let _ = ws_stream.next().await;
+
+    // Publish text to trigger line events
+    output_tx
+        .send(bytes::Bytes::from("Hello test\r\n"))
+        .unwrap();
+
+    // Look for a line event with total_lines field
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let mut found_total_lines = false;
+
+    while tokio::time::Instant::now() < deadline {
+        if let Ok(Some(Ok(msg))) =
+            tokio::time::timeout(Duration::from_millis(200), ws_stream.next()).await
+        {
+            if let Message::Text(text) = msg {
+                let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+                if json.get("event") == Some(&serde_json::json!("line")) {
+                    assert!(
+                        json.get("total_lines").is_some(),
+                        "line event should have total_lines"
+                    );
+                    assert!(json.get("index").is_some(), "line event should have index");
+                    found_total_lines = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    assert!(
+        found_total_lines,
+        "should have received a line event with total_lines"
+    );
+}
