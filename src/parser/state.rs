@@ -94,6 +94,21 @@ pub struct Style {
     pub inverse: bool,
 }
 
+impl Style {
+    /// Returns true if this style has no colors or attributes set (default/empty style)
+    pub fn is_default(&self) -> bool {
+        self.fg.is_none()
+            && self.bg.is_none()
+            && !self.bold
+            && !self.faint
+            && !self.italic
+            && !self.underline
+            && !self.strikethrough
+            && !self.blink
+            && !self.inverse
+    }
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum Color {
