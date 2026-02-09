@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
-use wsh::{api, broker::Broker, parser::Parser, pty::{Pty, SpawnCommand}, shutdown::ShutdownCoordinator};
+use wsh::{api, broker::Broker, overlay::OverlayStore, parser::Parser, pty::{Pty, SpawnCommand}, shutdown::ShutdownCoordinator};
 
 /// Starts an HTTP server and returns its address
 async fn start_server(app: axum::Router) -> SocketAddr {
@@ -79,6 +79,7 @@ async fn test_http_post_input_reaches_pty_and_produces_output() {
         output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),
         parser,
+        overlays: OverlayStore::new(),
     };
     let app = api::router(state);
     let addr = start_server(app).await;
@@ -212,6 +213,7 @@ async fn test_scrollback_endpoint_with_real_pty() {
         output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),
         parser,
+        overlays: OverlayStore::new(),
     };
     let app = api::router(state);
     let addr = start_server(app).await;

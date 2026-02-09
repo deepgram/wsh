@@ -13,6 +13,7 @@ use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
 
+use crate::overlay::{Overlay, OverlaySpan, OverlayStore};
 use crate::parser::{
     events::{Event, EventType, Subscribe},
     state::{Format, Query, QueryResponse},
@@ -26,6 +27,7 @@ pub struct AppState {
     pub output_rx: broadcast::Sender<Bytes>,
     pub shutdown: ShutdownCoordinator,
     pub parser: Parser,
+    pub overlays: OverlayStore,
 }
 
 #[derive(Serialize)]
@@ -332,6 +334,92 @@ async fn scrollback(
     Ok(Json(response))
 }
 
+// Overlay request/response types
+#[derive(Deserialize)]
+struct CreateOverlayRequest {
+    x: u16,
+    y: u16,
+    z: Option<i32>,
+    spans: Vec<OverlaySpan>,
+}
+
+#[derive(Serialize)]
+struct CreateOverlayResponse {
+    id: String,
+}
+
+#[derive(Deserialize)]
+struct UpdateOverlayRequest {
+    spans: Vec<OverlaySpan>,
+}
+
+#[derive(Deserialize)]
+struct PatchOverlayRequest {
+    x: Option<u16>,
+    y: Option<u16>,
+    z: Option<i32>,
+}
+
+// Overlay handlers
+async fn overlay_create(
+    State(state): State<AppState>,
+    Json(req): Json<CreateOverlayRequest>,
+) -> (StatusCode, Json<CreateOverlayResponse>) {
+    let id = state.overlays.create(req.x, req.y, req.z, req.spans);
+    (StatusCode::CREATED, Json(CreateOverlayResponse { id }))
+}
+
+async fn overlay_list(State(state): State<AppState>) -> Json<Vec<Overlay>> {
+    Json(state.overlays.list())
+}
+
+async fn overlay_get(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<Overlay>, StatusCode> {
+    state.overlays.get(&id).map(Json).ok_or(StatusCode::NOT_FOUND)
+}
+
+async fn overlay_update(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(req): Json<UpdateOverlayRequest>,
+) -> StatusCode {
+    if state.overlays.update(&id, req.spans) {
+        StatusCode::NO_CONTENT
+    } else {
+        StatusCode::NOT_FOUND
+    }
+}
+
+async fn overlay_patch(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(req): Json<PatchOverlayRequest>,
+) -> StatusCode {
+    if state.overlays.move_to(&id, req.x, req.y, req.z) {
+        StatusCode::NO_CONTENT
+    } else {
+        StatusCode::NOT_FOUND
+    }
+}
+
+async fn overlay_delete(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> StatusCode {
+    if state.overlays.delete(&id) {
+        StatusCode::NO_CONTENT
+    } else {
+        StatusCode::NOT_FOUND
+    }
+}
+
+async fn overlay_clear(State(state): State<AppState>) -> StatusCode {
+    state.overlays.clear();
+    StatusCode::NO_CONTENT
+}
+
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
@@ -340,6 +428,19 @@ pub fn router(state: AppState) -> Router {
         .route("/ws/json", get(ws_json))
         .route("/screen", get(screen))
         .route("/scrollback", get(scrollback))
+        .route(
+            "/overlay",
+            get(overlay_list)
+                .post(overlay_create)
+                .delete(overlay_clear),
+        )
+        .route(
+            "/overlay/:id",
+            get(overlay_get)
+                .put(overlay_update)
+                .patch(overlay_patch)
+                .delete(overlay_delete),
+        )
         .with_state(state)
 }
 
@@ -365,6 +466,7 @@ mod tests {
             output_rx: broker.sender(),
             shutdown: ShutdownCoordinator::new(),
             parser,
+            overlays: OverlayStore::new(),
         };
         (state, input_rx)
     }
@@ -484,5 +586,105 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_overlay_create() {
+        let (state, _input_rx) = create_test_state();
+        let app = router(state);
+
+        let body = serde_json::json!({
+            "x": 10,
+            "y": 5,
+            "spans": [
+                { "text": "Hello" }
+            ]
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/overlay")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json["id"].is_string());
+        assert!(!json["id"].as_str().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_overlay_list() {
+        let (state, _input_rx) = create_test_state();
+
+        // Pre-populate with an overlay
+        state.overlays.create(
+            1,
+            2,
+            None,
+            vec![crate::overlay::OverlaySpan {
+                text: "Test".to_string(),
+                fg: None,
+                bg: None,
+                bold: false,
+                italic: false,
+                underline: false,
+            }],
+        );
+
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/overlay")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json.len(), 1);
+        assert_eq!(json[0]["x"], 1);
+        assert_eq!(json[0]["y"], 2);
+    }
+
+    #[tokio::test]
+    async fn test_overlay_delete() {
+        let (state, _input_rx) = create_test_state();
+
+        // Create an overlay
+        let id = state.overlays.create(0, 0, None, vec![]);
+
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/overlay/{}", id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
     }
 }

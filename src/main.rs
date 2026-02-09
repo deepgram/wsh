@@ -20,7 +20,7 @@ use std::net::SocketAddr;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use wsh::{api, broker, parser::Parser, pty::{self, SpawnCommand}, shutdown::ShutdownCoordinator, terminal};
+use wsh::{api, broker, overlay::OverlayStore, parser::Parser, pty::{self, SpawnCommand}, shutdown::ShutdownCoordinator, terminal};
 
 /// wsh - The Web Shell
 ///
@@ -126,6 +126,7 @@ async fn main() -> Result<(), WshError> {
         output_rx: broker.sender(),
         shutdown: shutdown.clone(),
         parser: parser.clone(),
+        overlays: OverlayStore::new(),
     };
     let app = api::router(state);
     tracing::info!(addr = %args.bind, "API server listening");
