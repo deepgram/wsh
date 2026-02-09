@@ -20,7 +20,7 @@ use std::net::SocketAddr;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use wsh::{api, broker, input::InputMode, overlay::{self, OverlayStore}, parser::Parser, pty::{self, SpawnCommand}, shutdown::ShutdownCoordinator, terminal};
+use wsh::{api, broker, input::{self, InputMode}, overlay::{self, OverlayStore}, parser::Parser, pty::{self, SpawnCommand}, shutdown::ShutdownCoordinator, terminal};
 
 /// wsh - The Web Shell
 ///
@@ -118,10 +118,13 @@ async fn main() -> Result<(), WshError> {
     // Create overlay store before AppState so it can be shared with pty_reader
     let overlays = OverlayStore::new();
 
+    // Create input_mode before AppState so it can be shared with stdin reader
+    let input_mode = InputMode::new();
+
     // Spawn I/O tasks
     let pty_reader_handle = spawn_pty_reader(pty_reader, broker.clone(), overlays.clone());
     spawn_pty_writer(pty_writer, input_rx);
-    spawn_stdin_reader(input_tx.clone());
+    spawn_stdin_reader(input_tx.clone(), input_mode.clone());
 
     // Start API server with graceful shutdown support
     let state = api::AppState {
@@ -130,7 +133,7 @@ async fn main() -> Result<(), WshError> {
         shutdown: shutdown.clone(),
         parser: parser.clone(),
         overlays: overlays.clone(),
-        input_mode: InputMode::new(),
+        input_mode: input_mode.clone(),
     };
     let app = api::router(state);
     tracing::info!(addr = %args.bind, "API server listening");
@@ -233,7 +236,10 @@ fn spawn_pty_writer(mut writer: Box<dyn Write + Send>, mut input_rx: mpsc::Recei
 
 /// Spawn the stdin reader task.
 /// Reads from stdin and sends to the input channel.
-fn spawn_stdin_reader(input_tx: mpsc::Sender<Bytes>) {
+///
+/// In capture mode, stdin is not forwarded to the PTY.
+/// Ctrl+\ in capture mode switches back to passthrough mode.
+fn spawn_stdin_reader(input_tx: mpsc::Sender<Bytes>, input_mode: input::InputMode) {
     tokio::task::spawn_blocking(move || {
         let mut stdin = std::io::stdin();
         let mut buf = [0u8; 1024];
@@ -243,6 +249,21 @@ fn spawn_stdin_reader(input_tx: mpsc::Sender<Bytes>) {
                 Ok(0) => break,
                 Ok(n) => {
                     let data = Bytes::copy_from_slice(&buf[..n]);
+
+                    // Check for Ctrl+\ escape hatch
+                    if input::is_ctrl_backslash(&buf[..n]) && input_mode.is_capture() {
+                        input_mode.release();
+                        tracing::debug!("Ctrl+\\ pressed, switching to passthrough mode");
+                        continue; // Don't forward the Ctrl+\
+                    }
+
+                    // In capture mode, don't forward to PTY
+                    if input_mode.is_capture() {
+                        // TODO: Broadcast to input subscribers (Task 10)
+                        continue;
+                    }
+
+                    // Passthrough mode: forward to PTY
                     if input_tx.blocking_send(data).is_err() {
                         break;
                     }
