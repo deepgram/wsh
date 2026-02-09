@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod error;
 mod handlers;
 
@@ -26,9 +27,8 @@ pub struct AppState {
     pub input_broadcaster: InputBroadcaster,
 }
 
-pub fn router(state: AppState) -> Router {
-    Router::new()
-        .route("/health", get(health))
+pub fn router(state: AppState, token: Option<String>) -> Router {
+    let protected = Router::new()
         .route("/input", post(input))
         .route("/input/mode", get(input_mode_get))
         .route("/input/capture", post(input_capture))
@@ -50,7 +50,19 @@ pub fn router(state: AppState) -> Router {
                 .patch(overlay_patch)
                 .delete(overlay_delete),
         )
-        .with_state(state)
+        .with_state(state);
+
+    let protected = match token {
+        Some(token) => protected.layer(axum::middleware::from_fn(move |req, next| {
+            let t = token.clone();
+            async move { auth::require_auth(t, req, next).await }
+        })),
+        None => protected,
+    };
+
+    Router::new()
+        .route("/health", get(health))
+        .merge(protected)
 }
 
 #[cfg(test)]
@@ -86,7 +98,7 @@ mod tests {
     #[tokio::test]
     async fn test_health_endpoint() {
         let (state, _input_rx) = create_test_state();
-        let app = router(state);
+        let app = router(state, None);
 
         let response = app
             .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
@@ -105,7 +117,7 @@ mod tests {
     #[tokio::test]
     async fn test_input_endpoint_success() {
         let (state, _input_rx) = create_test_state();
-        let app = router(state);
+        let app = router(state, None);
 
         let response = app
             .oneshot(
@@ -124,7 +136,7 @@ mod tests {
     #[tokio::test]
     async fn test_input_endpoint_forwards_to_channel() {
         let (state, mut input_rx) = create_test_state();
-        let app = router(state);
+        let app = router(state, None);
 
         let test_data = b"hello world";
         let response = app
@@ -148,7 +160,7 @@ mod tests {
     #[tokio::test]
     async fn test_router_has_correct_routes() {
         let (state, _input_rx) = create_test_state();
-        let app = router(state);
+        let app = router(state, None);
 
         // Test /health exists (GET)
         let response = app
@@ -203,7 +215,7 @@ mod tests {
     #[tokio::test]
     async fn test_overlay_create() {
         let (state, _input_rx) = create_test_state();
-        let app = router(state);
+        let app = router(state, None);
 
         let body = serde_json::json!({
             "x": 10,
@@ -254,7 +266,7 @@ mod tests {
             }],
         );
 
-        let app = router(state);
+        let app = router(state, None);
 
         let response = app
             .oneshot(
@@ -284,7 +296,7 @@ mod tests {
         // Create an overlay
         let id = state.overlays.create(0, 0, None, vec![]);
 
-        let app = router(state);
+        let app = router(state, None);
 
         let response = app
             .oneshot(
@@ -303,7 +315,7 @@ mod tests {
     #[tokio::test]
     async fn test_input_mode_default() {
         let (state, _input_rx) = create_test_state();
-        let app = router(state);
+        let app = router(state, None);
 
         let response = app
             .oneshot(
@@ -327,7 +339,7 @@ mod tests {
     #[tokio::test]
     async fn test_input_capture_and_release() {
         let (state, _input_rx) = create_test_state();
-        let app = router(state);
+        let app = router(state, None);
 
         // Switch to capture mode
         let response = app

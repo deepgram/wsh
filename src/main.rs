@@ -176,7 +176,7 @@ async fn main() -> Result<(), WshError> {
         input_mode: input_mode.clone(),
         input_broadcaster: input_broadcaster.clone(),
     };
-    let app = api::router(state);
+    let app = api::router(state, token);
     tracing::info!(addr = %args.bind, "API server listening");
 
     // Channel to signal the server to begin graceful shutdown

@@ -40,7 +40,7 @@ fn create_test_state() -> AppState {
 #[tokio::test]
 async fn test_overlay_crud_flow() {
     let state = create_test_state();
-    let app = router(state);
+    let app = router(state, None);
 
     // Step 1: Create overlay with styled span (yellow, bold)
     let create_body = serde_json::json!({
@@ -185,7 +185,7 @@ async fn test_overlay_crud_flow() {
 #[tokio::test]
 async fn test_overlay_list_and_clear() {
     let state = create_test_state();
-    let app = router(state);
+    let app = router(state, None);
 
     // Create two overlays
     let create_body1 = serde_json::json!({
@@ -286,7 +286,7 @@ async fn test_overlay_list_and_clear() {
 #[tokio::test]
 async fn test_overlay_patch_position() {
     let state = create_test_state();
-    let app = router(state);
+    let app = router(state, None);
 
     // Create overlay
     let create_body = serde_json::json!({
@@ -362,7 +362,7 @@ async fn test_overlay_patch_position() {
 #[tokio::test]
 async fn test_overlay_not_found() {
     let state = create_test_state();
-    let app = router(state);
+    let app = router(state, None);
 
     // Try to get non-existent overlay
     let response = app

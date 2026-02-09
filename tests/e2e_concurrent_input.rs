@@ -75,7 +75,7 @@ async fn test_concurrent_input_from_multiple_sources() {
         input_mode: InputMode::new(),
         input_broadcaster: InputBroadcaster::new(),
     };
-    let app = api::router(state);
+    let app = api::router(state, None);
     let addr = start_server(app).await;
 
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -218,7 +218,7 @@ async fn test_rapid_http_requests() {
         input_mode: InputMode::new(),
         input_broadcaster: InputBroadcaster::new(),
     };
-    let app = api::router(state);
+    let app = api::router(state, None);
     let addr = start_server(app).await;
 
     tokio::time::sleep(Duration::from_millis(500)).await;

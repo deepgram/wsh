@@ -40,7 +40,7 @@ fn create_test_app() -> (axum::Router, mpsc::Receiver<Bytes>, broadcast::Sender<
         input_mode: InputMode::new(),
         input_broadcaster: InputBroadcaster::new(),
     };
-    (router(state), input_rx, broker.sender())
+    (router(state, None), input_rx, broker.sender())
 }
 
 /// Starts the server on a random available port and returns the address.
@@ -119,7 +119,7 @@ async fn test_api_input_multiple_requests() {
         input_mode: InputMode::new(),
         input_broadcaster: InputBroadcaster::new(),
     };
-    let app = router(state);
+    let app = router(state, None);
 
     let inputs = vec!["first input", "second input", "third input"];
 
@@ -195,7 +195,7 @@ async fn test_websocket_receives_pty_output() {
         input_mode: InputMode::new(),
         input_broadcaster: InputBroadcaster::new(),
     };
-    let app = router(state);
+    let app = router(state, None);
 
     let addr = start_test_server(app).await;
     let ws_url = format!("ws://{}/ws/raw", addr);
@@ -243,7 +243,7 @@ async fn test_websocket_sends_input_to_pty() {
         input_mode: InputMode::new(),
         input_broadcaster: InputBroadcaster::new(),
     };
-    let app = router(state);
+    let app = router(state, None);
 
     let addr = start_test_server(app).await;
     let ws_url = format!("ws://{}/ws/raw", addr);
@@ -287,7 +287,7 @@ async fn test_websocket_text_input_to_pty() {
         input_mode: InputMode::new(),
         input_broadcaster: InputBroadcaster::new(),
     };
-    let app = router(state);
+    let app = router(state, None);
 
     let addr = start_test_server(app).await;
     let ws_url = format!("ws://{}/ws/raw", addr);
@@ -330,7 +330,7 @@ async fn test_websocket_bidirectional_communication() {
         input_mode: InputMode::new(),
         input_broadcaster: InputBroadcaster::new(),
     };
-    let app = router(state);
+    let app = router(state, None);
 
     let addr = start_test_server(app).await;
     let ws_url = format!("ws://{}/ws/raw", addr);
@@ -392,7 +392,7 @@ async fn test_websocket_multiple_outputs() {
         input_mode: InputMode::new(),
         input_broadcaster: InputBroadcaster::new(),
     };
-    let app = router(state);
+    let app = router(state, None);
 
     let addr = start_test_server(app).await;
     let ws_url = format!("ws://{}/ws/raw", addr);
@@ -502,7 +502,7 @@ async fn test_websocket_line_event_includes_total_lines() {
         input_mode: InputMode::new(),
         input_broadcaster: InputBroadcaster::new(),
     };
-    let app = router(state);
+    let app = router(state, None);
 
     let addr = start_test_server(app).await;
     let ws_url = format!("ws://{}/ws/json", addr);
@@ -577,7 +577,7 @@ async fn test_scrollback_endpoint() {
         input_mode: InputMode::new(),
         input_broadcaster: InputBroadcaster::new(),
     };
-    let app = router(state);
+    let app = router(state, None);
 
     // Send enough lines to create scrollback (more than 5 rows)
     for i in 0..20 {
@@ -630,7 +630,7 @@ async fn test_scrollback_initial_state() {
         input_mode: InputMode::new(),
         input_broadcaster: InputBroadcaster::new(),
     };
-    let app = router(state);
+    let app = router(state, None);
 
     // Query immediately without any output
     let response = app

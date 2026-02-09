@@ -40,7 +40,7 @@ fn create_test_state() -> AppState {
 #[tokio::test]
 async fn test_input_capture_flow() {
     let state = create_test_state();
-    let app = router(state);
+    let app = router(state, None);
 
     // Step 1: Verify default mode is passthrough
     let response = app
@@ -135,7 +135,7 @@ async fn test_input_capture_flow() {
 #[tokio::test]
 async fn test_input_capture_idempotent() {
     let state = create_test_state();
-    let app = router(state);
+    let app = router(state, None);
 
     // Capture multiple times should be idempotent
     for _ in 0..3 {
@@ -210,7 +210,7 @@ async fn test_input_capture_idempotent() {
 #[tokio::test]
 async fn test_input_mode_wrong_method() {
     let state = create_test_state();
-    let app = router(state);
+    let app = router(state, None);
 
     // POST on /input/mode should fail (only GET is allowed)
     let response = app
@@ -261,7 +261,7 @@ async fn test_input_mode_wrong_method() {
 async fn test_input_mode_state_shared_across_requests() {
     // Test that state is properly shared across multiple requests
     let state = create_test_state();
-    let app = router(state);
+    let app = router(state, None);
 
     // Capture mode
     let _ = app

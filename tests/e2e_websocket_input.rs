@@ -77,7 +77,7 @@ async fn test_websocket_input_reaches_pty_and_output_returns() {
         input_mode: InputMode::new(),
         input_broadcaster: InputBroadcaster::new(),
     };
-    let app = api::router(state);
+    let app = api::router(state, None);
     let addr = start_server(app).await;
 
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -199,7 +199,7 @@ async fn test_websocket_text_input_reaches_pty() {
         input_mode: InputMode::new(),
         input_broadcaster: InputBroadcaster::new(),
     };
-    let app = api::router(state);
+    let app = api::router(state, None);
     let addr = start_server(app).await;
 
     tokio::time::sleep(Duration::from_millis(500)).await;
