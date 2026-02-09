@@ -19,6 +19,7 @@ use crate::parser::{
     state::{Format, Query, QueryResponse},
 };
 
+use super::error::ApiError;
 use super::AppState;
 
 #[derive(Serialize)]
@@ -30,14 +31,15 @@ pub(super) async fn health() -> Json<HealthResponse> {
     Json(HealthResponse { status: "ok" })
 }
 
-pub(super) async fn input(State(state): State<AppState>, body: Bytes) -> StatusCode {
-    match state.input_tx.send(body).await {
-        Ok(_) => StatusCode::NO_CONTENT,
-        Err(e) => {
-            tracing::error!("Failed to send input to PTY: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        }
-    }
+pub(super) async fn input(
+    State(state): State<AppState>,
+    body: Bytes,
+) -> Result<StatusCode, ApiError> {
+    state.input_tx.send(body).await.map_err(|e| {
+        tracing::error!("Failed to send input to PTY: {}", e);
+        ApiError::InputSendFailed
+    })?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub(super) async fn ws_raw(
@@ -312,17 +314,12 @@ pub(super) struct ScreenQuery {
 pub(super) async fn screen(
     State(state): State<AppState>,
     axum::extract::Query(params): axum::extract::Query<ScreenQuery>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<impl IntoResponse, ApiError> {
     let response = state
         .parser
         .query(Query::Screen { format: params.format })
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-        })?;
+        .map_err(|_| ApiError::ParserUnavailable)?;
 
     Ok(Json(response))
 }
@@ -344,7 +341,7 @@ fn default_limit() -> usize {
 pub(super) async fn scrollback(
     State(state): State<AppState>,
     axum::extract::Query(params): axum::extract::Query<ScrollbackQuery>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<impl IntoResponse, ApiError> {
     let response = state
         .parser
         .query(Query::Scrollback {
@@ -353,12 +350,7 @@ pub(super) async fn scrollback(
             limit: params.limit,
         })
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-        })?;
+        .map_err(|_| ApiError::ParserUnavailable)?;
 
     Ok(Json(response))
 }
@@ -405,19 +397,23 @@ pub(super) async fn overlay_list(State(state): State<AppState>) -> Json<Vec<Over
 pub(super) async fn overlay_get(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
-) -> Result<Json<Overlay>, StatusCode> {
-    state.overlays.get(&id).map(Json).ok_or(StatusCode::NOT_FOUND)
+) -> Result<Json<Overlay>, ApiError> {
+    state
+        .overlays
+        .get(&id)
+        .map(Json)
+        .ok_or_else(|| ApiError::OverlayNotFound(id))
 }
 
 pub(super) async fn overlay_update(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
     Json(req): Json<UpdateOverlayRequest>,
-) -> StatusCode {
+) -> Result<StatusCode, ApiError> {
     if state.overlays.update(&id, req.spans) {
-        StatusCode::NO_CONTENT
+        Ok(StatusCode::NO_CONTENT)
     } else {
-        StatusCode::NOT_FOUND
+        Err(ApiError::OverlayNotFound(id))
     }
 }
 
@@ -425,22 +421,22 @@ pub(super) async fn overlay_patch(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
     Json(req): Json<PatchOverlayRequest>,
-) -> StatusCode {
+) -> Result<StatusCode, ApiError> {
     if state.overlays.move_to(&id, req.x, req.y, req.z) {
-        StatusCode::NO_CONTENT
+        Ok(StatusCode::NO_CONTENT)
     } else {
-        StatusCode::NOT_FOUND
+        Err(ApiError::OverlayNotFound(id))
     }
 }
 
 pub(super) async fn overlay_delete(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
-) -> StatusCode {
+) -> Result<StatusCode, ApiError> {
     if state.overlays.delete(&id) {
-        StatusCode::NO_CONTENT
+        Ok(StatusCode::NO_CONTENT)
     } else {
-        StatusCode::NOT_FOUND
+        Err(ApiError::OverlayNotFound(id))
     }
 }
 
