@@ -1,5 +1,7 @@
 # Overlay & Input Capture System
 
+> **Status:** Implemented (2026-02-09)
+
 > Enable API clients (agents, external tools) to display visual overlays on the terminal and optionally capture user input for sidebar interactions—without the underlying program knowing.
 
 ## Overview
