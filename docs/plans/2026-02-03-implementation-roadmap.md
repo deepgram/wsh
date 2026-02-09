@@ -11,7 +11,7 @@ This document describes the implementation plan for wsh, from proof-of-concept t
 | Phase 1: Proof-of-Concept | **Complete** | All core data flow working, 35 tests passing |
 | Phase 2: Terminal Parsing & State | **Complete** | Parser module with avt, HTTP + WebSocket endpoints |
 | Phase 2.5: Overlay & Input Capture | **Complete** | API-driven overlays, input capture mode, 131 tests |
-| Phase 3: API Hardening & Documentation | Not started | |
+| Phase 3: API Documentation & Onboarding | **Complete** | Auth, structured errors, CLI flags, docs, OpenAPI |
 | Phase 4: Web UI | Not started | |
 | Phase 5: Headless Mode & Agent Hooks | Not started | |
 
@@ -323,13 +323,25 @@ For transparent passthrough, the local terminal needs raw mode.
 - Uses cursor save/restore for overlay rendering to preserve cursor position
 - 131 tests total (90 unit + 41 integration)
 
-### Phase 3: API Hardening & Documentation
+### Phase 3: API Documentation & Onboarding ✓ COMPLETE
 
-- OpenAPI/JSON Schema for all endpoints
-- Authentication for non-localhost binding
-- Configurable buffer sizes, timeouts
-- Comprehensive error responses
-- CLI flags: `--bind`, `--token`, `--shell`
+- [x] Split monolithic api.rs into module directory (mod.rs, handlers.rs, error.rs, auth.rs)
+- [x] Structured ApiError type with 12 fine-grained error codes and JSON responses
+- [x] Bearer token authentication middleware (conditional on bind address)
+- [x] CLI flags: `--token` (with WSH_TOKEN env), `--shell`
+- [x] Auto-generated token for non-loopback binds
+- [x] Auth via Authorization header and ?token= query parameter
+- [x] Six human-readable API documentation files (docs/api/)
+- [x] Hand-written OpenAPI 3.1 spec (docs/api/openapi.yaml)
+- [x] Doc-serving endpoints: GET /openapi.yaml, GET /docs (using include_str!)
+- [x] Updated root README with complete endpoint table and project structure
+- [x] 182 tests total (auth integration, API docs endpoints, error handling)
+
+**Implementation notes:**
+- Docs are embedded at compile time via include_str!() -- binary and docs can't drift
+- Auth skipped for localhost, required for non-loopback (auto-generate or --token)
+- /health, /docs, /openapi.yaml always unauthenticated
+- OpenAPI spec covers all 18 endpoints, 35+ component schemas, security schemes
 
 ### Phase 4: Web UI
 
