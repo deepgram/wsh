@@ -13,7 +13,7 @@ use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
 
-use crate::input::{InputMode, Mode};
+use crate::input::{InputBroadcaster, InputMode, Mode};
 use crate::overlay::{Overlay, OverlaySpan, OverlayStore};
 use crate::parser::{
     events::{Event, EventType, Subscribe},
@@ -30,6 +30,7 @@ pub struct AppState {
     pub parser: Parser,
     pub overlays: OverlayStore,
     pub input_mode: InputMode,
+    pub input_broadcaster: InputBroadcaster,
 }
 
 #[derive(Serialize)]
@@ -497,6 +498,7 @@ mod tests {
             parser,
             overlays: OverlayStore::new(),
             input_mode: InputMode::new(),
+            input_broadcaster: crate::input::InputBroadcaster::new(),
         };
         (state, input_rx)
     }

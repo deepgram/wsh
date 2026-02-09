@@ -20,7 +20,7 @@ use std::net::SocketAddr;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use wsh::{api, broker, input::{self, InputMode}, overlay::{self, OverlayStore}, parser::Parser, pty::{self, SpawnCommand}, shutdown::ShutdownCoordinator, terminal};
+use wsh::{api, broker, input::{self, InputBroadcaster, InputMode}, overlay::{self, OverlayStore}, parser::Parser, pty::{self, SpawnCommand}, shutdown::ShutdownCoordinator, terminal};
 
 /// wsh - The Web Shell
 ///
@@ -121,10 +121,13 @@ async fn main() -> Result<(), WshError> {
     // Create input_mode before AppState so it can be shared with stdin reader
     let input_mode = InputMode::new();
 
+    // Create input_broadcaster before AppState so it can be shared with stdin reader
+    let input_broadcaster = InputBroadcaster::new();
+
     // Spawn I/O tasks
     let pty_reader_handle = spawn_pty_reader(pty_reader, broker.clone(), overlays.clone());
     spawn_pty_writer(pty_writer, input_rx);
-    spawn_stdin_reader(input_tx.clone(), input_mode.clone());
+    spawn_stdin_reader(input_tx.clone(), input_mode.clone(), input_broadcaster.clone());
 
     // Start API server with graceful shutdown support
     let state = api::AppState {
@@ -134,6 +137,7 @@ async fn main() -> Result<(), WshError> {
         parser: parser.clone(),
         overlays: overlays.clone(),
         input_mode: input_mode.clone(),
+        input_broadcaster: input_broadcaster.clone(),
     };
     let app = api::router(state);
     tracing::info!(addr = %args.bind, "API server listening");
@@ -237,9 +241,14 @@ fn spawn_pty_writer(mut writer: Box<dyn Write + Send>, mut input_rx: mpsc::Recei
 /// Spawn the stdin reader task.
 /// Reads from stdin and sends to the input channel.
 ///
+/// All input is broadcast to subscribers with mode and parsed key info.
 /// In capture mode, stdin is not forwarded to the PTY.
 /// Ctrl+\ in capture mode switches back to passthrough mode.
-fn spawn_stdin_reader(input_tx: mpsc::Sender<Bytes>, input_mode: input::InputMode) {
+fn spawn_stdin_reader(
+    input_tx: mpsc::Sender<Bytes>,
+    input_mode: input::InputMode,
+    input_broadcaster: input::InputBroadcaster,
+) {
     tokio::task::spawn_blocking(move || {
         let mut stdin = std::io::stdin();
         let mut buf = [0u8; 1024];
@@ -248,23 +257,29 @@ fn spawn_stdin_reader(input_tx: mpsc::Sender<Bytes>, input_mode: input::InputMod
             match stdin.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
-                    let data = Bytes::copy_from_slice(&buf[..n]);
+                    let data = &buf[..n];
 
-                    // Check for Ctrl+\ escape hatch
-                    if input::is_ctrl_backslash(&buf[..n]) && input_mode.is_capture() {
+                    // Get mode once at start of loop iteration
+                    let mode = input_mode.get();
+
+                    // Always broadcast input first
+                    input_broadcaster.broadcast_input(data, mode);
+
+                    // Check for Ctrl+\ escape hatch in capture mode
+                    if input::is_ctrl_backslash(data) && mode == input::Mode::Capture {
                         input_mode.release();
+                        input_broadcaster.broadcast_mode(input::Mode::Passthrough);
                         tracing::debug!("Ctrl+\\ pressed, switching to passthrough mode");
                         continue; // Don't forward the Ctrl+\
                     }
 
                     // In capture mode, don't forward to PTY
-                    if input_mode.is_capture() {
-                        // TODO: Broadcast to input subscribers (Task 10)
+                    if mode == input::Mode::Capture {
                         continue;
                     }
 
                     // Passthrough mode: forward to PTY
-                    if input_tx.blocking_send(data).is_err() {
+                    if input_tx.blocking_send(Bytes::copy_from_slice(data)).is_err() {
                         break;
                     }
                 }

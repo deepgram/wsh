@@ -20,7 +20,7 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tower::ServiceExt;
 use wsh::api::{router, AppState};
 use wsh::broker::Broker;
-use wsh::input::InputMode;
+use wsh::input::{InputBroadcaster, InputMode};
 use wsh::overlay::OverlayStore;
 use wsh::parser::Parser;
 use wsh::shutdown::ShutdownCoordinator;
@@ -38,6 +38,7 @@ fn create_test_app() -> (axum::Router, mpsc::Receiver<Bytes>, broadcast::Sender<
         parser,
         overlays: OverlayStore::new(),
         input_mode: InputMode::new(),
+        input_broadcaster: InputBroadcaster::new(),
     };
     (router(state), input_rx, broker.sender())
 }
@@ -116,6 +117,7 @@ async fn test_api_input_multiple_requests() {
         parser,
         overlays: OverlayStore::new(),
         input_mode: InputMode::new(),
+        input_broadcaster: InputBroadcaster::new(),
     };
     let app = router(state);
 
@@ -191,6 +193,7 @@ async fn test_websocket_receives_pty_output() {
         parser,
         overlays: OverlayStore::new(),
         input_mode: InputMode::new(),
+        input_broadcaster: InputBroadcaster::new(),
     };
     let app = router(state);
 
@@ -238,6 +241,7 @@ async fn test_websocket_sends_input_to_pty() {
         parser,
         overlays: OverlayStore::new(),
         input_mode: InputMode::new(),
+        input_broadcaster: InputBroadcaster::new(),
     };
     let app = router(state);
 
@@ -281,6 +285,7 @@ async fn test_websocket_text_input_to_pty() {
         parser,
         overlays: OverlayStore::new(),
         input_mode: InputMode::new(),
+        input_broadcaster: InputBroadcaster::new(),
     };
     let app = router(state);
 
@@ -323,6 +328,7 @@ async fn test_websocket_bidirectional_communication() {
         parser,
         overlays: OverlayStore::new(),
         input_mode: InputMode::new(),
+        input_broadcaster: InputBroadcaster::new(),
     };
     let app = router(state);
 
@@ -384,6 +390,7 @@ async fn test_websocket_multiple_outputs() {
         parser,
         overlays: OverlayStore::new(),
         input_mode: InputMode::new(),
+        input_broadcaster: InputBroadcaster::new(),
     };
     let app = router(state);
 
@@ -493,6 +500,7 @@ async fn test_websocket_line_event_includes_total_lines() {
         parser,
         overlays: OverlayStore::new(),
         input_mode: InputMode::new(),
+        input_broadcaster: InputBroadcaster::new(),
     };
     let app = router(state);
 
@@ -567,6 +575,7 @@ async fn test_scrollback_endpoint() {
         parser,
         overlays: OverlayStore::new(),
         input_mode: InputMode::new(),
+        input_broadcaster: InputBroadcaster::new(),
     };
     let app = router(state);
 
@@ -619,6 +628,7 @@ async fn test_scrollback_initial_state() {
         parser,
         overlays: OverlayStore::new(),
         input_mode: InputMode::new(),
+        input_broadcaster: InputBroadcaster::new(),
     };
     let app = router(state);
 
