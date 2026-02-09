@@ -1,5 +1,7 @@
 # Overlay & Input Capture Implementation Plan
 
+> **Status:** Implemented (2026-02-09)
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Add API-driven overlays and input capture to wsh, enabling agents to display visual content on top of the terminal and optionally capture user input for sidebar interactions.

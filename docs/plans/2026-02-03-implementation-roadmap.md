@@ -10,11 +10,12 @@ This document describes the implementation plan for wsh, from proof-of-concept t
 |-------|--------|-------|
 | Phase 1: Proof-of-Concept | **Complete** | All core data flow working, 35 tests passing |
 | Phase 2: Terminal Parsing & State | **Complete** | Parser module with avt, HTTP + WebSocket endpoints |
+| Phase 2.5: Overlay & Input Capture | **Complete** | API-driven overlays, input capture mode, 131 tests |
 | Phase 3: API Hardening & Documentation | Not started | |
 | Phase 4: Web UI | Not started | |
 | Phase 5: Headless Mode & Agent Hooks | Not started | |
 
-**Last updated:** 2026-02-05
+**Last updated:** 2026-02-09
 
 ---
 
@@ -302,6 +303,26 @@ For transparent passthrough, the local terminal needs raw mode.
 - Screen endpoint returns current visible content with cursor position
 - Scrollback endpoint returns historical output as styled lines
 
+### Phase 2.5: Overlay & Input Capture ✓ COMPLETE
+
+- [x] Overlay data types (Overlay, OverlaySpan, Color, Style)
+- [x] Thread-safe OverlayStore with CRUD operations
+- [x] ANSI rendering for overlays (cursor positioning, colors, attributes)
+- [x] Input capture mode (passthrough/capture) with Ctrl+\ escape hatch
+- [x] Key parsing for structured input events
+- [x] Overlay HTTP API (POST/GET/PUT/PATCH/DELETE /overlay)
+- [x] Input capture HTTP API (GET /input/mode, POST /input/capture, POST /input/release)
+- [x] Overlay compositing in PTY reader (renders overlays after each output)
+- [x] Input event broadcasting to subscribers
+- [x] WebSocket input subscription (EventType::Input)
+- [x] Integration tests for overlay and input capture APIs
+
+**Implementation notes:**
+- Overlays render on top of terminal without PTY knowing (pure compositing)
+- Input always broadcast to API subscribers; capture mode controls PTY forwarding
+- Uses cursor save/restore for overlay rendering to preserve cursor position
+- 131 tests total (90 unit + 41 integration)
+
 ### Phase 3: API Hardening & Documentation
 
 - OpenAPI/JSON Schema for all endpoints
@@ -317,11 +338,12 @@ For transparent passthrough, the local terminal needs raw mode.
 - Modifier bar for Esc, Ctrl, arrows
 - Native scrolling and text selection
 
-### Phase 5: Headless Mode & Agent Hooks
+### Phase 5: Headless Mode & Advanced Agent Hooks
 
 - `--headless` flag for automation (no local stdin/stdout)
 - MCP-style interface
 - Semantic events (command complete, prompt detected)
+- Note: Basic agent hooks (overlays, input capture, input events) already implemented in Phase 2.5
 
 ---
 
