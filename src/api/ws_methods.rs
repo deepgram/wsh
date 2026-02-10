@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::overlay::OverlaySpan;
 use crate::parser::events::EventType;
-use crate::parser::state::Format;
+use crate::parser::state::{Format, Query};
 
 // ---------------------------------------------------------------------------
 // Envelope types
@@ -229,6 +229,84 @@ pub async fn dispatch(req: &WsRequest, state: &AppState) -> WsResponse {
             state.overlays.clear();
             flush_overlays_to_stdout(&old, &[]);
             WsResponse::success(id, method, serde_json::json!({}))
+        }
+        "get_screen" => {
+            let params: ScreenParams = match parse_params(req) {
+                Ok(p) => p,
+                Err(e) => return e,
+            };
+            match state.parser.query(Query::Screen { format: params.format }).await {
+                Ok(resp) => WsResponse::success(
+                    id,
+                    method,
+                    serde_json::to_value(&resp).unwrap(),
+                ),
+                Err(_) => WsResponse::error(
+                    id,
+                    method,
+                    "parser_unavailable",
+                    "Terminal parser is unavailable.",
+                ),
+            }
+        }
+        "get_scrollback" => {
+            let params: ScrollbackParams = match parse_params(req) {
+                Ok(p) => p,
+                Err(e) => return e,
+            };
+            match state
+                .parser
+                .query(Query::Scrollback {
+                    format: params.format,
+                    offset: params.offset,
+                    limit: params.limit,
+                })
+                .await
+            {
+                Ok(resp) => WsResponse::success(
+                    id,
+                    method,
+                    serde_json::to_value(&resp).unwrap(),
+                ),
+                Err(_) => WsResponse::error(
+                    id,
+                    method,
+                    "parser_unavailable",
+                    "Terminal parser is unavailable.",
+                ),
+            }
+        }
+        "send_input" => {
+            let params: SendInputParams = match parse_params(req) {
+                Ok(p) => p,
+                Err(e) => return e,
+            };
+            let bytes = match params.encoding {
+                InputEncoding::Utf8 => bytes::Bytes::from(params.data),
+                InputEncoding::Base64 => {
+                    use base64::Engine;
+                    match base64::engine::general_purpose::STANDARD.decode(&params.data) {
+                        Ok(decoded) => bytes::Bytes::from(decoded),
+                        Err(e) => {
+                            return WsResponse::error(
+                                id,
+                                method,
+                                "invalid_request",
+                                &format!("Invalid base64: {}.", e),
+                            );
+                        }
+                    }
+                }
+            };
+            match state.input_tx.send(bytes).await {
+                Ok(()) => WsResponse::success(id, method, serde_json::json!({})),
+                Err(_) => WsResponse::error(
+                    id,
+                    method,
+                    "input_send_failed",
+                    "Failed to send input to terminal.",
+                ),
+            }
         }
         _ => WsResponse::error(
             id,
@@ -472,5 +550,94 @@ mod tests {
         let resp = dispatch(&req, &state).await;
         assert!(serde_json::to_value(&resp).unwrap()["result"].is_object());
         assert_eq!(state.overlays.list().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn dispatch_get_screen() {
+        let (state, _rx) = create_test_state();
+        let req = WsRequest {
+            id: Some(serde_json::Value::Number(1.into())),
+            method: "get_screen".to_string(),
+            params: Some(serde_json::json!({"format": "plain"})),
+        };
+        let resp = dispatch(&req, &state).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert!(json["result"]["cols"].is_number());
+        assert!(json["result"]["rows"].is_number());
+        assert!(json["result"]["lines"].is_array());
+    }
+
+    #[tokio::test]
+    async fn dispatch_get_screen_no_params() {
+        let (state, _rx) = create_test_state();
+        let req = WsRequest {
+            id: None,
+            method: "get_screen".to_string(),
+            params: None,
+        };
+        let resp = dispatch(&req, &state).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert!(json["result"]["cols"].is_number());
+    }
+
+    #[tokio::test]
+    async fn dispatch_get_scrollback() {
+        let (state, _rx) = create_test_state();
+        let req = WsRequest {
+            id: None,
+            method: "get_scrollback".to_string(),
+            params: Some(serde_json::json!({"format": "plain", "offset": 0, "limit": 10})),
+        };
+        let resp = dispatch(&req, &state).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert!(json["result"]["total_lines"].is_number());
+        assert!(json["result"]["lines"].is_array());
+    }
+
+    #[tokio::test]
+    async fn dispatch_send_input_utf8() {
+        let (state, mut rx) = create_test_state();
+        let req = WsRequest {
+            id: None,
+            method: "send_input".to_string(),
+            params: Some(serde_json::json!({"data": "hello"})),
+        };
+        let resp = dispatch(&req, &state).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert!(json["result"].is_object());
+
+        let received = rx.try_recv().unwrap();
+        assert_eq!(received.as_ref(), b"hello");
+    }
+
+    #[tokio::test]
+    async fn dispatch_send_input_base64() {
+        let (state, mut rx) = create_test_state();
+        use base64::Engine;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(b"\x03");
+        let req = WsRequest {
+            id: None,
+            method: "send_input".to_string(),
+            params: Some(serde_json::json!({"data": encoded, "encoding": "base64"})),
+        };
+        let resp = dispatch(&req, &state).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert!(json["result"].is_object());
+
+        let received = rx.try_recv().unwrap();
+        assert_eq!(received.as_ref(), b"\x03");
+    }
+
+    #[tokio::test]
+    async fn dispatch_send_input_bad_base64() {
+        let (state, _rx) = create_test_state();
+        let req = WsRequest {
+            id: None,
+            method: "send_input".to_string(),
+            params: Some(serde_json::json!({"data": "!!!not-base64!!!", "encoding": "base64"})),
+        };
+        let resp = dispatch(&req, &state).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["error"]["code"], "invalid_request");
     }
 }
