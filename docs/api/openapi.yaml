@@ -168,12 +168,14 @@ paths:
   /ws/json:
     get:
       operationId: wsJson
-      summary: JSON event WebSocket
+      summary: JSON request/response and event WebSocket
       tags: [websocket]
       description: >
-        Structured event stream with subscription filtering. After upgrade,
-        server sends {"connected": true}. Client sends a Subscribe message
-        to begin receiving events.
+        Unified request/response protocol with event subscriptions. After
+        upgrade, server sends {"connected": true}. Client can immediately
+        send method calls (get_screen, send_input, subscribe, etc.) and
+        receive responses. Subscribing to events is optional. See
+        websocket.md for the full protocol specification.
       responses:
         "101":
           description: WebSocket upgrade successful.
@@ -609,13 +611,74 @@ components:
 
     # --- WebSocket Messages ---
 
-    Subscribe:
+    WsRequest:
+      description: >
+        Client-to-server request over /ws/json. All messages use this envelope.
+      type: object
+      required: [method]
+      properties:
+        id:
+          description: Optional client-chosen ID, echoed in response.
+          oneOf:
+            - type: integer
+            - type: string
+        method:
+          type: string
+          description: Method name to invoke.
+        params:
+          type: object
+          description: Method-specific parameters.
+
+    WsResponse:
+      description: >
+        Server-to-client response over /ws/json. Contains either result or
+        error, never both. For protocol-level errors (malformed request),
+        method and id may be absent.
+      type: object
+      properties:
+        id:
+          description: Echoed from request, absent if not provided.
+          oneOf:
+            - type: integer
+            - type: string
+        method:
+          type: string
+          description: Echoed method name. Absent for protocol-level errors.
+        result:
+          description: Successful result (mutually exclusive with error).
+        error:
+          $ref: "#/components/schemas/WsError"
+
+    WsError:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string }
+        message: { type: string }
+
+    SubscribeParams:
       type: object
       required: [events]
       properties:
         events: { type: array, items: { $ref: "#/components/schemas/EventType" } }
         interval_ms: { type: integer, minimum: 0, default: 100 }
         format: { $ref: "#/components/schemas/Format" }
+
+    SendInputParams:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: string
+          description: Input data (plain string or base64-encoded).
+        encoding:
+          type: string
+          enum: [utf8, base64]
+          default: utf8
+          description: >
+            Encoding of the data field. With utf8 (default), JSON unicode
+            escapes handle control characters. With base64, data is decoded
+            before sending to the PTY.
 
     EventType:
       type: string
@@ -767,6 +830,7 @@ components:
                 - invalid_overlay
                 - invalid_input_mode
                 - invalid_format
+                - unknown_method
                 - channel_full
                 - parser_unavailable
                 - input_send_failed
