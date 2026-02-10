@@ -7,19 +7,14 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, RwLock};
 
 /// The current input routing mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Mode {
     /// Input goes to both API subscribers and PTY
+    #[default]
     Passthrough,
     /// Input goes only to API subscribers
     Capture,
-}
-
-impl Default for Mode {
-    fn default() -> Self {
-        Mode::Passthrough
-    }
 }
 
 /// Thread-safe input mode state.

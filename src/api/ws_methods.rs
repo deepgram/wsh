@@ -186,6 +186,7 @@ use super::AppState;
 use super::handlers::flush_overlays_to_stdout;
 
 /// Parse params from a WsRequest, returning a WsResponse error on failure.
+#[allow(clippy::result_large_err)]
 fn parse_params<T: serde::de::DeserializeOwned>(req: &WsRequest) -> Result<T, WsResponse> {
     let params = req
         .params
