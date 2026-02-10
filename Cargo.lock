@@ -2384,6 +2384,7 @@ dependencies = [
  "anyhow",
  "avt",
  "axum",
+ "base64",
  "bytes",
  "clap",
  "crossterm",
