@@ -1,0 +1,308 @@
+//! Integration tests for WebSocket JSON request/response protocol.
+
+use bytes::Bytes;
+use futures::{SinkExt, StreamExt};
+use std::net::SocketAddr;
+use std::time::Duration;
+use tokio::net::TcpListener;
+use tokio::sync::mpsc;
+use tokio_tungstenite::{connect_async, tungstenite::Message};
+use wsh::{
+    api,
+    broker::Broker,
+    input::{InputBroadcaster, InputMode},
+    overlay::OverlayStore,
+    parser::Parser,
+    shutdown::ShutdownCoordinator,
+};
+
+fn create_test_state() -> (api::AppState, mpsc::Receiver<Bytes>) {
+    let (input_tx, input_rx) = mpsc::channel(64);
+    let broker = Broker::new();
+    let parser = Parser::spawn(&broker, 80, 24, 1000);
+    let state = api::AppState {
+        input_tx,
+        output_rx: broker.sender(),
+        shutdown: ShutdownCoordinator::new(),
+        parser,
+        overlays: OverlayStore::new(),
+        input_mode: InputMode::new(),
+        input_broadcaster: InputBroadcaster::new(),
+    };
+    (state, input_rx)
+}
+
+async fn start_server(app: axum::Router) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    addr
+}
+
+/// Helper: receive next text message, parse as JSON.
+async fn recv_json(
+    ws: &mut futures::stream::SplitStream<
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+    >,
+) -> serde_json::Value {
+    let deadline = Duration::from_secs(2);
+    let msg = tokio::time::timeout(deadline, ws.next())
+        .await
+        .expect("timeout waiting for message")
+        .expect("stream ended")
+        .expect("ws error");
+    match msg {
+        Message::Text(text) => serde_json::from_str(&text).expect("invalid JSON"),
+        other => panic!("expected text message, got {:?}", other),
+    }
+}
+
+#[tokio::test]
+async fn test_ws_method_get_input_mode() {
+    let (state, _rx) = create_test_state();
+    let app = api::router(state, None);
+    let addr = start_server(app).await;
+
+    let (ws, _) = connect_async(format!("ws://{}/ws/json", addr))
+        .await
+        .unwrap();
+    let (mut tx, mut rx) = ws.split();
+
+    // Read "connected" message
+    let msg = recv_json(&mut rx).await;
+    assert_eq!(msg["connected"], true);
+
+    // Send method call (no subscribe needed first!)
+    tx.send(Message::Text(
+        serde_json::json!({"id": 1, "method": "get_input_mode"}).to_string(),
+    ))
+    .await
+    .unwrap();
+
+    let resp = recv_json(&mut rx).await;
+    assert_eq!(resp["id"], 1);
+    assert_eq!(resp["method"], "get_input_mode");
+    assert_eq!(resp["result"]["mode"], "passthrough");
+}
+
+#[tokio::test]
+async fn test_ws_method_get_screen() {
+    let (state, _rx) = create_test_state();
+    let app = api::router(state, None);
+    let addr = start_server(app).await;
+
+    let (ws, _) = connect_async(format!("ws://{}/ws/json", addr))
+        .await
+        .unwrap();
+    let (mut tx, mut rx) = ws.split();
+
+    let _ = recv_json(&mut rx).await; // connected
+
+    tx.send(Message::Text(
+        serde_json::json!({"method": "get_screen", "params": {"format": "plain"}}).to_string(),
+    ))
+    .await
+    .unwrap();
+
+    let resp = recv_json(&mut rx).await;
+    assert_eq!(resp["method"], "get_screen");
+    assert!(resp["result"]["cols"].is_number());
+    assert!(resp["result"]["rows"].is_number());
+}
+
+#[tokio::test]
+async fn test_ws_method_send_input() {
+    let (state, mut input_rx) = create_test_state();
+    let app = api::router(state, None);
+    let addr = start_server(app).await;
+
+    let (ws, _) = connect_async(format!("ws://{}/ws/json", addr))
+        .await
+        .unwrap();
+    let (mut tx, mut rx) = ws.split();
+
+    let _ = recv_json(&mut rx).await; // connected
+
+    tx.send(Message::Text(
+        serde_json::json!({"method": "send_input", "params": {"data": "hello"}}).to_string(),
+    ))
+    .await
+    .unwrap();
+
+    let resp = recv_json(&mut rx).await;
+    assert_eq!(resp["method"], "send_input");
+    assert!(resp["result"].is_object());
+
+    // Verify input reached the channel
+    let received = tokio::time::timeout(Duration::from_secs(1), input_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(received.as_ref(), b"hello");
+}
+
+#[tokio::test]
+async fn test_ws_subscribe_then_events() {
+    let (state, _rx) = create_test_state();
+    let broker_tx = state.output_rx.clone();
+    let app = api::router(state, None);
+    let addr = start_server(app).await;
+
+    let (ws, _) = connect_async(format!("ws://{}/ws/json", addr))
+        .await
+        .unwrap();
+    let (mut tx, mut rx) = ws.split();
+
+    let _ = recv_json(&mut rx).await; // connected
+
+    // Subscribe
+    tx.send(Message::Text(
+        serde_json::json!({
+            "method": "subscribe",
+            "params": {"events": ["lines"], "format": "plain"}
+        })
+        .to_string(),
+    ))
+    .await
+    .unwrap();
+
+    // Should get subscribe response
+    let resp = recv_json(&mut rx).await;
+    assert_eq!(resp["method"], "subscribe");
+    assert!(resp["result"]["events"].is_array());
+
+    // Should get sync event
+    let sync = recv_json(&mut rx).await;
+    assert_eq!(sync["event"], "sync");
+
+    // Now push data and expect line events
+    broker_tx.send(Bytes::from("Hello\r\n")).unwrap();
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let mut found_line = false;
+    while tokio::time::Instant::now() < deadline {
+        if let Ok(Some(Ok(Message::Text(text)))) =
+            tokio::time::timeout(Duration::from_millis(200), rx.next()).await
+        {
+            let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+            if json.get("event") == Some(&serde_json::json!("line")) {
+                found_line = true;
+                break;
+            }
+        }
+    }
+    assert!(found_line, "should receive line events after subscribing");
+}
+
+#[tokio::test]
+async fn test_ws_unknown_method() {
+    let (state, _rx) = create_test_state();
+    let app = api::router(state, None);
+    let addr = start_server(app).await;
+
+    let (ws, _) = connect_async(format!("ws://{}/ws/json", addr))
+        .await
+        .unwrap();
+    let (mut tx, mut rx) = ws.split();
+
+    let _ = recv_json(&mut rx).await; // connected
+
+    tx.send(Message::Text(
+        serde_json::json!({"method": "nonexistent"}).to_string(),
+    ))
+    .await
+    .unwrap();
+
+    let resp = recv_json(&mut rx).await;
+    assert_eq!(resp["method"], "nonexistent");
+    assert_eq!(resp["error"]["code"], "unknown_method");
+}
+
+#[tokio::test]
+async fn test_ws_malformed_request() {
+    let (state, _rx) = create_test_state();
+    let app = api::router(state, None);
+    let addr = start_server(app).await;
+
+    let (ws, _) = connect_async(format!("ws://{}/ws/json", addr))
+        .await
+        .unwrap();
+    let (mut tx, mut rx) = ws.split();
+
+    let _ = recv_json(&mut rx).await; // connected
+
+    // Send JSON without method field
+    tx.send(Message::Text(r#"{"id": 1}"#.to_string()))
+        .await
+        .unwrap();
+
+    let resp = recv_json(&mut rx).await;
+    assert_eq!(resp["error"]["code"], "invalid_request");
+    // No method or id since parsing failed
+}
+
+#[tokio::test]
+async fn test_ws_methods_interleaved_with_events() {
+    let (state, _rx) = create_test_state();
+    let broker_tx = state.output_rx.clone();
+    let app = api::router(state, None);
+    let addr = start_server(app).await;
+
+    let (ws, _) = connect_async(format!("ws://{}/ws/json", addr))
+        .await
+        .unwrap();
+    let (mut tx, mut rx) = ws.split();
+
+    let _ = recv_json(&mut rx).await; // connected
+
+    // Subscribe first
+    tx.send(Message::Text(
+        serde_json::json!({
+            "method": "subscribe",
+            "params": {"events": ["lines"], "format": "plain"}
+        })
+        .to_string(),
+    ))
+    .await
+    .unwrap();
+
+    let _ = recv_json(&mut rx).await; // subscribe response
+    let _ = recv_json(&mut rx).await; // sync event
+
+    // Now send a method call WHILE events could be flowing
+    broker_tx.send(Bytes::from("data\r\n")).unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    tx.send(Message::Text(
+        serde_json::json!({"id": 42, "method": "get_input_mode"}).to_string(),
+    ))
+    .await
+    .unwrap();
+
+    // Collect messages until we see our response
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let mut found_response = false;
+    while tokio::time::Instant::now() < deadline {
+        if let Ok(Some(Ok(Message::Text(text)))) =
+            tokio::time::timeout(Duration::from_millis(200), rx.next()).await
+        {
+            let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+            if json.get("method") == Some(&serde_json::json!("get_input_mode")) {
+                assert_eq!(json["id"], 42);
+                assert_eq!(json["result"]["mode"], "passthrough");
+                found_response = true;
+                break;
+            }
+            // Other messages (line events) are fine, skip them
+        }
+    }
+    assert!(
+        found_response,
+        "should receive method response even while events are streaming"
+    );
+}

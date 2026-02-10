@@ -20,8 +20,8 @@ use std::io::Write;
 use crate::input::Mode;
 use crate::overlay::{self, Overlay, OverlaySpan};
 use crate::parser::{
-    events::{Event, EventType, Subscribe},
-    state::{Format, Query, QueryResponse},
+    events::EventType,
+    state::{Format, Query},
 };
 
 use super::error::ApiError;
@@ -138,93 +138,21 @@ async fn handle_ws_json(socket: WebSocket, state: AppState) {
         return;
     }
 
-    // Wait for subscribe message
-    let subscribe: Subscribe = loop {
-        tokio::select! {
-            msg = ws_rx.next() => {
-                match msg {
-                    Some(Ok(Message::Text(text))) => {
-                        match serde_json::from_str::<Subscribe>(&text) {
-                            Ok(sub) => break sub,
-                            Err(e) => {
-                                let err = serde_json::json!({
-                                    "error": format!("invalid subscribe message: {}", e),
-                                    "code": "invalid_subscribe"
-                                });
-                                let _ = ws_tx.send(Message::Text(err.to_string())).await;
-                            }
-                        }
-                    }
-                    Some(Ok(Message::Close(_))) | None => return,
-                    _ => continue,
-                }
-            }
-            _ = shutdown_rx.changed() => {
-                if *shutdown_rx.borrow() {
-                    tracing::debug!("WebSocket received shutdown signal during subscribe");
-                    let close_frame = CloseFrame {
-                        code: axum::extract::ws::close_code::NORMAL,
-                        reason: "server shutting down".into(),
-                    };
-                    let _ = ws_tx.send(Message::Close(Some(close_frame))).await;
-                    let _ = ws_tx.flush().await;
-                    return;
-                }
-            }
-        }
-    };
+    // Mutable subscription state (initially no subscription)
+    let mut subscribed_types: Vec<crate::parser::events::EventType> = Vec::new();
 
-    // Confirm subscription
-    let subscribed_msg = serde_json::json!({
-        "subscribed": subscribe.events.iter().map(|e| format!("{:?}", e).to_lowercase()).collect::<Vec<_>>()
-    });
-    if ws_tx
-        .send(Message::Text(subscribed_msg.to_string()))
-        .await
-        .is_err()
-    {
-        return;
-    }
-
-    // Send initial Sync event with current screen state
-    if let Ok(QueryResponse::Screen(screen)) = state
-        .parser
-        .query(Query::Screen {
-            format: subscribe.format,
-        })
-        .await
-    {
-        let scrollback_lines = screen.total_lines;
-        let sync_event = Event::Sync {
-            seq: 0,
-            screen,
-            scrollback_lines,
-        };
-        if let Ok(json) = serde_json::to_string(&sync_event) {
-            if ws_tx.send(Message::Text(json)).await.is_err() {
-                return;
-            }
-        }
-    }
-
-    // Subscribe to parser events
+    // Subscribe to parser events (stream is always active, filtering is local)
     let mut events = Box::pin(state.parser.subscribe());
-    let subscribed_types = subscribe.events;
 
-    // Subscribe to input events if requested
-    let mut input_rx = if subscribed_types.contains(&EventType::Input) {
-        Some(state.input_broadcaster.subscribe())
-    } else {
-        None
-    };
+    // Input subscription (lazily created when EventType::Input is subscribed)
+    let mut input_rx: Option<tokio::sync::broadcast::Receiver<crate::input::InputEvent>> = None;
 
     // Main event loop
     loop {
         tokio::select! {
             event = events.next() => {
                 match event {
-                    Some(event) => {
-                        // Filter based on subscription
+                    Some(event) if !subscribed_types.is_empty() => {
                         let should_send = match &event {
                             crate::parser::events::Event::Line { .. } => {
                                 subscribed_types.contains(&EventType::Lines)
@@ -251,10 +179,10 @@ async fn handle_ws_json(socket: WebSocket, state: AppState) {
                         }
                     }
                     None => break,
+                    _ => {} // No subscription active, discard
                 }
             }
 
-            // Handle input events if subscribed
             input_event = async {
                 match &mut input_rx {
                     Some(rx) => rx.recv().await,
@@ -270,23 +198,101 @@ async fn handle_ws_json(socket: WebSocket, state: AppState) {
                         }
                     }
                     Err(broadcast::error::RecvError::Closed) => {
-                        // Broadcaster closed, remove subscription
                         input_rx = None;
                     }
-                    Err(broadcast::error::RecvError::Lagged(_)) => {
-                        // Missed some events, continue
-                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
                 }
             }
 
             msg = ws_rx.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
-                        // Handle resubscribe (simplified: just acknowledge)
-                        if let Ok(_sub) = serde_json::from_str::<Subscribe>(&text) {
-                            // In a full implementation, we'd update the filter
-                            let ack = serde_json::json!({ "subscribed": true });
-                            let _ = ws_tx.send(Message::Text(ack.to_string())).await;
+                        // Parse as WsRequest
+                        let req = match serde_json::from_str::<super::ws_methods::WsRequest>(&text) {
+                            Ok(req) => req,
+                            Err(_e) => {
+                                let err = super::ws_methods::WsResponse::protocol_error(
+                                    "invalid_request",
+                                    "Invalid JSON or missing 'method' field.",
+                                );
+                                if let Ok(json) = serde_json::to_string(&err) {
+                                    let _ = ws_tx.send(Message::Text(json)).await;
+                                }
+                                continue;
+                            }
+                        };
+
+                        // Handle subscribe specially (needs to update local state)
+                        if req.method == "subscribe" {
+                            let params_value = req.params.clone().unwrap_or(serde_json::Value::Object(Default::default()));
+                            match serde_json::from_value::<super::ws_methods::SubscribeParams>(params_value) {
+                                Ok(params) => {
+                                    subscribed_types = params.events.clone();
+                                    let sub_format = params.format;
+
+                                    // Set up input subscription if needed
+                                    if subscribed_types.contains(&EventType::Input) {
+                                        if input_rx.is_none() {
+                                            input_rx = Some(state.input_broadcaster.subscribe());
+                                        }
+                                    } else {
+                                        input_rx = None;
+                                    }
+
+                                    // Send response
+                                    let event_names: Vec<String> = subscribed_types.iter()
+                                        .map(|e| format!("{:?}", e).to_lowercase())
+                                        .collect();
+                                    let resp = super::ws_methods::WsResponse::success(
+                                        req.id.clone(),
+                                        "subscribe",
+                                        serde_json::json!({"events": event_names}),
+                                    );
+                                    if let Ok(json) = serde_json::to_string(&resp) {
+                                        if ws_tx.send(Message::Text(json)).await.is_err() {
+                                            break;
+                                        }
+                                    }
+
+                                    // Send sync event
+                                    if let Ok(crate::parser::state::QueryResponse::Screen(screen)) = state
+                                        .parser
+                                        .query(crate::parser::state::Query::Screen { format: sub_format })
+                                        .await
+                                    {
+                                        let scrollback_lines = screen.total_lines;
+                                        let sync_event = crate::parser::events::Event::Sync {
+                                            seq: 0,
+                                            screen,
+                                            scrollback_lines,
+                                        };
+                                        if let Ok(json) = serde_json::to_string(&sync_event) {
+                                            if ws_tx.send(Message::Text(json)).await.is_err() {
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    let resp = super::ws_methods::WsResponse::error(
+                                        req.id.clone(),
+                                        "subscribe",
+                                        "invalid_request",
+                                        &format!("Invalid subscribe params: {}.", e),
+                                    );
+                                    if let Ok(json) = serde_json::to_string(&resp) {
+                                        let _ = ws_tx.send(Message::Text(json)).await;
+                                    }
+                                }
+                            }
+                        } else {
+                            // Dispatch all other methods
+                            let resp = super::ws_methods::dispatch(&req, &state).await;
+                            if let Ok(json) = serde_json::to_string(&resp) {
+                                if ws_tx.send(Message::Text(json)).await.is_err() {
+                                    break;
+                                }
+                            }
                         }
                     }
                     Some(Ok(Message::Close(_))) | None => break,

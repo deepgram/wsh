@@ -517,14 +517,16 @@ async fn test_websocket_line_event_includes_total_lines() {
     // Read "connected" message
     let _ = ws_stream.next().await;
 
-    // Subscribe to lines
-    let subscribe_msg = serde_json::json!({"events": ["lines"]});
+    // Subscribe to lines (using new unified protocol)
+    let subscribe_msg = serde_json::json!({"method": "subscribe", "params": {"events": ["lines"]}});
     ws_stream
         .send(Message::Text(subscribe_msg.to_string()))
         .await
         .unwrap();
 
-    // Read "subscribed" confirmation
+    // Read subscribe response
+    let _ = ws_stream.next().await;
+    // Read sync event
     let _ = ws_stream.next().await;
 
     // Publish text to trigger line events
