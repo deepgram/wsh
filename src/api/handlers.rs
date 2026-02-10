@@ -364,7 +364,7 @@ pub(super) async fn scrollback(
 ///
 /// Erases `to_erase` overlays, then renders `to_render` overlays, all wrapped
 /// in synchronized output to avoid tearing.
-fn flush_overlays_to_stdout(to_erase: &[Overlay], to_render: &[Overlay]) {
+pub(super) fn flush_overlays_to_stdout(to_erase: &[Overlay], to_render: &[Overlay]) {
     let stdout = std::io::stdout();
     let mut lock = stdout.lock();
     let _ = lock.write_all(overlay::begin_sync().as_bytes());

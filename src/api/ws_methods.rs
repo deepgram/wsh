@@ -179,6 +179,67 @@ pub struct PatchOverlayParams {
 }
 
 // ---------------------------------------------------------------------------
+// Dispatch
+// ---------------------------------------------------------------------------
+
+use super::AppState;
+use super::handlers::flush_overlays_to_stdout;
+
+/// Parse params from a WsRequest, returning a WsResponse error on failure.
+fn parse_params<T: serde::de::DeserializeOwned>(req: &WsRequest) -> Result<T, WsResponse> {
+    let params = req
+        .params
+        .as_ref()
+        .cloned()
+        .unwrap_or(serde_json::Value::Object(Default::default()));
+    serde_json::from_value(params).map_err(|e| {
+        WsResponse::error(
+            req.id.clone(),
+            &req.method,
+            "invalid_request",
+            &format!("Invalid params: {}.", e),
+        )
+    })
+}
+
+/// Dispatch a WebSocket request to the appropriate handler.
+pub async fn dispatch(req: &WsRequest, state: &AppState) -> WsResponse {
+    let id = req.id.clone();
+    let method = req.method.as_str();
+
+    match method {
+        "get_input_mode" => {
+            let mode = state.input_mode.get();
+            WsResponse::success(id, method, serde_json::json!({ "mode": mode }))
+        }
+        "capture_input" => {
+            state.input_mode.capture();
+            WsResponse::success(id, method, serde_json::json!({}))
+        }
+        "release_input" => {
+            state.input_mode.release();
+            WsResponse::success(id, method, serde_json::json!({}))
+        }
+        "list_overlays" => {
+            let overlays = state.overlays.list();
+            WsResponse::success(id, method, serde_json::to_value(&overlays).unwrap())
+        }
+        "clear_overlays" => {
+            let old = state.overlays.list();
+            state.overlays.clear();
+            flush_overlays_to_stdout(&old, &[]);
+            WsResponse::success(id, method, serde_json::json!({}))
+        }
+        _ => WsResponse::error(
+            id,
+            method,
+            "unknown_method",
+            &format!("Unknown method '{}'.", method),
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -281,5 +342,135 @@ mod tests {
         assert_eq!(params.events[2], EventType::Diffs);
         assert_eq!(params.interval_ms, 200);
         assert_eq!(params.format, Format::Plain);
+    }
+
+    // -----------------------------------------------------------------------
+    // Dispatch tests
+    // -----------------------------------------------------------------------
+
+    use crate::api::AppState;
+    use crate::broker::Broker;
+    use crate::input::{InputBroadcaster, InputMode};
+    use crate::overlay::OverlayStore;
+    use crate::parser::Parser;
+    use crate::shutdown::ShutdownCoordinator;
+    use bytes::Bytes;
+    use tokio::sync::mpsc;
+
+    fn create_test_state() -> (AppState, mpsc::Receiver<Bytes>) {
+        let (input_tx, input_rx) = mpsc::channel(64);
+        let broker = Broker::new();
+        let parser = Parser::spawn(&broker, 80, 24, 1000);
+        let state = AppState {
+            input_tx,
+            output_rx: broker.sender(),
+            shutdown: ShutdownCoordinator::new(),
+            parser,
+            overlays: OverlayStore::new(),
+            input_mode: InputMode::new(),
+            input_broadcaster: InputBroadcaster::new(),
+        };
+        (state, input_rx)
+    }
+
+    #[tokio::test]
+    async fn dispatch_unknown_method() {
+        let (state, _rx) = create_test_state();
+        let req = WsRequest {
+            id: None,
+            method: "do_magic".to_string(),
+            params: None,
+        };
+        let resp = dispatch(&req, &state).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["error"]["code"], "unknown_method");
+        assert_eq!(json["method"], "do_magic");
+    }
+
+    #[tokio::test]
+    async fn dispatch_get_input_mode() {
+        let (state, _rx) = create_test_state();
+        let req = WsRequest {
+            id: Some(serde_json::Value::Number(1.into())),
+            method: "get_input_mode".to_string(),
+            params: None,
+        };
+        let resp = dispatch(&req, &state).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["id"], 1);
+        assert_eq!(json["method"], "get_input_mode");
+        assert_eq!(json["result"]["mode"], "passthrough");
+    }
+
+    #[tokio::test]
+    async fn dispatch_capture_and_release() {
+        let (state, _rx) = create_test_state();
+
+        // Capture
+        let req = WsRequest {
+            id: None,
+            method: "capture_input".to_string(),
+            params: None,
+        };
+        let resp = dispatch(&req, &state).await;
+        assert!(serde_json::to_value(&resp).unwrap()["result"].is_object());
+
+        // Verify mode changed
+        let req = WsRequest {
+            id: None,
+            method: "get_input_mode".to_string(),
+            params: None,
+        };
+        let resp = dispatch(&req, &state).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["result"]["mode"], "capture");
+
+        // Release
+        let req = WsRequest {
+            id: None,
+            method: "release_input".to_string(),
+            params: None,
+        };
+        let resp = dispatch(&req, &state).await;
+        assert!(serde_json::to_value(&resp).unwrap()["result"].is_object());
+
+        // Verify
+        let req = WsRequest {
+            id: None,
+            method: "get_input_mode".to_string(),
+            params: None,
+        };
+        let resp = dispatch(&req, &state).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["result"]["mode"], "passthrough");
+    }
+
+    #[tokio::test]
+    async fn dispatch_list_overlays_empty() {
+        let (state, _rx) = create_test_state();
+        let req = WsRequest {
+            id: None,
+            method: "list_overlays".to_string(),
+            params: None,
+        };
+        let resp = dispatch(&req, &state).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["result"], serde_json::json!([]));
+    }
+
+    #[tokio::test]
+    async fn dispatch_clear_overlays() {
+        let (state, _rx) = create_test_state();
+        state.overlays.create(0, 0, None, vec![]);
+        assert_eq!(state.overlays.list().len(), 1);
+
+        let req = WsRequest {
+            id: None,
+            method: "clear_overlays".to_string(),
+            params: None,
+        };
+        let resp = dispatch(&req, &state).await;
+        assert!(serde_json::to_value(&resp).unwrap()["result"].is_object());
+        assert_eq!(state.overlays.list().len(), 0);
     }
 }
