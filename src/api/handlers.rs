@@ -500,6 +500,571 @@ async fn handle_ws_json(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Server-level multiplexed WebSocket
+// ---------------------------------------------------------------------------
+
+pub(super) async fn ws_json_server(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    ws.on_upgrade(|socket| handle_ws_json_server(socket, state))
+}
+
+/// A tagged session event forwarded through the internal mpsc channel.
+struct TaggedSessionEvent {
+    session: String,
+    event: crate::parser::events::Event,
+}
+
+/// Tracks a per-session subscription's forwarding task.
+struct SubHandle {
+    subscribed_types: Vec<EventType>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
+    let (_guard, mut shutdown_rx) = state.shutdown.register();
+    let (mut ws_tx, mut ws_rx) = socket.split();
+
+    // Send connected message
+    let connected_msg = serde_json::json!({ "connected": true });
+    if ws_tx
+        .send(Message::Text(connected_msg.to_string()))
+        .await
+        .is_err()
+    {
+        return;
+    }
+
+    // Subscribe to registry-level lifecycle events
+    let mut registry_rx = state.sessions.subscribe_events();
+
+    // Per-session subscription forwarding: all events funnel through this channel
+    let (sub_tx, mut sub_rx) =
+        tokio::sync::mpsc::channel::<TaggedSessionEvent>(256);
+
+    // Track active subscription tasks by session name
+    let mut sub_handles: std::collections::HashMap<String, SubHandle> =
+        std::collections::HashMap::new();
+
+    // Main event loop
+    loop {
+        tokio::select! {
+            biased;
+
+            // Incoming client message
+            msg = ws_rx.next() => {
+                match msg {
+                    Some(Ok(Message::Text(text))) => {
+                        let req = match serde_json::from_str::<super::ws_methods::ServerWsRequest>(&text) {
+                            Ok(req) => req,
+                            Err(_e) => {
+                                let err = super::ws_methods::WsResponse::protocol_error(
+                                    "invalid_request",
+                                    "Invalid JSON or missing 'method' field.",
+                                );
+                                if let Ok(json) = serde_json::to_string(&err) {
+                                    let _ = ws_tx.send(Message::Text(json)).await;
+                                }
+                                continue;
+                            }
+                        };
+
+                        let is_subscribe = req.method == "subscribe";
+                        let subscribe_session = req.session.clone();
+
+                        let response = handle_server_ws_request(
+                            &req,
+                            &state,
+                            &mut sub_handles,
+                            &sub_tx,
+                        )
+                        .await;
+
+                        if let Some(resp) = response {
+                            // Check if this was a successful subscribe
+                            let subscribe_ok = is_subscribe && resp.error.is_none();
+
+                            if let Ok(json) = serde_json::to_string(&resp) {
+                                if ws_tx.send(Message::Text(json)).await.is_err() {
+                                    break;
+                                }
+                            }
+
+                            // Send sync event after successful subscribe
+                            if subscribe_ok {
+                                if let Some(session_name) = &subscribe_session {
+                                    if let Some(session) = state.sessions.get(session_name) {
+                                        let format = {
+                                            let params_value = req.params.clone().unwrap_or(serde_json::Value::Object(Default::default()));
+                                            serde_json::from_value::<super::ws_methods::SubscribeParams>(params_value)
+                                                .map(|p| p.format)
+                                                .unwrap_or_default()
+                                        };
+                                        if let Ok(crate::parser::state::QueryResponse::Screen(screen)) = session
+                                            .parser
+                                            .query(crate::parser::state::Query::Screen { format })
+                                            .await
+                                        {
+                                            let scrollback_lines = screen.total_lines;
+                                            let sync_event = serde_json::json!({
+                                                "event": "sync",
+                                                "session": session_name,
+                                                "params": {
+                                                    "seq": 0,
+                                                    "screen": screen,
+                                                    "scrollback_lines": scrollback_lines,
+                                                }
+                                            });
+                                            if let Ok(json) = serde_json::to_string(&sync_event) {
+                                                if ws_tx.send(Message::Text(json)).await.is_err() {
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) | None => break,
+                    _ => continue,
+                }
+            }
+
+            // Registry lifecycle events
+            result = registry_rx.recv() => {
+                match result {
+                    Ok(event) => {
+                        let event_json = match &event {
+                            crate::session::SessionEvent::Created { name } => {
+                                serde_json::json!({
+                                    "event": "session_created",
+                                    "params": { "name": name }
+                                })
+                            }
+                            crate::session::SessionEvent::Exited { name } => {
+                                serde_json::json!({
+                                    "event": "session_exited",
+                                    "params": { "name": name }
+                                })
+                            }
+                            crate::session::SessionEvent::Destroyed { name } => {
+                                // Clean up any subscription for this session
+                                if let Some(handle) = sub_handles.remove(name) {
+                                    handle.task.abort();
+                                }
+                                serde_json::json!({
+                                    "event": "session_destroyed",
+                                    "params": { "name": name }
+                                })
+                            }
+                        };
+                        if let Ok(json) = serde_json::to_string(&event_json) {
+                            if ws_tx.send(Message::Text(json)).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                }
+            }
+
+            // Per-session parser events forwarded from subscription tasks
+            Some(tagged) = sub_rx.recv() => {
+                // Check if we should forward this event based on subscription filter
+                if let Some(handle) = sub_handles.get(&tagged.session) {
+                    let should_send = match &tagged.event {
+                        crate::parser::events::Event::Line { .. } => {
+                            handle.subscribed_types.contains(&EventType::Lines)
+                        }
+                        crate::parser::events::Event::Cursor { .. } => {
+                            handle.subscribed_types.contains(&EventType::Cursor)
+                        }
+                        crate::parser::events::Event::Mode { .. } => {
+                            handle.subscribed_types.contains(&EventType::Mode)
+                        }
+                        crate::parser::events::Event::Diff { .. } => {
+                            handle.subscribed_types.contains(&EventType::Diffs)
+                        }
+                        crate::parser::events::Event::Reset { .. }
+                        | crate::parser::events::Event::Sync { .. } => true,
+                    };
+
+                    if should_send {
+                        // Tag the event with the session name
+                        if let Ok(event_value) = serde_json::to_value(&tagged.event) {
+                            let tagged_json = if let serde_json::Value::Object(mut map) = event_value {
+                                map.insert("session".to_string(), serde_json::json!(tagged.session));
+                                serde_json::Value::Object(map)
+                            } else {
+                                event_value
+                            };
+                            if let Ok(json) = serde_json::to_string(&tagged_json) {
+                                if ws_tx.send(Message::Text(json)).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Shutdown signal
+            _ = shutdown_rx.changed() => {
+                if *shutdown_rx.borrow() {
+                    tracing::debug!("Server WebSocket received shutdown signal");
+                    let close_frame = CloseFrame {
+                        code: axum::extract::ws::close_code::NORMAL,
+                        reason: "server shutting down".into(),
+                    };
+                    let _ = ws_tx.send(Message::Close(Some(close_frame))).await;
+                    let _ = ws_tx.flush().await;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Clean up all subscription tasks
+    for (_, handle) in sub_handles {
+        handle.task.abort();
+    }
+}
+
+/// Handle a single server-level WebSocket request.
+///
+/// Returns `Some(response)` for methods that produce a response.
+async fn handle_server_ws_request(
+    req: &super::ws_methods::ServerWsRequest,
+    state: &AppState,
+    sub_handles: &mut std::collections::HashMap<String, SubHandle>,
+    sub_tx: &tokio::sync::mpsc::Sender<TaggedSessionEvent>,
+) -> Option<super::ws_methods::WsResponse> {
+    let id = req.id.clone();
+    let method = req.method.as_str();
+
+    // Server-level session management methods (no session field required)
+    match method {
+        "create_session" => {
+            #[derive(Deserialize)]
+            struct CreateParams {
+                name: Option<String>,
+                command: Option<String>,
+                rows: Option<u16>,
+                cols: Option<u16>,
+            }
+            let params: CreateParams = match &req.params {
+                Some(v) => match serde_json::from_value(v.clone()) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        return Some(super::ws_methods::WsResponse::error(
+                            id,
+                            method,
+                            "invalid_request",
+                            &format!("Invalid params: {}.", e),
+                        ));
+                    }
+                },
+                None => CreateParams {
+                    name: None,
+                    command: None,
+                    rows: None,
+                    cols: None,
+                },
+            };
+
+            let command = match params.command {
+                Some(cmd) => SpawnCommand::Command {
+                    command: cmd,
+                    interactive: false,
+                },
+                None => SpawnCommand::Shell {
+                    interactive: false,
+                    shell: None,
+                },
+            };
+
+            let rows = params.rows.unwrap_or(24);
+            let cols = params.cols.unwrap_or(80);
+
+            let (session, _child_exit_rx) =
+                match Session::spawn("".to_string(), command, rows, cols) {
+                    Ok(result) => result,
+                    Err(e) => {
+                        return Some(super::ws_methods::WsResponse::error(
+                            id,
+                            method,
+                            "session_create_failed",
+                            &format!("Failed to create session: {}.", e),
+                        ));
+                    }
+                };
+
+            match state.sessions.insert(params.name, session) {
+                Ok(assigned_name) => {
+                    return Some(super::ws_methods::WsResponse::success(
+                        id,
+                        method,
+                        serde_json::json!({ "name": assigned_name }),
+                    ));
+                }
+                Err(RegistryError::NameExists(n)) => {
+                    return Some(super::ws_methods::WsResponse::error(
+                        id,
+                        method,
+                        "session_name_conflict",
+                        &format!("Session name already exists: {}.", n),
+                    ));
+                }
+                Err(RegistryError::NotFound(n)) => {
+                    return Some(super::ws_methods::WsResponse::error(
+                        id,
+                        method,
+                        "session_not_found",
+                        &format!("Session not found: {}.", n),
+                    ));
+                }
+            }
+        }
+
+        "list_sessions" => {
+            let names = state.sessions.list();
+            let sessions: Vec<serde_json::Value> = names
+                .into_iter()
+                .map(|name| serde_json::json!({ "name": name }))
+                .collect();
+            return Some(super::ws_methods::WsResponse::success(
+                id,
+                method,
+                serde_json::json!(sessions),
+            ));
+        }
+
+        "kill_session" => {
+            #[derive(Deserialize)]
+            struct KillParams {
+                name: String,
+            }
+            let params: KillParams = match &req.params {
+                Some(v) => match serde_json::from_value(v.clone()) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        return Some(super::ws_methods::WsResponse::error(
+                            id,
+                            method,
+                            "invalid_request",
+                            &format!("Invalid params: {}.", e),
+                        ));
+                    }
+                },
+                None => {
+                    return Some(super::ws_methods::WsResponse::error(
+                        id,
+                        method,
+                        "invalid_request",
+                        "Missing 'params' with 'name' field.",
+                    ));
+                }
+            };
+
+            match state.sessions.remove(&params.name) {
+                Some(_) => {
+                    // Also clean up any subscription for this session
+                    if let Some(handle) = sub_handles.remove(&params.name) {
+                        handle.task.abort();
+                    }
+                    return Some(super::ws_methods::WsResponse::success(
+                        id,
+                        method,
+                        serde_json::json!({}),
+                    ));
+                }
+                None => {
+                    return Some(super::ws_methods::WsResponse::error(
+                        id,
+                        method,
+                        "session_not_found",
+                        &format!("Session not found: {}.", params.name),
+                    ));
+                }
+            }
+        }
+
+        "rename_session" => {
+            #[derive(Deserialize)]
+            struct RenameParams {
+                name: String,
+                new_name: String,
+            }
+            let params: RenameParams = match &req.params {
+                Some(v) => match serde_json::from_value(v.clone()) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        return Some(super::ws_methods::WsResponse::error(
+                            id,
+                            method,
+                            "invalid_request",
+                            &format!("Invalid params: {}.", e),
+                        ));
+                    }
+                },
+                None => {
+                    return Some(super::ws_methods::WsResponse::error(
+                        id,
+                        method,
+                        "invalid_request",
+                        "Missing 'params' with 'name' and 'new_name' fields.",
+                    ));
+                }
+            };
+
+            match state.sessions.rename(&params.name, &params.new_name) {
+                Ok(()) => {
+                    // Update subscription key if it exists
+                    if let Some(handle) = sub_handles.remove(&params.name) {
+                        sub_handles.insert(params.new_name.clone(), handle);
+                    }
+                    return Some(super::ws_methods::WsResponse::success(
+                        id,
+                        method,
+                        serde_json::json!({ "name": params.new_name }),
+                    ));
+                }
+                Err(RegistryError::NameExists(n)) => {
+                    return Some(super::ws_methods::WsResponse::error(
+                        id,
+                        method,
+                        "session_name_conflict",
+                        &format!("Session name already exists: {}.", n),
+                    ));
+                }
+                Err(RegistryError::NotFound(n)) => {
+                    return Some(super::ws_methods::WsResponse::error(
+                        id,
+                        method,
+                        "session_not_found",
+                        &format!("Session not found: {}.", n),
+                    ));
+                }
+            }
+        }
+
+        "set_server_mode" => {
+            // Placeholder: accept {"persist": true}, return ok
+            return Some(super::ws_methods::WsResponse::success(
+                id,
+                method,
+                serde_json::json!({}),
+            ));
+        }
+
+        _ => {
+            // Not a server-level method; requires a session field.
+        }
+    }
+
+    // Per-session methods: require a session field
+    let session_name = match &req.session {
+        Some(name) => name.clone(),
+        None => {
+            return Some(super::ws_methods::WsResponse::error(
+                id,
+                method,
+                "session_required",
+                "This method requires a 'session' field.",
+            ));
+        }
+    };
+
+    let session = match state.sessions.get(&session_name) {
+        Some(s) => s,
+        None => {
+            return Some(super::ws_methods::WsResponse::error(
+                id,
+                method,
+                "session_not_found",
+                &format!("Session not found: {}.", session_name),
+            ));
+        }
+    };
+
+    // Handle subscribe specially (needs to set up forwarding task)
+    if method == "subscribe" {
+        let params_value = req
+            .params
+            .clone()
+            .unwrap_or(serde_json::Value::Object(Default::default()));
+        match serde_json::from_value::<super::ws_methods::SubscribeParams>(params_value) {
+            Ok(params) => {
+                let subscribed_types = params.events.clone();
+
+                // Abort previous subscription for this session if any
+                if let Some(old) = sub_handles.remove(&session_name) {
+                    old.task.abort();
+                }
+
+                // Spawn a task that reads from the parser event stream and
+                // forwards into the shared mpsc channel.
+                let mut events = Box::pin(session.parser.subscribe());
+                let tx = sub_tx.clone();
+                let name = session_name.clone();
+                let task = tokio::spawn(async move {
+                    while let Some(event) = events.next().await {
+                        if tx
+                            .send(TaggedSessionEvent {
+                                session: name.clone(),
+                                event,
+                            })
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                });
+
+                sub_handles.insert(
+                    session_name.clone(),
+                    SubHandle {
+                        subscribed_types: subscribed_types.clone(),
+                        task,
+                    },
+                );
+
+                let event_names: Vec<String> = subscribed_types
+                    .iter()
+                    .map(|e| format!("{:?}", e).to_lowercase())
+                    .collect();
+                return Some(super::ws_methods::WsResponse::success(
+                    id,
+                    method,
+                    serde_json::json!({ "events": event_names }),
+                ));
+            }
+            Err(e) => {
+                return Some(super::ws_methods::WsResponse::error(
+                    id,
+                    method,
+                    "invalid_request",
+                    &format!("Invalid subscribe params: {}.", e),
+                ));
+            }
+        }
+    }
+
+    // Convert to a WsRequest and delegate to dispatch()
+    let ws_req = super::ws_methods::WsRequest {
+        id: req.id.clone(),
+        method: req.method.clone(),
+        params: req.params.clone(),
+    };
+
+    Some(super::ws_methods::dispatch(&ws_req, &session).await)
+}
+
 // Quiescence query parameters
 #[derive(Deserialize)]
 pub(super) struct QuiesceQuery {

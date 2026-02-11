@@ -19,6 +19,22 @@ pub struct WsRequest {
     pub params: Option<serde_json::Value>,
 }
 
+/// Server-level WebSocket request — includes optional session field.
+///
+/// Used by the multiplexed `/ws/json` endpoint where a single WebSocket
+/// connection can interact with multiple sessions.
+#[derive(Debug, Deserialize)]
+pub struct ServerWsRequest {
+    /// Optional request id, echoed back in the response.
+    pub id: Option<serde_json::Value>,
+    /// Method name (e.g. "create_session", "get_screen").
+    pub method: String,
+    /// Target session name (required for per-session methods).
+    pub session: Option<String>,
+    /// Method-specific parameters.
+    pub params: Option<serde_json::Value>,
+}
+
 /// Outgoing WebSocket response.
 #[derive(Debug, Serialize)]
 pub struct WsResponse {

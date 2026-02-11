@@ -77,7 +77,8 @@ pub fn router(state: AppState, token: Option<String>) -> Router {
                 .patch(session_rename)
                 .delete(session_kill),
         )
-        .route("/server/persist", post(server_persist));
+        .route("/server/persist", post(server_persist))
+        .route("/ws/json", get(ws_json_server));
 
     let protected = Router::new()
         .merge(session_mgmt_routes)
