@@ -297,6 +297,106 @@ async fn test_scrollback_when_in_alternate_screen() {
 }
 
 #[tokio::test]
+async fn test_alternate_active_in_screen_response() {
+    let broker = Broker::new();
+    let parser = Parser::spawn(&broker, 80, 24, 1000);
+
+    // Initially not in alternate screen
+    let response = parser
+        .query(Query::Screen {
+            format: Format::Plain,
+        })
+        .await
+        .unwrap();
+
+    match &response {
+        QueryResponse::Screen(screen) => {
+            assert!(!screen.alternate_active, "should start in primary screen");
+        }
+        _ => panic!("expected Screen response"),
+    }
+
+    // Enter alternate screen mode
+    broker.publish(bytes::Bytes::from("\x1b[?1049h"));
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+    let response = parser
+        .query(Query::Screen {
+            format: Format::Plain,
+        })
+        .await
+        .unwrap();
+
+    match &response {
+        QueryResponse::Screen(screen) => {
+            assert!(screen.alternate_active, "should be in alternate screen after DECSET 1049");
+        }
+        _ => panic!("expected Screen response"),
+    }
+
+    // Exit alternate screen mode
+    broker.publish(bytes::Bytes::from("\x1b[?1049l"));
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+    let response = parser
+        .query(Query::Screen {
+            format: Format::Plain,
+        })
+        .await
+        .unwrap();
+
+    match &response {
+        QueryResponse::Screen(screen) => {
+            assert!(!screen.alternate_active, "should be back in primary screen after DECRST 1049");
+        }
+        _ => panic!("expected Screen response"),
+    }
+}
+
+#[tokio::test]
+async fn test_alternate_screen_emits_mode_event() {
+    let broker = Broker::new();
+    let parser = Parser::spawn(&broker, 80, 24, 1000);
+
+    let mut events = parser.subscribe();
+
+    // Enter alternate screen
+    broker.publish(bytes::Bytes::from("\x1b[?1049h"));
+
+    // Collect events until we find a Mode event
+    let mode_event = tokio::time::timeout(tokio::time::Duration::from_millis(200), async {
+        loop {
+            if let Some(event) = events.next().await {
+                if let Event::Mode { alternate_active, .. } = event {
+                    return alternate_active;
+                }
+            }
+        }
+    })
+    .await
+    .expect("should receive Mode event");
+
+    assert!(mode_event, "Mode event should indicate alternate_active = true");
+
+    // Exit alternate screen
+    broker.publish(bytes::Bytes::from("\x1b[?1049l"));
+
+    let mode_event = tokio::time::timeout(tokio::time::Duration::from_millis(200), async {
+        loop {
+            if let Some(event) = events.next().await {
+                if let Event::Mode { alternate_active, .. } = event {
+                    return alternate_active;
+                }
+            }
+        }
+    })
+    .await
+    .expect("should receive Mode event on exit");
+
+    assert!(!mode_event, "Mode event should indicate alternate_active = false");
+}
+
+#[tokio::test]
 async fn test_screen_response_includes_line_indices() {
     let broker = Broker::new();
     let parser = Parser::spawn(&broker, 80, 5, 100); // Small screen
