@@ -23,9 +23,20 @@ pub async fn serve(
     sessions: SessionRegistry,
     socket_path: &Path,
 ) -> io::Result<()> {
-    // Remove stale socket file if it exists
+    // Remove stale socket file if it exists, but check for active server first
     if socket_path.exists() {
-        std::fs::remove_file(socket_path)?;
+        match std::os::unix::net::UnixStream::connect(socket_path) {
+            Ok(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::AddrInUse,
+                    format!("another server is already listening on {}", socket_path.display()),
+                ));
+            }
+            Err(_) => {
+                // Socket exists but no server is listening — stale, safe to remove
+                std::fs::remove_file(socket_path)?;
+            }
+        }
     }
 
     // Ensure parent directory exists
@@ -34,6 +45,14 @@ pub async fn serve(
     }
 
     let listener = UnixListener::bind(socket_path)?;
+
+    // Restrict socket permissions to owner only (0600)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o600))?;
+    }
+
     tracing::info!(path = %socket_path.display(), "Unix socket server listening");
 
     loop {
@@ -155,12 +174,22 @@ async fn handle_attach_session<S: AsyncRead + AsyncWrite + Unpin>(
     sessions: SessionRegistry,
     msg: AttachSessionMsg,
 ) -> io::Result<()> {
-    let session = sessions.get(&msg.name).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("session not found: {}", msg.name),
-        )
-    })?;
+    let session = match sessions.get(&msg.name) {
+        Some(s) => s,
+        None => {
+            let err = ErrorMsg {
+                code: "session_not_found".to_string(),
+                message: format!("session not found: {}", msg.name),
+            };
+            if let Ok(frame) = Frame::control(FrameType::Error, &err) {
+                let _ = frame.write_to(stream).await;
+            }
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("session not found: {}", msg.name),
+            ));
+        }
+    };
 
     // Resize session to match client terminal
     if let Err(e) = session.pty.resize(msg.rows, msg.cols) {
@@ -441,11 +470,11 @@ mod tests {
         let frame = Frame::control(FrameType::AttachSession, &msg).unwrap();
         frame.write_to(&mut stream).await.unwrap();
 
-        // Connection should close (server returns error via io::Error)
-        // The server handler returns an Err, closing the connection.
-        let result = Frame::read_from(&mut stream).await;
-        // Either we get an error frame or the connection closes
-        assert!(result.is_err() || result.unwrap().frame_type == FrameType::Error);
+        // Server should send an Error frame before closing
+        let resp = Frame::read_from(&mut stream).await.unwrap();
+        assert_eq!(resp.frame_type, FrameType::Error);
+        let err: ErrorMsg = resp.parse_json().unwrap();
+        assert_eq!(err.code, "session_not_found");
 
         std::fs::remove_file(&path).ok();
     }
