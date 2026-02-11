@@ -19,7 +19,8 @@ use std::path::PathBuf;
 use thiserror::Error;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use wsh::{
-    api, input, overlay, panel,
+    api, client, input, overlay, panel,
+    protocol::{AttachSessionMsg, ScrollbackRequest},
     pty::SpawnCommand,
     server,
     session::{Session, SessionRegistry},
@@ -87,15 +88,35 @@ enum Commands {
         /// Scrollback to replay: "all", "none", or a number of lines
         #[arg(long, default_value = "all")]
         scrollback: String,
+
+        /// Path to the Unix domain socket
+        #[arg(long)]
+        socket: Option<PathBuf>,
     },
 
     /// List active sessions on the server
-    List,
+    List {
+        /// Address of the HTTP/WebSocket API server
+        #[arg(long, default_value = "127.0.0.1:8080")]
+        bind: SocketAddr,
+
+        /// Authentication token
+        #[arg(long, env = "WSH_TOKEN")]
+        token: Option<String>,
+    },
 
     /// Kill (destroy) a session on the server
     Kill {
         /// Session name to kill
         name: String,
+
+        /// Address of the HTTP/WebSocket API server
+        #[arg(long, default_value = "127.0.0.1:8080")]
+        bind: SocketAddr,
+
+        /// Authentication token
+        #[arg(long, env = "WSH_TOKEN")]
+        token: Option<String>,
     },
 }
 
@@ -147,14 +168,14 @@ async fn main() -> Result<(), WshError> {
         Some(Commands::Server { bind, token, socket }) => {
             run_server(bind, token, socket).await
         }
-        Some(Commands::Attach { name, scrollback }) => {
-            run_attach(name, scrollback).await
+        Some(Commands::Attach { name, scrollback, socket }) => {
+            run_attach(name, scrollback, socket).await
         }
-        Some(Commands::List) => {
-            run_list().await
+        Some(Commands::List { bind, token }) => {
+            run_list(bind, token).await
         }
-        Some(Commands::Kill { name }) => {
-            run_kill(name).await
+        Some(Commands::Kill { name, bind, token }) => {
+            run_kill(name, bind, token).await
         }
         None => {
             run_standalone(cli).await
@@ -376,21 +397,102 @@ async fn run_standalone(cli: Cli) -> Result<(), WshError> {
     std::process::exit(0)
 }
 
-// ── Client subcommands (stubs for now) ─────────────────────────────
+// ── Client subcommands ─────────────────────────────────────────────
 
-async fn run_attach(_name: String, _scrollback: String) -> Result<(), WshError> {
-    eprintln!("wsh attach: not yet implemented");
-    std::process::exit(1);
+async fn run_attach(
+    name: String,
+    scrollback: String,
+    socket: Option<PathBuf>,
+) -> Result<(), WshError> {
+    let socket_path = socket.unwrap_or_else(server::default_socket_path);
+
+    let scrollback_req = match scrollback.as_str() {
+        "none" => ScrollbackRequest::None,
+        "all" => ScrollbackRequest::All,
+        s => match s.parse::<usize>() {
+            Ok(n) => ScrollbackRequest::Lines(n),
+            Err(_) => {
+                eprintln!("wsh attach: invalid scrollback value: {}", s);
+                std::process::exit(1);
+            }
+        },
+    };
+
+    let (rows, cols) = terminal::terminal_size().unwrap_or((24, 80));
+
+    let mut c = client::Client::connect(&socket_path).await.map_err(|e| {
+        eprintln!("wsh attach: failed to connect to server at {}: {}", socket_path.display(), e);
+        WshError::Io(e)
+    })?;
+
+    let msg = AttachSessionMsg {
+        name: name.clone(),
+        scrollback: scrollback_req,
+        rows,
+        cols,
+    };
+
+    let resp = c.attach(msg).await.map_err(|e| {
+        eprintln!("wsh attach: {}", e);
+        WshError::Io(e)
+    })?;
+
+    // Enter raw mode for the local terminal
+    let raw_guard = terminal::RawModeGuard::new()?;
+
+    // Replay scrollback and screen data before entering the streaming loop
+    {
+        use std::io::Write;
+        let mut stdout = std::io::stdout().lock();
+        if !resp.scrollback.is_empty() {
+            let _ = stdout.write_all(&resp.scrollback);
+        }
+        if !resp.screen.is_empty() {
+            let _ = stdout.write_all(&resp.screen);
+        }
+        let _ = stdout.flush();
+    }
+
+    // Enter the streaming I/O loop
+    let result = c.run_streaming().await;
+
+    // Restore terminal
+    drop(raw_guard);
+
+    if let Err(e) = result {
+        eprintln!("wsh attach: streaming error: {}", e);
+        return Err(WshError::Io(e));
+    }
+
+    Ok(())
 }
 
-async fn run_list() -> Result<(), WshError> {
-    eprintln!("wsh list: not yet implemented");
-    std::process::exit(1);
+async fn run_list(bind: SocketAddr, token: Option<String>) -> Result<(), WshError> {
+    let sessions = client::Client::list_sessions(&bind, &token).await.map_err(|e| {
+        eprintln!("wsh list: {}", e);
+        WshError::Io(e)
+    })?;
+
+    if sessions.is_empty() {
+        println!("No active sessions.");
+    } else {
+        println!("{:<20}", "NAME");
+        for s in &sessions {
+            println!("{:<20}", s.name);
+        }
+    }
+
+    Ok(())
 }
 
-async fn run_kill(_name: String) -> Result<(), WshError> {
-    eprintln!("wsh kill: not yet implemented");
-    std::process::exit(1);
+async fn run_kill(name: String, bind: SocketAddr, token: Option<String>) -> Result<(), WshError> {
+    client::Client::kill_session(&bind, &token, &name).await.map_err(|e| {
+        eprintln!("wsh kill: {}", e);
+        WshError::Io(e)
+    })?;
+
+    println!("Session '{}' killed.", name);
+    Ok(())
 }
 
 // ── Helpers ────────────────────────────────────────────────────────

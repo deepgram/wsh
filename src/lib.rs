@@ -1,6 +1,7 @@
 pub mod activity;
 pub mod api;
 pub mod broker;
+pub mod client;
 pub mod input;
 pub mod overlay;
 pub mod panel;
