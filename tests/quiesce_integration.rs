@@ -51,6 +51,7 @@ fn create_test_state() -> (api::AppState, mpsc::Receiver<Bytes>, ActivityTracker
     let state = api::AppState {
         sessions: registry,
         shutdown: ShutdownCoordinator::new(),
+        server_config: std::sync::Arc::new(api::ServerConfig::new(false)),
     };
     (state, input_rx, activity)
 }

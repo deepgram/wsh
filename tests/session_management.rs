@@ -23,6 +23,7 @@ fn create_empty_test_app() -> axum::Router {
     let state = AppState {
         sessions: registry,
         shutdown: ShutdownCoordinator::new(),
+        server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)),
     };
     router(state, None)
 }

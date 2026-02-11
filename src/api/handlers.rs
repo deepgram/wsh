@@ -978,11 +978,15 @@ async fn handle_server_ws_request(
         }
 
         "set_server_mode" => {
-            return Some(super::ws_methods::WsResponse::error(
+            if let Some(params) = &req.params {
+                if let Some(persistent) = params.get("persistent").and_then(|v| v.as_bool()) {
+                    state.server_config.set_persistent(persistent);
+                }
+            }
+            return Some(super::ws_methods::WsResponse::success(
                 id,
                 method,
-                "not_implemented",
-                "set_server_mode is not yet implemented",
+                serde_json::json!({"persistent": state.server_config.is_persistent()}),
             ));
         }
 
@@ -1669,6 +1673,9 @@ pub(super) async fn session_kill(
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub(super) async fn server_persist() -> StatusCode {
-    StatusCode::NOT_IMPLEMENTED
+pub(super) async fn server_persist(
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    state.server_config.set_persistent(true);
+    (StatusCode::OK, Json(serde_json::json!({"persistent": true})))
 }

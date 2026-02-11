@@ -209,19 +209,24 @@ async fn run_server(
 
     let sessions = SessionRegistry::new();
     let shutdown = ShutdownCoordinator::new();
+    let server_config = std::sync::Arc::new(api::ServerConfig::new(false));
     let state = api::AppState {
         sessions: sessions.clone(),
         shutdown: shutdown.clone(),
+        server_config: server_config.clone(),
     };
 
     let app = api::router(state, token);
     tracing::info!(addr = %bind, "HTTP/WS server listening");
 
+    // Oneshot channel for server shutdown (Ctrl+C or ephemeral exit)
+    let (server_shutdown_tx, server_shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+
     let http_handle = tokio::spawn(async move {
         let listener = tokio::net::TcpListener::bind(bind).await.unwrap();
         axum::serve(listener, app)
             .with_graceful_shutdown(async {
-                tokio::signal::ctrl_c().await.ok();
+                server_shutdown_rx.await.ok();
             })
             .await
             .unwrap();
@@ -238,7 +243,54 @@ async fn run_server(
 
     tracing::info!("wsh server ready");
 
-    // Wait for HTTP server to stop (Ctrl+C)
+    // Ephemeral shutdown monitor: when the last session exits in non-persistent
+    // mode, shut down the server automatically.
+    let config_for_monitor = server_config.clone();
+    let sessions_for_monitor = sessions.clone();
+    let ephemeral_handle = tokio::spawn(async move {
+        let mut events = sessions_for_monitor.subscribe_events();
+        loop {
+            match events.recv().await {
+                Ok(event) => {
+                    let is_removal = matches!(
+                        event,
+                        wsh::session::SessionEvent::Destroyed { .. }
+                            | wsh::session::SessionEvent::Exited { .. }
+                    );
+                    if is_removal
+                        && !config_for_monitor.is_persistent()
+                        && sessions_for_monitor.len() == 0
+                    {
+                        tracing::info!(
+                            "last session ended, ephemeral server shutting down"
+                        );
+                        return true;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return false,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+            }
+        }
+    });
+
+    // Wait for either Ctrl+C or ephemeral shutdown
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {
+            tracing::info!("received Ctrl+C");
+        }
+        result = ephemeral_handle => {
+            match result {
+                Ok(true) => {
+                    tracing::debug!("ephemeral shutdown triggered");
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let _ = server_shutdown_tx.send(());
+
+    // Wait for HTTP server to stop
     if let Err(e) = http_handle.await {
         tracing::warn!(?e, "HTTP server task panicked");
     }
@@ -315,9 +367,11 @@ async fn run_standalone(cli: Cli) -> Result<(), WshError> {
         .unwrap();
 
     let shutdown = ShutdownCoordinator::new();
+    let server_config = std::sync::Arc::new(api::ServerConfig::new(false));
     let state = api::AppState {
         sessions,
         shutdown: shutdown.clone(),
+        server_config,
     };
 
     // Start API server

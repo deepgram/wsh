@@ -69,6 +69,7 @@ pub fn create_test_state_with_size(rows: u16, cols: u16) -> (wsh::api::AppState,
     let state = wsh::api::AppState {
         sessions: registry,
         shutdown: ShutdownCoordinator::new(),
+        server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)),
     };
     (state, ts.input_rx, output_tx)
 }

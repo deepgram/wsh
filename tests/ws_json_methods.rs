@@ -41,6 +41,7 @@ fn create_test_state() -> (api::AppState, mpsc::Receiver<Bytes>) {
     let state = api::AppState {
         sessions: registry,
         shutdown: ShutdownCoordinator::new(),
+        server_config: std::sync::Arc::new(api::ServerConfig::new(false)),
     };
     (state, input_rx)
 }
@@ -185,6 +186,7 @@ async fn test_ws_subscribe_then_events() {
     let state = api::AppState {
         sessions: registry,
         shutdown: ShutdownCoordinator::new(),
+        server_config: std::sync::Arc::new(api::ServerConfig::new(false)),
     };
     let app = api::router(state, None);
     let addr = start_server(app).await;
@@ -308,6 +310,7 @@ async fn test_ws_methods_interleaved_with_events() {
     let state = api::AppState {
         sessions: registry,
         shutdown: ShutdownCoordinator::new(),
+        server_config: std::sync::Arc::new(api::ServerConfig::new(false)),
     };
     let app = api::router(state, None);
     let addr = start_server(app).await;

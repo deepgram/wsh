@@ -15,6 +15,7 @@ fn create_empty_state() -> api::AppState {
     api::AppState {
         sessions: SessionRegistry::new(),
         shutdown: ShutdownCoordinator::new(),
+        server_config: std::sync::Arc::new(api::ServerConfig::new(false)),
     }
 }
 
@@ -554,21 +555,23 @@ async fn test_server_ws_session_not_found() {
     assert_eq!(resp["error"]["code"], "session_not_found");
 }
 
-// ── Test: set_server_mode placeholder ───────────────────────────
+// ── Test: set_server_mode ────────────────────────────────────────
 
 #[tokio::test]
 async fn test_server_ws_set_server_mode() {
     let state = create_empty_state();
-    let app = api::router(state, None);
+    assert!(!state.server_config.is_persistent());
+    let app = api::router(state.clone(), None);
     let addr = start_server(app).await;
 
     let (mut tx, mut rx) = connect_server_ws(addr).await;
 
+    // Set persistent to true
     tx.send(Message::Text(
         serde_json::json!({
             "id": 1,
             "method": "set_server_mode",
-            "params": {"persist": true}
+            "params": {"persistent": true}
         })
         .to_string(),
     ))
@@ -578,8 +581,26 @@ async fn test_server_ws_set_server_mode() {
     let resp = recv_json(&mut rx).await;
     assert_eq!(resp["id"], 1);
     assert_eq!(resp["method"], "set_server_mode");
-    assert!(resp["error"].is_object());
-    assert_eq!(resp["error"]["code"], "not_implemented");
+    assert!(resp["result"].is_object());
+    assert_eq!(resp["result"]["persistent"], true);
+    assert!(state.server_config.is_persistent());
+
+    // Set persistent back to false
+    tx.send(Message::Text(
+        serde_json::json!({
+            "id": 2,
+            "method": "set_server_mode",
+            "params": {"persistent": false}
+        })
+        .to_string(),
+    ))
+    .await
+    .unwrap();
+
+    let resp = recv_json(&mut rx).await;
+    assert_eq!(resp["id"], 2);
+    assert_eq!(resp["result"]["persistent"], false);
+    assert!(!state.server_config.is_persistent());
 }
 
 // ── Test: duplicate session name ────────────────────────────────

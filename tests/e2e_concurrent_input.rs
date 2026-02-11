@@ -86,6 +86,7 @@ async fn test_concurrent_input_from_multiple_sources() {
     let state = api::AppState {
         sessions: registry,
         shutdown: ShutdownCoordinator::new(),
+        server_config: std::sync::Arc::new(api::ServerConfig::new(false)),
     };
     let app = api::router(state, None);
     let addr = start_server(app).await;
@@ -241,6 +242,7 @@ async fn test_rapid_http_requests() {
     let state = api::AppState {
         sessions: registry,
         shutdown: ShutdownCoordinator::new(),
+        server_config: std::sync::Arc::new(api::ServerConfig::new(false)),
     };
     let app = api::router(state, None);
     let addr = start_server(app).await;

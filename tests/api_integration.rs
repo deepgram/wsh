@@ -52,6 +52,7 @@ fn create_test_app() -> (axum::Router, mpsc::Receiver<Bytes>, broadcast::Sender<
     let state = AppState {
         sessions: registry,
         shutdown: ShutdownCoordinator::new(),
+        server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)),
     };
     (router(state, None), input_rx, broker.sender())
 }
@@ -140,7 +141,7 @@ async fn test_api_input_multiple_requests() {
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
-    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new() };
+    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new(), server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)) };
     let app = router(state, None);
 
     let inputs = vec!["first input", "second input", "third input"];
@@ -225,7 +226,7 @@ async fn test_websocket_receives_pty_output() {
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
-    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new() };
+    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new(), server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)) };
     let app = router(state, None);
 
     let addr = start_test_server(app).await;
@@ -282,7 +283,7 @@ async fn test_websocket_sends_input_to_pty() {
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
-    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new() };
+    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new(), server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)) };
     let app = router(state, None);
 
     let addr = start_test_server(app).await;
@@ -335,7 +336,7 @@ async fn test_websocket_text_input_to_pty() {
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
-    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new() };
+    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new(), server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)) };
     let app = router(state, None);
 
     let addr = start_test_server(app).await;
@@ -387,7 +388,7 @@ async fn test_websocket_bidirectional_communication() {
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
-    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new() };
+    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new(), server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)) };
     let app = router(state, None);
 
     let addr = start_test_server(app).await;
@@ -458,7 +459,7 @@ async fn test_websocket_multiple_outputs() {
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
-    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new() };
+    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new(), server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)) };
     let app = router(state, None);
 
     let addr = start_test_server(app).await;
@@ -577,7 +578,7 @@ async fn test_websocket_line_event_includes_total_lines() {
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
-    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new() };
+    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new(), server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)) };
     let app = router(state, None);
 
     let addr = start_test_server(app).await;
@@ -663,7 +664,7 @@ async fn test_scrollback_endpoint() {
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
-    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new() };
+    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new(), server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)) };
     let app = router(state, None);
 
     // Send enough lines to create scrollback (more than 5 rows)
@@ -725,7 +726,7 @@ async fn test_scrollback_initial_state() {
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
-    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new() };
+    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new(), server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)) };
     let app = router(state, None);
 
     // Query immediately without any output

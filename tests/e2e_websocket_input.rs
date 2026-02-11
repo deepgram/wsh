@@ -88,6 +88,7 @@ async fn test_websocket_input_reaches_pty_and_output_returns() {
     let state = api::AppState {
         sessions: registry,
         shutdown: ShutdownCoordinator::new(),
+        server_config: std::sync::Arc::new(api::ServerConfig::new(false)),
     };
     let app = api::router(state, None);
     let addr = start_server(app).await;
@@ -222,6 +223,7 @@ async fn test_websocket_text_input_reaches_pty() {
     let state = api::AppState {
         sessions: registry,
         shutdown: ShutdownCoordinator::new(),
+        server_config: std::sync::Arc::new(api::ServerConfig::new(false)),
     };
     let app = api::router(state, None);
     let addr = start_server(app).await;

@@ -8,15 +8,44 @@ use axum::{
     Router,
 };
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 use crate::session::SessionRegistry;
 use crate::shutdown::ShutdownCoordinator;
 
 use handlers::*;
 
+/// Configuration controlling server lifecycle behavior.
+///
+/// In ephemeral mode (default, `persistent = false`) the server shuts down
+/// when its last session exits or is destroyed. In persistent mode the server
+/// stays alive indefinitely, waiting for new sessions to be created.
+pub struct ServerConfig {
+    persistent: AtomicBool,
+}
+
+impl ServerConfig {
+    pub fn new(persistent: bool) -> Self {
+        Self {
+            persistent: AtomicBool::new(persistent),
+        }
+    }
+
+    pub fn is_persistent(&self) -> bool {
+        self.persistent.load(Ordering::Relaxed)
+    }
+
+    pub fn set_persistent(&self, value: bool) {
+        self.persistent.store(value, Ordering::Relaxed);
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub sessions: SessionRegistry,
     pub shutdown: ShutdownCoordinator,
+    pub server_config: Arc<ServerConfig>,
 }
 
 pub(crate) fn get_session(
@@ -145,6 +174,7 @@ mod tests {
         let state = AppState {
             sessions: registry,
             shutdown: ShutdownCoordinator::new(),
+            server_config: Arc::new(ServerConfig::new(false)),
         };
         (state, input_rx, "test".to_string())
     }
@@ -584,6 +614,7 @@ mod tests {
         AppState {
             sessions: crate::session::SessionRegistry::new(),
             shutdown: ShutdownCoordinator::new(),
+            server_config: Arc::new(ServerConfig::new(false)),
         }
     }
 
@@ -932,9 +963,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_server_persist_returns_501() {
+    async fn test_server_persist_sets_persistent_mode() {
         let state = create_empty_state();
-        let app = router(state, None);
+        assert!(!state.server_config.is_persistent());
+        let app = router(state.clone(), None);
 
         let response = app
             .oneshot(
@@ -947,6 +979,306 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["persistent"], true);
+        assert!(state.server_config.is_persistent());
+    }
+
+    // ── ServerConfig unit tests ──────────────────────────────────────
+
+    #[test]
+    fn test_server_config_defaults_to_ephemeral() {
+        let config = ServerConfig::new(false);
+        assert!(!config.is_persistent());
+    }
+
+    #[test]
+    fn test_server_config_can_be_created_persistent() {
+        let config = ServerConfig::new(true);
+        assert!(config.is_persistent());
+    }
+
+    #[test]
+    fn test_server_config_set_persistent_toggles() {
+        let config = ServerConfig::new(false);
+        assert!(!config.is_persistent());
+
+        config.set_persistent(true);
+        assert!(config.is_persistent());
+
+        config.set_persistent(false);
+        assert!(!config.is_persistent());
+    }
+
+    // ── Ephemeral shutdown logic tests ───────────────────────────────
+
+    /// Simulates the ephemeral shutdown monitor: watches for session events
+    /// and returns `true` when the last session is removed in ephemeral mode.
+    async fn run_ephemeral_monitor(
+        config: Arc<ServerConfig>,
+        sessions: crate::session::SessionRegistry,
+    ) -> bool {
+        let mut events = sessions.subscribe_events();
+        loop {
+            match events.recv().await {
+                Ok(event) => {
+                    let is_removal = matches!(
+                        event,
+                        crate::session::SessionEvent::Destroyed { .. }
+                            | crate::session::SessionEvent::Exited { .. }
+                    );
+                    if is_removal && !config.is_persistent() && sessions.len() == 0 {
+                        return true;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return false,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_ephemeral_shutdown_triggers_when_last_session_removed() {
+        let config = Arc::new(ServerConfig::new(false)); // ephemeral
+        let registry = crate::session::SessionRegistry::new();
+
+        // Start the monitor
+        let monitor = tokio::spawn(run_ephemeral_monitor(config.clone(), registry.clone()));
+
+        // Create a session via the registry
+        let app = router(
+            AppState {
+                sessions: registry.clone(),
+                shutdown: ShutdownCoordinator::new(),
+                server_config: config.clone(),
+            },
+            None,
+        );
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name":"ephemeral-test"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        // Remove the session
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/sessions/ephemeral-test")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+        // The monitor should fire within a reasonable time
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            monitor,
+        )
+        .await;
+        assert!(result.is_ok(), "ephemeral monitor should complete");
+        assert!(result.unwrap().unwrap(), "ephemeral monitor should return true");
+    }
+
+    #[tokio::test]
+    async fn test_persistent_server_stays_alive_when_last_session_removed() {
+        let config = Arc::new(ServerConfig::new(true)); // persistent
+        let registry = crate::session::SessionRegistry::new();
+
+        // Start the monitor
+        let monitor = tokio::spawn(run_ephemeral_monitor(config.clone(), registry.clone()));
+
+        // Create and remove a session
+        let app = router(
+            AppState {
+                sessions: registry.clone(),
+                shutdown: ShutdownCoordinator::new(),
+                server_config: config.clone(),
+            },
+            None,
+        );
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name":"persistent-test"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/sessions/persistent-test")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+        // The monitor should NOT fire (persistent mode)
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            monitor,
+        )
+        .await;
+        assert!(result.is_err(), "persistent server should not trigger shutdown");
+    }
+
+    #[tokio::test]
+    async fn test_ephemeral_does_not_trigger_while_sessions_remain() {
+        let config = Arc::new(ServerConfig::new(false)); // ephemeral
+        let registry = crate::session::SessionRegistry::new();
+
+        // Start the monitor
+        let monitor = tokio::spawn(run_ephemeral_monitor(config.clone(), registry.clone()));
+
+        let app = router(
+            AppState {
+                sessions: registry.clone(),
+                shutdown: ShutdownCoordinator::new(),
+                server_config: config.clone(),
+            },
+            None,
+        );
+
+        // Create two sessions
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name":"sess-a"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name":"sess-b"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        // Remove only one session
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/sessions/sess-a")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+        // Monitor should NOT fire (one session remains)
+        let result: Result<bool, _> = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            async { monitor.await.unwrap() },
+        )
+        .await;
+        assert!(result.is_err(), "should not shutdown while sessions remain");
+    }
+
+    #[tokio::test]
+    async fn test_upgrade_from_ephemeral_to_persistent_via_http() {
+        let state = create_empty_state();
+        assert!(!state.server_config.is_persistent());
+
+        let app = router(state.clone(), None);
+
+        // Upgrade to persistent
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/server/persist")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(state.server_config.is_persistent());
+
+        // Create and remove a session -- should not trigger shutdown
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name":"upgraded-test"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let monitor = tokio::spawn(run_ephemeral_monitor(
+            state.server_config.clone(),
+            state.sessions.clone(),
+        ));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/sessions/upgraded-test")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+        // Should not trigger because server is now persistent
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            monitor,
+        )
+        .await;
+        assert!(result.is_err(), "upgraded-to-persistent server should not shutdown");
     }
 }
