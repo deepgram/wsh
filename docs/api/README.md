@@ -3,40 +3,77 @@
 wsh exposes terminal I/O via HTTP and WebSocket. This document covers every
 endpoint, request format, and response shape you need to build against the API.
 
+wsh operates in two modes:
+
+- **Standalone mode** (default): A single session with local terminal I/O and
+  an HTTP/WS API server. Run `wsh` with no subcommand.
+- **Server mode**: A headless daemon managing multiple sessions via HTTP/WS and
+  a Unix domain socket. Run `wsh server`.
+
 **Base URL:** `http://localhost:8080` (default)
 
 ## Endpoints at a Glance
 
+### Session Endpoints (nested under `/sessions/:name`)
+
+In server mode, per-session endpoints are nested under `/sessions/:name`. In
+standalone mode, the single session is accessible at the top level for backward
+compatibility.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/sessions/:name/input` | Inject bytes into the terminal |
+| `GET` | `/sessions/:name/screen` | Current screen state |
+| `GET` | `/sessions/:name/scrollback` | Scrollback buffer contents |
+| `GET` | `/sessions/:name/ws/raw` | Raw binary WebSocket |
+| `GET` | `/sessions/:name/ws/json` | JSON event WebSocket |
+| `POST` | `/sessions/:name/overlay` | Create an overlay |
+| `GET` | `/sessions/:name/overlay` | List all overlays |
+| `DELETE` | `/sessions/:name/overlay` | Clear all overlays |
+| `GET` | `/sessions/:name/overlay/:id` | Get a single overlay |
+| `PUT` | `/sessions/:name/overlay/:id` | Replace overlay spans |
+| `PATCH` | `/sessions/:name/overlay/:id` | Move/reorder an overlay |
+| `DELETE` | `/sessions/:name/overlay/:id` | Delete an overlay |
+| `POST` | `/sessions/:name/panel` | Create a panel |
+| `GET` | `/sessions/:name/panel` | List all panels |
+| `DELETE` | `/sessions/:name/panel` | Clear all panels |
+| `GET` | `/sessions/:name/panel/:id` | Get a single panel |
+| `PUT` | `/sessions/:name/panel/:id` | Replace a panel |
+| `PATCH` | `/sessions/:name/panel/:id` | Partially update a panel |
+| `DELETE` | `/sessions/:name/panel/:id` | Delete a panel |
+| `GET` | `/sessions/:name/input/mode` | Get current input mode |
+| `POST` | `/sessions/:name/input/capture` | Switch to capture mode |
+| `POST` | `/sessions/:name/input/release` | Switch to passthrough mode |
+| `GET` | `/sessions/:name/quiesce` | Wait for terminal quiescence |
+
+### Session Management Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/sessions` | List all sessions |
+| `POST` | `/sessions` | Create a new session |
+| `GET` | `/sessions/:name` | Get session info |
+| `PATCH` | `/sessions/:name` | Rename a session |
+| `DELETE` | `/sessions/:name` | Kill (destroy) a session |
+
+### Server Management Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/server/persist` | Switch server to persistent mode |
+| `GET` | `/ws/json` | Server-level JSON WebSocket (multi-session) |
+
+### Global Endpoints
+
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/health` | Health check (no auth) |
-| `POST` | `/input` | Inject bytes into the terminal |
-| `GET` | `/screen` | Current screen state |
-| `GET` | `/scrollback` | Scrollback buffer contents |
-| `GET` | `/ws/raw` | Raw binary WebSocket |
-| `GET` | `/ws/json` | JSON event WebSocket |
-| `POST` | `/overlay` | Create an overlay |
-| `GET` | `/overlay` | List all overlays |
-| `DELETE` | `/overlay` | Clear all overlays |
-| `GET` | `/overlay/:id` | Get a single overlay |
-| `PUT` | `/overlay/:id` | Replace overlay spans |
-| `PATCH` | `/overlay/:id` | Move/reorder an overlay |
-| `DELETE` | `/overlay/:id` | Delete an overlay |
-| `POST` | `/panel` | Create a panel |
-| `GET` | `/panel` | List all panels |
-| `DELETE` | `/panel` | Clear all panels |
-| `GET` | `/panel/:id` | Get a single panel |
-| `PUT` | `/panel/:id` | Replace a panel |
-| `PATCH` | `/panel/:id` | Partially update a panel |
-| `DELETE` | `/panel/:id` | Delete a panel |
-| `GET` | `/input/mode` | Get current input mode |
-| `POST` | `/input/capture` | Switch to capture mode |
-| `POST` | `/input/release` | Switch to passthrough mode |
-| `GET` | `/quiesce` | Wait for terminal quiescence |
 | `GET` | `/openapi.yaml` | OpenAPI specification (no auth) |
 | `GET` | `/docs` | This documentation (no auth) |
 
 ## Quick Start
+
+### Standalone Mode
 
 ```bash
 # Start wsh (localhost, no auth required)
@@ -58,6 +95,39 @@ curl 'http://localhost:8080/scrollback?offset=0&limit=50'
 
 # Connect to raw WebSocket (using websocat)
 websocat ws://localhost:8080/ws/raw
+```
+
+### Server Mode
+
+```bash
+# Start the server daemon
+wsh server
+
+# Create a session via HTTP
+curl -X POST http://localhost:8080/sessions \
+  -H 'Content-Type: application/json' \
+  -d '{"name": "dev"}'
+# {"name":"dev"}
+
+# List sessions
+curl http://localhost:8080/sessions
+# [{"name":"dev"}]
+
+# Get the session's screen
+curl http://localhost:8080/sessions/dev/screen
+
+# Send input to the session
+curl -X POST http://localhost:8080/sessions/dev/input -d 'ls\n'
+
+# Attach from another terminal via CLI
+wsh attach dev
+
+# Kill the session
+curl -X DELETE http://localhost:8080/sessions/dev
+
+# Switch server to persistent mode (won't exit when last session ends)
+curl -X POST http://localhost:8080/server/persist
+# {"persistent":true}
 ```
 
 ## Health Check
@@ -303,6 +373,428 @@ curl 'http://localhost:8080/quiesce?timeout_ms=500&format=plain'
 The WebSocket equivalent is the `await_quiesce` method — see
 [websocket.md](websocket.md). Subscriptions can also include automatic
 quiescence sync via the `quiesce_ms` parameter.
+
+## Server Mode
+
+Server mode (`wsh server`) runs a headless daemon that manages multiple terminal
+sessions. Sessions are created on demand via the HTTP API or Unix socket
+protocol. Unlike standalone mode, no PTY is spawned automatically and no local
+terminal I/O is performed.
+
+### CLI Subcommands
+
+wsh provides several subcommands for interacting with a running server:
+
+| Subcommand | Description |
+|------------|-------------|
+| `wsh server` | Start the server daemon |
+| `wsh attach <name>` | Attach to a session (local terminal I/O over Unix socket) |
+| `wsh list` | List active sessions |
+| `wsh kill <name>` | Destroy a session |
+| `wsh persist` | Switch the server to persistent mode |
+
+#### `wsh server`
+
+```bash
+wsh server [--bind <addr>] [--token <token>] [--socket <path>]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--bind` | `127.0.0.1:8080` | Address for the HTTP/WebSocket API server |
+| `--token` | (auto-generated if non-localhost) | Authentication token |
+| `--socket` | `$XDG_RUNTIME_DIR/wsh.sock` | Path to the Unix domain socket |
+
+The server starts both an HTTP/WS listener and a Unix domain socket listener.
+The HTTP/WS API serves session management, per-session endpoints, and the
+server-level WebSocket. The Unix socket handles CLI client connections (`wsh
+attach`).
+
+#### `wsh attach`
+
+```bash
+wsh attach <name> [--scrollback <all|none|N>] [--socket <path>]
+```
+
+Attaches to a named session. The local terminal enters raw mode and proxies
+I/O between your terminal and the session's PTY via the Unix socket. On attach,
+scrollback and current screen content are replayed to bring your terminal up to
+date.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--scrollback` | `all` | Scrollback replay: `all`, `none`, or a line count |
+| `--socket` | `$XDG_RUNTIME_DIR/wsh.sock` | Path to the Unix domain socket |
+
+#### `wsh list`
+
+```bash
+wsh list [--bind <addr>] [--token <token>]
+```
+
+Lists active sessions on the server via the HTTP API.
+
+#### `wsh kill`
+
+```bash
+wsh kill <name> [--bind <addr>] [--token <token>]
+```
+
+Destroys a named session on the server via the HTTP API.
+
+#### `wsh persist`
+
+```bash
+wsh persist [--bind <addr>] [--token <token>]
+```
+
+Switches the server to persistent mode via `POST /server/persist`. In persistent
+mode, the server stays alive even when all sessions have exited.
+
+### Session Management
+
+#### List Sessions
+
+```
+GET /sessions
+```
+
+Returns an array of all active sessions.
+
+**Response:** `200 OK`
+
+```json
+[{"name": "dev"}, {"name": "build"}]
+```
+
+**Example:**
+
+```bash
+curl http://localhost:8080/sessions
+```
+
+#### Create a Session
+
+```
+POST /sessions
+Content-Type: application/json
+```
+
+**Request body:**
+
+```json
+{
+  "name": "dev",
+  "command": "bash",
+  "rows": 24,
+  "cols": 80,
+  "cwd": "/home/user/project",
+  "env": {"TERM": "xterm-256color"}
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | no | Session name (auto-generated if omitted) |
+| `command` | string | no | Command to run (defaults to user's shell) |
+| `rows` | integer | no | Terminal rows (default: 24) |
+| `cols` | integer | no | Terminal columns (default: 80) |
+| `cwd` | string | no | Working directory |
+| `env` | object | no | Additional environment variables |
+
+**Response:** `201 Created`
+
+```json
+{"name": "dev"}
+```
+
+**Errors:**
+
+| Status | Code | When |
+|--------|------|------|
+| 409 | `session_name_conflict` | Name already in use |
+| 500 | `session_create_failed` | PTY spawn or other creation error |
+
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/sessions \
+  -H 'Content-Type: application/json' \
+  -d '{"name": "dev", "command": "bash"}'
+```
+
+#### Get Session Info
+
+```
+GET /sessions/:name
+```
+
+**Response:** `200 OK`
+
+```json
+{"name": "dev"}
+```
+
+**Errors:**
+
+| Status | Code | When |
+|--------|------|------|
+| 404 | `session_not_found` | No session with that name |
+
+**Example:**
+
+```bash
+curl http://localhost:8080/sessions/dev
+```
+
+#### Rename a Session
+
+```
+PATCH /sessions/:name
+Content-Type: application/json
+```
+
+**Request body:**
+
+```json
+{"name": "new-name"}
+```
+
+**Response:** `200 OK`
+
+```json
+{"name": "new-name"}
+```
+
+**Errors:**
+
+| Status | Code | When |
+|--------|------|------|
+| 404 | `session_not_found` | No session with the original name |
+| 409 | `session_name_conflict` | New name already in use |
+
+**Example:**
+
+```bash
+curl -X PATCH http://localhost:8080/sessions/dev \
+  -H 'Content-Type: application/json' \
+  -d '{"name": "production"}'
+```
+
+#### Kill a Session
+
+```
+DELETE /sessions/:name
+```
+
+Destroys the session and its PTY.
+
+**Response:** `204 No Content`
+
+**Errors:**
+
+| Status | Code | When |
+|--------|------|------|
+| 404 | `session_not_found` | No session with that name |
+
+**Example:**
+
+```bash
+curl -X DELETE http://localhost:8080/sessions/dev
+```
+
+### Server Persist
+
+```
+POST /server/persist
+```
+
+Switches the server from ephemeral to persistent mode. In persistent mode, the
+server remains running even when all sessions have exited. This is a one-way
+operation -- there is no way to switch back to ephemeral mode without restarting
+the server.
+
+**Response:** `200 OK`
+
+```json
+{"persistent": true}
+```
+
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/server/persist
+```
+
+### Ephemeral vs Persistent Mode
+
+By default, the server starts in **ephemeral mode**: it shuts down automatically
+when its last session exits or is destroyed. This is useful for ad-hoc server
+usage where you want automatic cleanup.
+
+In **persistent mode**, the server stays alive indefinitely, waiting for new
+sessions to be created. Switch to persistent mode via `POST /server/persist`,
+the `wsh persist` CLI command, or the `set_server_mode` WebSocket method.
+
+### Server-Level WebSocket
+
+```
+GET /ws/json
+```
+
+In server mode, the top-level `/ws/json` endpoint provides a multiplexed
+WebSocket that can interact with any session and receive session lifecycle
+events. After connecting, the server sends `{"connected": true}`.
+
+**Server-level methods** (no `session` field needed):
+
+| Method | Description |
+|--------|-------------|
+| `list_sessions` | List all active sessions |
+| `create_session` | Create a new session |
+| `kill_session` | Destroy a session |
+| `set_server_mode` | Set server mode (ephemeral/persistent) |
+
+**Per-session methods** require a `session` field in the request:
+
+```json
+{"id": 1, "method": "get_screen", "session": "dev", "params": {"format": "styled"}}
+```
+
+All the standard per-session methods (`get_screen`, `get_scrollback`,
+`send_input`, `subscribe`, `await_quiesce`, overlay/panel methods, etc.) work
+the same as on the per-session `/sessions/:name/ws/json` endpoint.
+
+**Session lifecycle events** are broadcast automatically:
+
+```json
+{"event": "session_created", "params": {"name": "dev"}}
+{"event": "session_exited", "params": {"name": "dev"}}
+{"event": "session_renamed", "params": {"old_name": "dev", "new_name": "prod"}}
+{"event": "session_destroyed", "params": {"name": "dev"}}
+```
+
+#### `set_server_mode`
+
+Set the server's persistence mode.
+
+**Params:**
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `persistent` | boolean | `true` for persistent mode, `false` for ephemeral |
+
+```json
+{"id": 1, "method": "set_server_mode", "params": {"persistent": true}}
+```
+
+**Result:**
+
+```json
+{"id": 1, "method": "set_server_mode", "result": {"persistent": true}}
+```
+
+### Unix Socket Protocol
+
+The Unix domain socket provides a binary framing protocol for CLI client
+connections (`wsh attach`). It is designed for low-latency, bidirectional I/O
+proxying between a local terminal and a server-managed PTY session.
+
+#### Wire Format
+
+Each frame consists of:
+
+```
+[type: u8][length: u32 big-endian][payload: bytes]
+```
+
+The maximum payload size is 16 MiB.
+
+#### Frame Types
+
+**Control frames** (JSON payload):
+
+| Type | Byte | Direction | Description |
+|------|------|-----------|-------------|
+| `CreateSession` | `0x01` | Client -> Server | Request to create a new session |
+| `CreateSessionResponse` | `0x02` | Server -> Client | Session creation response |
+| `AttachSession` | `0x03` | Client -> Server | Request to attach to an existing session |
+| `AttachSessionResponse` | `0x04` | Server -> Client | Attach response with scrollback/screen replay |
+| `Detach` | `0x05` | Client -> Server | Cleanly detach from the session |
+| `Resize` | `0x06` | Client -> Server | Terminal resize notification |
+| `Error` | `0x07` | Server -> Client | Error response |
+
+**Data frames** (raw bytes payload):
+
+| Type | Byte | Direction | Description |
+|------|------|-----------|-------------|
+| `PtyOutput` | `0x10` | Server -> Client | PTY output data |
+| `StdinInput` | `0x11` | Client -> Server | Keyboard input data |
+
+#### Connection Lifecycle
+
+1. Client connects to the Unix socket
+2. Client sends a `CreateSession` or `AttachSession` control frame
+3. Server responds with the corresponding response frame
+4. Both sides enter streaming mode: `PtyOutput` and `StdinInput` frames flow
+   bidirectionally
+5. Client sends `Resize` frames when the terminal is resized
+6. Client sends a `Detach` frame to cleanly disconnect (session remains alive)
+
+#### Control Message Schemas
+
+**CreateSession:**
+
+```json
+{
+  "name": "dev",
+  "command": "bash",
+  "cwd": "/home/user",
+  "env": {"KEY": "value"},
+  "rows": 24,
+  "cols": 80
+}
+```
+
+**AttachSession:**
+
+```json
+{
+  "name": "dev",
+  "scrollback": "all",
+  "rows": 24,
+  "cols": 80
+}
+```
+
+The `scrollback` field accepts `"none"`, `"all"`, or `{"lines": N}`.
+
+**AttachSessionResponse:**
+
+```json
+{
+  "name": "dev",
+  "rows": 24,
+  "cols": 80,
+  "scrollback": "<base64-encoded raw terminal bytes>",
+  "screen": "<base64-encoded raw terminal bytes>"
+}
+```
+
+The `scrollback` and `screen` fields contain base64-encoded raw terminal bytes
+(including ANSI escape sequences) for replaying into the client's terminal.
+
+**Resize:**
+
+```json
+{"rows": 40, "cols": 120}
+```
+
+**Error:**
+
+```json
+{"code": "session_not_found", "message": "No session named 'foo'"}
+```
 
 ## Authentication
 

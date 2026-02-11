@@ -29,6 +29,10 @@ tags:
     description: Overlay management
   - name: panel
     description: Panel management (agent-owned screen regions)
+  - name: session
+    description: Session management (server mode)
+  - name: server
+    description: Server lifecycle management
   - name: meta
     description: Documentation and spec endpoints
 
@@ -599,6 +603,168 @@ paths:
               schema:
                 type: string
 
+  # --- Session Management (server mode) ---
+
+  /sessions:
+    get:
+      operationId: listSessions
+      summary: List all active sessions
+      tags: [session]
+      responses:
+        "200":
+          description: Array of all sessions.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SessionInfo"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      operationId: createSession
+      summary: Create a new session
+      tags: [session]
+      description: >
+        Spawns a new PTY session with the specified command (or the user's
+        default shell). Returns the assigned session name.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSessionRequest"
+      responses:
+        "201":
+          description: Session created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionInfo"
+        "409":
+          description: Session name already exists.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Failed to create session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /sessions/{name}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Session name
+    get:
+      operationId: getSession
+      summary: Get session info
+      tags: [session]
+      responses:
+        "200":
+          description: Session info.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionInfo"
+        "404":
+          description: Session not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    patch:
+      operationId: renameSession
+      summary: Rename a session
+      tags: [session]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RenameSessionRequest"
+      responses:
+        "200":
+          description: Session renamed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionInfo"
+        "404":
+          description: Session not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: New name already exists.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    delete:
+      operationId: killSession
+      summary: Kill (destroy) a session
+      tags: [session]
+      description: >
+        Destroys the session and its PTY process.
+      responses:
+        "204":
+          description: Session destroyed.
+        "404":
+          description: Session not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  # --- Server Management ---
+
+  /server/persist:
+    post:
+      operationId: serverPersist
+      summary: Switch server to persistent mode
+      tags: [server]
+      description: >
+        Switches the server from ephemeral mode (shuts down when last session
+        exits) to persistent mode (stays alive indefinitely). This is a one-way
+        operation.
+      responses:
+        "200":
+          description: Server switched to persistent mode.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServerPersistResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
 components:
   securitySchemes:
     bearerAuth:
@@ -852,11 +1018,83 @@ components:
       properties:
         mode: { $ref: "#/components/schemas/InputMode" }
 
+    # --- Sessions ---
+
+    SessionInfo:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+
+    CreateSessionRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Session name (auto-generated if omitted).
+        command:
+          type: string
+          description: Command to run (defaults to user's shell).
+        rows:
+          type: integer
+          minimum: 1
+          default: 24
+          description: Terminal rows.
+        cols:
+          type: integer
+          minimum: 1
+          default: 80
+          description: Terminal columns.
+        cwd:
+          type: string
+          description: Working directory for the session.
+        env:
+          type: object
+          additionalProperties: { type: string }
+          description: Additional environment variables.
+
+    RenameSessionRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          description: New session name.
+
+    # --- Server Management ---
+
+    ServerPersistResponse:
+      type: object
+      required: [persistent]
+      properties:
+        persistent: { type: boolean }
+
+    SetServerModeParams:
+      type: object
+      required: [persistent]
+      properties:
+        persistent:
+          type: boolean
+          description: >
+            true for persistent mode (server stays alive when all sessions
+            exit), false for ephemeral mode (server shuts down when last
+            session exits).
+
+    SetServerModeResult:
+      type: object
+      required: [persistent]
+      properties:
+        persistent: { type: boolean }
+
     # --- WebSocket Messages ---
 
     WsRequest:
       description: >
         Client-to-server request over /ws/json. All messages use this envelope.
+        On the server-level WebSocket, per-session methods require a "session"
+        field to identify the target session. Server-level methods
+        (list_sessions, create_session, kill_session, set_server_mode) do not
+        require it.
       type: object
       required: [method]
       properties:
@@ -871,6 +1109,11 @@ components:
         params:
           type: object
           description: Method-specific parameters.
+        session:
+          type: string
+          description: >
+            Target session name. Required for per-session methods on the
+            server-level WebSocket. Ignored on per-session WebSocket endpoints.
 
     WsResponse:
       description: >
@@ -1098,6 +1341,7 @@ components:
                 - not_found
                 - overlay_not_found
                 - panel_not_found
+                - session_not_found
                 - invalid_request
                 - invalid_overlay
                 - invalid_input_mode
@@ -1107,5 +1351,7 @@ components:
                 - parser_unavailable
                 - input_send_failed
                 - quiesce_timeout
+                - session_create_failed
+                - session_name_conflict
                 - internal_error
             message: { type: string }

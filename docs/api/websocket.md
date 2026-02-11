@@ -665,6 +665,136 @@ These are broadcast from the input event system.
 
 Sent when the input mode changes between `passthrough` and `capture`.
 
+---
+
+## Server-Level WebSocket
+
+In server mode, the top-level `/ws/json` endpoint (not nested under
+`/sessions/:name`) provides a multiplexed WebSocket that can interact with
+any session and receive session lifecycle events.
+
+### Session Field
+
+Per-session methods require a `session` field in the request to identify the
+target session:
+
+```json
+{"id": 1, "method": "get_screen", "session": "dev", "params": {"format": "styled"}}
+```
+
+Server-level methods do not require the `session` field.
+
+### Server-Level Methods
+
+#### `list_sessions`
+
+List all active sessions.
+
+```json
+{"id": 1, "method": "list_sessions"}
+```
+
+**Result:**
+
+```json
+{"id": 1, "method": "list_sessions", "result": [{"name": "dev"}, {"name": "build"}]}
+```
+
+#### `create_session`
+
+Create a new session.
+
+**Params:**
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | no | Session name (auto-generated if omitted) |
+| `command` | string | no | Command to run (defaults to user's shell) |
+| `rows` | integer | no | Terminal rows (default: 24) |
+| `cols` | integer | no | Terminal columns (default: 80) |
+
+```json
+{"id": 2, "method": "create_session", "params": {"name": "dev", "command": "bash"}}
+```
+
+**Result:**
+
+```json
+{"id": 2, "method": "create_session", "result": {"name": "dev"}}
+```
+
+#### `kill_session`
+
+Destroy a session.
+
+**Params:** `name` (string, required)
+
+```json
+{"id": 3, "method": "kill_session", "params": {"name": "dev"}}
+```
+
+**Result:** `{}`
+
+#### `set_server_mode`
+
+Set the server's persistence mode.
+
+**Params:**
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `persistent` | boolean | `true` for persistent, `false` for ephemeral |
+
+```json
+{"id": 4, "method": "set_server_mode", "params": {"persistent": true}}
+```
+
+**Result:**
+
+```json
+{"id": 4, "method": "set_server_mode", "result": {"persistent": true}}
+```
+
+### Session Lifecycle Events
+
+The server-level WebSocket automatically broadcasts session lifecycle events:
+
+**Session created:**
+
+```json
+{"event": "session_created", "params": {"name": "dev"}}
+```
+
+**Session exited** (PTY process terminated):
+
+```json
+{"event": "session_exited", "params": {"name": "dev"}}
+```
+
+**Session renamed:**
+
+```json
+{"event": "session_renamed", "params": {"old_name": "dev", "new_name": "prod"}}
+```
+
+**Session destroyed** (killed via API):
+
+```json
+{"event": "session_destroyed", "params": {"name": "dev"}}
+```
+
+### Per-Session Subscriptions
+
+On the server-level WebSocket, `subscribe` requires a `session` field to
+specify which session to subscribe to. You can subscribe to multiple sessions
+by sending multiple subscribe requests with different session names.
+
+```json
+{"id": 10, "method": "subscribe", "session": "dev", "params": {"events": ["lines", "cursor"]}}
+```
+
+---
+
 ## Graceful Shutdown
 
 When wsh shuts down, it sends a WebSocket close frame with code `1000`

@@ -31,6 +31,7 @@ change between versions.
 | `404` | `not_found` | Not found. | Generic resource not found |
 | `404` | `overlay_not_found` | No overlay exists with id '{id}'. | Overlay ID doesn't exist |
 | `404` | `panel_not_found` | No panel exists with id '{id}'. | Panel ID doesn't exist |
+| `404` | `session_not_found` | Session not found: {name}. | Session name doesn't exist |
 
 ### Validation Errors
 
@@ -42,6 +43,12 @@ change between versions.
 | `400` | `invalid_format` | Invalid format: {detail}. | Invalid format query parameter |
 | --- | `unknown_method` | Unknown method '{method}'. | WebSocket method name not recognized |
 
+### Conflict Errors
+
+| Status | Code | Message | When |
+|--------|------|---------|------|
+| `409` | `session_name_conflict` | Session name already exists: {name}. | Session name already in use |
+
 ### Server Errors
 
 | Status | Code | Message | When |
@@ -49,6 +56,7 @@ change between versions.
 | `503` | `channel_full` | Server is overloaded. Try again shortly. | Internal channel backpressure |
 | `503` | `parser_unavailable` | Terminal parser is unavailable. | Parser actor is down or unreachable |
 | `500` | `input_send_failed` | Failed to send input to terminal. | PTY input channel is broken |
+| `500` | `session_create_failed` | Failed to create session: {detail}. | PTY spawn or session creation error |
 | `500` | `internal_error` | Internal error: {detail}. | Unexpected server error |
 
 ## Handling Errors
