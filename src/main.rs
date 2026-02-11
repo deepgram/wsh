@@ -3,13 +3,13 @@
 //! A transparent PTY wrapper that exposes terminal I/O via HTTP/WebSocket API.
 //!
 //! Architecture:
+//! - Session::spawn() creates the PTY, broker, parser, and I/O tasks
 //! - stdin reader: Dedicated thread reading from stdin, sends to input channel
-//! - PTY writer: Dedicated thread receiving from input channel, writes to PTY
-//! - PTY reader: Dedicated thread reading from PTY, writes to stdout and broadcasts
+//! - stdout writer: Subscribes to the session output broker, writes to stdout
 //! - HTTP/WebSocket server: Async, receives input via API, sends to input channel
-//! - Child monitor: Watches for shell process exit
+//! - Child monitor: Watches for shell process exit (via Session::spawn)
 //!
-//! Shutdown: When the shell exits (detected via child monitor or PTY reader EOF),
+//! Shutdown: When the shell exits (detected via child_exit_rx or broker closing),
 //! we restore terminal state and call process::exit(). This is necessary because
 //! the stdin reader thread is blocked on read() and cannot be cancelled.
 
@@ -17,11 +17,9 @@ use bytes::Bytes;
 use clap::Parser as ClapParser;
 use std::io::{Read, Write};
 use std::net::SocketAddr;
-use std::sync::Arc;
 use thiserror::Error;
-use tokio::sync::mpsc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use wsh::{activity::ActivityTracker, api, broker, input::{self, InputBroadcaster, InputMode}, overlay::{self, OverlayStore}, panel::{self, PanelStore}, parser::Parser, pty::{self, SpawnCommand}, session::{Session, SessionRegistry}, shutdown::ShutdownCoordinator, terminal};
+use wsh::{api, input, overlay, panel, pty::SpawnCommand, session::{Session, SessionRegistry}, shutdown::ShutdownCoordinator, terminal};
 
 /// wsh - The Web Shell
 ///
@@ -54,7 +52,7 @@ struct Args {
 #[derive(Error, Debug)]
 pub enum WshError {
     #[error("pty error: {0}")]
-    Pty(#[from] pty::PtyError),
+    Pty(#[from] wsh::pty::PtyError),
 
     #[error("terminal error: {0}")]
     Terminal(#[from] terminal::TerminalError),
@@ -123,85 +121,46 @@ async fn main() -> Result<(), WshError> {
         },
     };
 
-    let mut pty = pty::Pty::spawn(rows, cols, spawn_cmd)?;
-    tracing::debug!("PTY spawned");
+    // Spawn the session: this creates the PTY, broker, parser, and I/O tasks
+    let (session, child_exit_rx) = Session::spawn("default".to_string(), spawn_cmd, rows, cols)?;
+    tracing::debug!("session spawned");
 
-    let pty_reader = pty.take_reader()?;
-    let pty_writer = pty.take_writer()?;
-    let mut pty_child = pty.take_child().expect("child process");
-
-    // Wrap PTY in Arc for shared resize access from API handlers
-    let pty = Arc::new(pty);
-
-    // Shared terminal size for layout computation
-    let terminal_size = terminal::TerminalSize::new(rows, cols);
-
-    // Channel to signal when child process exits
-    let (child_exit_tx, child_exit_rx) = tokio::sync::oneshot::channel::<()>();
-
-    // Child process monitor: detects when shell exits
-    tokio::task::spawn_blocking(move || {
-        match pty_child.wait() {
-            Ok(status) => tracing::debug!(?status, "shell exited"),
-            Err(e) => tracing::error!(?e, "error waiting for shell"),
+    // Subscribe to the session output for local terminal display (stdout passthrough)
+    let mut output_sub = session.output_rx.subscribe();
+    let overlays_for_display = session.overlays.clone();
+    tokio::spawn(async move {
+        let mut stdout = std::io::stdout();
+        while let Ok(data) = output_sub.recv().await {
+            // Render overlays around PTY data to prevent scrollback smearing
+            let overlay_list = overlays_for_display.list();
+            if !overlay_list.is_empty() {
+                let erase = overlay::erase_all_overlays(&overlay_list);
+                let render = overlay::render_all_overlays(&overlay_list);
+                // Use synchronized output so terminal applies atomically
+                let _ = stdout.write_all(overlay::begin_sync().as_bytes());
+                let _ = stdout.write_all(erase.as_bytes());
+                let _ = stdout.write_all(&data);
+                let _ = stdout.write_all(render.as_bytes());
+                let _ = stdout.write_all(overlay::end_sync().as_bytes());
+            } else {
+                let _ = stdout.write_all(&data);
+            }
+            let _ = stdout.flush();
         }
-        let _ = child_exit_tx.send(());
     });
 
-    let broker = broker::Broker::new();
-
-    // Create parser for terminal state tracking
-    let parser = Parser::spawn(&broker, cols as usize, rows as usize, 10_000);
-
-    // Channel for input from all sources (stdin, HTTP, WebSocket) -> PTY writer
-    let (input_tx, input_rx) = mpsc::channel::<Bytes>(64);
-
-    // Shutdown coordinator for graceful client disconnection
-    let shutdown = ShutdownCoordinator::new();
-
-    // Create overlay store before AppState so it can be shared with pty_reader
-    let overlays = OverlayStore::new();
-
-    // Create panel store
-    let panels = PanelStore::new();
-
-    // Create input_mode before AppState so it can be shared with stdin reader
-    let input_mode = InputMode::new();
-
-    // Create input_broadcaster before AppState so it can be shared with stdin reader
-    let input_broadcaster = InputBroadcaster::new();
-
-    // Create activity tracker for quiescence detection
-    let activity = ActivityTracker::new();
-
-    // Spawn I/O tasks
-    let pty_reader_handle = spawn_pty_reader(pty_reader, broker.clone(), overlays.clone(), activity.clone());
-    spawn_pty_writer(pty_writer, input_rx);
-    spawn_stdin_reader(input_tx.clone(), input_mode.clone(), input_broadcaster.clone(), activity.clone());
-
-    // Build the session and register it
-    let session = Session {
-        name: "default".to_string(),
-        input_tx,
-        output_rx: broker.sender(),
-        shutdown: shutdown.clone(),
-        parser: parser.clone(),
-        overlays: overlays.clone(),
-        panels: panels.clone(),
-        pty: pty.clone(),
-        terminal_size: terminal_size.clone(),
-        input_mode: input_mode.clone(),
-        input_broadcaster: input_broadcaster.clone(),
-        activity: activity.clone(),
-    };
+    // Register the session in the registry
     let sessions = SessionRegistry::new();
-    sessions.insert(Some("default".into()), session).unwrap();
+    sessions.insert(Some("default".into()), session.clone()).unwrap();
 
-    // Start API server with graceful shutdown support
+    // Build the global shutdown coordinator and app state
+    let shutdown = ShutdownCoordinator::new();
     let state = api::AppState {
         sessions,
         shutdown: shutdown.clone(),
     };
+
+    // Start API server with graceful shutdown support
     let app = api::router(state, token);
     tracing::info!(addr = %args.bind, "API server listening");
 
@@ -219,12 +178,20 @@ async fn main() -> Result<(), WshError> {
             .unwrap();
     });
 
+    // Spawn stdin reader (reads from process stdin, sends to session input)
+    spawn_stdin_reader(
+        session.input_tx.clone(),
+        session.input_mode.clone(),
+        session.input_broadcaster.clone(),
+        session.activity.clone(),
+    );
+
     // SIGWINCH handler: reconfigure layout when terminal is resized
     {
-        let panels = panels.clone();
-        let terminal_size = terminal_size.clone();
-        let pty = pty.clone();
-        let parser = parser.clone();
+        let panels = session.panels.clone();
+        let terminal_size = session.terminal_size.clone();
+        let pty = session.pty.clone();
+        let parser = session.parser.clone();
         tokio::spawn(async move {
             use tokio::signal::unix::{signal, SignalKind};
             let mut sigwinch =
@@ -252,7 +219,7 @@ async fn main() -> Result<(), WshError> {
     }
 
     // Wait for exit condition
-    wait_for_exit(child_exit_rx, pty_reader_handle).await;
+    wait_for_exit(child_exit_rx).await;
 
     // Gracefully shut down: signal WebSocket handlers to close, then wait for them
     let active = shutdown.active_count();
@@ -277,69 +244,6 @@ async fn main() -> Result<(), WshError> {
     std::process::exit(0)
 }
 
-/// Spawn the PTY reader task.
-/// Reads from PTY, writes to stdout, and broadcasts to subscribers.
-fn spawn_pty_reader(
-    mut reader: Box<dyn Read + Send>,
-    broker: broker::Broker,
-    overlays: overlay::OverlayStore,
-    activity: ActivityTracker,
-) -> tokio::task::JoinHandle<()> {
-    tokio::task::spawn_blocking(move || {
-        let mut stdout = std::io::stdout();
-        let mut buf = [0u8; 4096];
-
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) => {
-                    tracing::debug!("PTY reader: EOF");
-                    break;
-                }
-                Ok(n) => {
-                    let data = Bytes::copy_from_slice(&buf[..n]);
-
-                    // Render overlays around PTY data to prevent scrollback smearing
-                    let overlay_list = overlays.list();
-                    if !overlay_list.is_empty() {
-                        let erase = overlay::erase_all_overlays(&overlay_list);
-                        let render = overlay::render_all_overlays(&overlay_list);
-                        // Use synchronized output so terminal applies atomically
-                        let _ = stdout.write_all(overlay::begin_sync().as_bytes());
-                        let _ = stdout.write_all(erase.as_bytes());
-                        let _ = stdout.write_all(&data);
-                        let _ = stdout.write_all(render.as_bytes());
-                        let _ = stdout.write_all(overlay::end_sync().as_bytes());
-                    } else {
-                        let _ = stdout.write_all(&data);
-                    }
-
-                    let _ = stdout.flush();
-                    broker.publish(data);
-                    activity.touch();
-                }
-                Err(e) => {
-                    tracing::debug!(?e, "PTY reader: error");
-                    break;
-                }
-            }
-        }
-    })
-}
-
-/// Spawn the PTY writer task.
-/// Receives input from channel and writes to PTY.
-fn spawn_pty_writer(mut writer: Box<dyn Write + Send>, mut input_rx: mpsc::Receiver<Bytes>) {
-    tokio::task::spawn_blocking(move || {
-        while let Some(data) = input_rx.blocking_recv() {
-            if let Err(e) = writer.write_all(&data) {
-                tracing::debug!(?e, "PTY writer: error");
-                break;
-            }
-            let _ = writer.flush();
-        }
-    });
-}
-
 /// Spawn the stdin reader task.
 /// Reads from stdin and sends to the input channel.
 ///
@@ -347,10 +251,10 @@ fn spawn_pty_writer(mut writer: Box<dyn Write + Send>, mut input_rx: mpsc::Recei
 /// In capture mode, stdin is not forwarded to the PTY.
 /// Ctrl+\ in capture mode switches back to passthrough mode.
 fn spawn_stdin_reader(
-    input_tx: mpsc::Sender<Bytes>,
+    input_tx: tokio::sync::mpsc::Sender<Bytes>,
     input_mode: input::InputMode,
     input_broadcaster: input::InputBroadcaster,
-    activity: ActivityTracker,
+    activity: wsh::activity::ActivityTracker,
 ) {
     tokio::task::spawn_blocking(move || {
         let mut stdin = std::io::stdin();
@@ -395,10 +299,9 @@ fn spawn_stdin_reader(
     });
 }
 
-/// Wait for an exit condition: child exit, PTY reader EOF, or Ctrl+C.
+/// Wait for an exit condition: child exit or Ctrl+C.
 async fn wait_for_exit(
-    mut child_exit_rx: tokio::sync::oneshot::Receiver<()>,
-    mut pty_reader_handle: tokio::task::JoinHandle<()>,
+    child_exit_rx: tokio::sync::oneshot::Receiver<()>,
 ) {
     let shutdown = async {
         tokio::signal::ctrl_c()
@@ -408,11 +311,8 @@ async fn wait_for_exit(
     };
 
     tokio::select! {
-        _ = &mut child_exit_rx => {
+        _ = child_exit_rx => {
             tracing::debug!("child process exited");
-        }
-        _ = &mut pty_reader_handle => {
-            tracing::debug!("PTY reader finished");
         }
         _ = shutdown => {
             tracing::debug!("shutdown signal");
