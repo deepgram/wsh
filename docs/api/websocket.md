@@ -301,6 +301,65 @@ Delete all overlays.
 
 **Result:** `{}`
 
+### `create_panel`
+
+Create a panel (agent-owned screen region that shrinks the PTY).
+
+**Params:**
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `position` | `"top"` \| `"bottom"` | yes | Edge of the terminal |
+| `height` | integer | yes | Number of rows |
+| `z` | integer | no | Z-order (auto-assigned if omitted) |
+| `spans` | array | no | Array of span objects (default: empty) |
+
+**Result:** `{"id": "panel-uuid"}`
+
+### `list_panels`
+
+List all active panels.
+
+**Result:** Array of panel objects.
+
+### `get_panel`
+
+Get a single panel by id.
+
+**Params:** `id` (string, required)
+
+**Result:** Panel object.
+
+### `update_panel`
+
+Fully replace a panel's properties.
+
+**Params:** `id` (string, required), `position` (string, required), `height` (integer, required), `z` (integer, required), `spans` (array, required)
+
+**Result:** `{}`
+
+### `patch_panel`
+
+Partially update a panel. Only provided fields are changed.
+
+**Params:** `id` (string, required), `position` (string, optional), `height` (integer, optional), `z` (integer, optional), `spans` (array, optional)
+
+**Result:** `{}`
+
+### `delete_panel`
+
+Delete a panel.
+
+**Params:** `id` (string, required)
+
+**Result:** `{}`
+
+### `clear_panels`
+
+Delete all panels.
+
+**Result:** `{}`
+
 ---
 
 ## Error Responses

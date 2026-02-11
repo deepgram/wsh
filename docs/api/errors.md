@@ -30,6 +30,7 @@ change between versions.
 |--------|------|---------|------|
 | `404` | `not_found` | Not found. | Generic resource not found |
 | `404` | `overlay_not_found` | No overlay exists with id '{id}'. | Overlay ID doesn't exist |
+| `404` | `panel_not_found` | No panel exists with id '{id}'. | Panel ID doesn't exist |
 
 ### Validation Errors
 

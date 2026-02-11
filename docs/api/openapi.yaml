@@ -27,6 +27,8 @@ tags:
     description: Real-time WebSocket streams
   - name: overlay
     description: Overlay management
+  - name: panel
+    description: Panel management (agent-owned screen regions)
   - name: meta
     description: Documentation and spec endpoints
 
@@ -328,6 +330,150 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
 
+  /panel:
+    post:
+      operationId: createPanel
+      summary: Create a panel
+      tags: [panel]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePanelRequest"
+      responses:
+        "201":
+          description: Panel created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreatePanelResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    get:
+      operationId: listPanels
+      summary: List all panels
+      tags: [panel]
+      responses:
+        "200":
+          description: Array of all panels sorted by position then z-order descending.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Panel"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    delete:
+      operationId: clearPanels
+      summary: Clear all panels
+      tags: [panel]
+      responses:
+        "204":
+          description: All panels removed.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /panel/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Panel ID
+    get:
+      operationId: getPanel
+      summary: Get a single panel
+      tags: [panel]
+      responses:
+        "200":
+          description: The panel.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Panel"
+        "404":
+          description: Panel not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    put:
+      operationId: updatePanel
+      summary: Replace a panel
+      tags: [panel]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdatePanelRequest"
+      responses:
+        "204":
+          description: Panel replaced.
+        "404":
+          description: Panel not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    patch:
+      operationId: patchPanel
+      summary: Partially update a panel
+      tags: [panel]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PatchPanelRequest"
+      responses:
+        "204":
+          description: Panel patched.
+        "404":
+          description: Panel not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    delete:
+      operationId: deletePanel
+      summary: Delete a panel
+      tags: [panel]
+      responses:
+        "204":
+          description: Panel deleted.
+        "404":
+          description: Panel not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
   /input/mode:
     get:
       operationId: getInputMode
@@ -601,6 +747,55 @@ components:
         y: { type: integer, minimum: 0 }
         z: { type: integer }
 
+    # --- Panels ---
+
+    PanelPosition:
+      type: string
+      enum: [top, bottom]
+
+    Panel:
+      type: object
+      required: [id, position, height, z, spans, visible]
+      properties:
+        id: { type: string }
+        position: { $ref: "#/components/schemas/PanelPosition" }
+        height: { type: integer, minimum: 1 }
+        z: { type: integer }
+        spans: { type: array, items: { $ref: "#/components/schemas/OverlaySpan" } }
+        visible: { type: boolean }
+
+    CreatePanelRequest:
+      type: object
+      required: [position, height]
+      properties:
+        position: { $ref: "#/components/schemas/PanelPosition" }
+        height: { type: integer, minimum: 1 }
+        z: { type: integer }
+        spans: { type: array, items: { $ref: "#/components/schemas/OverlaySpan" } }
+
+    CreatePanelResponse:
+      type: object
+      required: [id]
+      properties:
+        id: { type: string }
+
+    UpdatePanelRequest:
+      type: object
+      required: [position, height, z, spans]
+      properties:
+        position: { $ref: "#/components/schemas/PanelPosition" }
+        height: { type: integer, minimum: 1 }
+        z: { type: integer }
+        spans: { type: array, items: { $ref: "#/components/schemas/OverlaySpan" } }
+
+    PatchPanelRequest:
+      type: object
+      properties:
+        position: { $ref: "#/components/schemas/PanelPosition" }
+        height: { type: integer, minimum: 1 }
+        z: { type: integer }
+        spans: { type: array, items: { $ref: "#/components/schemas/OverlaySpan" } }
+
     # --- Input ---
 
     InputModeResponse:
@@ -826,6 +1021,7 @@ components:
                 - auth_invalid
                 - not_found
                 - overlay_not_found
+                - panel_not_found
                 - invalid_request
                 - invalid_overlay
                 - invalid_input_mode

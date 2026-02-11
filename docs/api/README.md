@@ -22,6 +22,13 @@ endpoint, request format, and response shape you need to build against the API.
 | `PUT` | `/overlay/:id` | Replace overlay spans |
 | `PATCH` | `/overlay/:id` | Move/reorder an overlay |
 | `DELETE` | `/overlay/:id` | Delete an overlay |
+| `POST` | `/panel` | Create a panel |
+| `GET` | `/panel` | List all panels |
+| `DELETE` | `/panel` | Clear all panels |
+| `GET` | `/panel/:id` | Get a single panel |
+| `PUT` | `/panel/:id` | Replace a panel |
+| `PATCH` | `/panel/:id` | Partially update a panel |
+| `DELETE` | `/panel/:id` | Delete a panel |
 | `GET` | `/input/mode` | Get current input mode |
 | `POST` | `/input/capture` | Switch to capture mode |
 | `POST` | `/input/release` | Switch to passthrough mode |
@@ -224,7 +231,16 @@ connecting, you receive `{"connected": true}` and can send any method call:
 See [overlays.md](overlays.md) for the full overlay system documentation.
 
 Overlays are positioned text elements rendered on top of terminal content.
-Useful for status bars, notifications, and agent-driven UI elements.
+Useful for floating notifications, tooltips, and agent-driven UI elements.
+
+## Panels
+
+See [panels.md](panels.md) for the full panel system documentation.
+
+Panels are agent-owned screen regions anchored to the top or bottom of the
+terminal. Unlike overlays, panels cause the PTY to shrink, creating dedicated
+space that terminal output can never write to. Useful for persistent status
+bars, toolbars, and progress indicators.
 
 ## Input Capture
 
@@ -261,5 +277,6 @@ All errors return JSON with a consistent structure:
 - [websocket.md](websocket.md) -- WebSocket protocol and event types
 - [errors.md](errors.md) -- Error code reference
 - [overlays.md](overlays.md) -- Overlay system
+- [panels.md](panels.md) -- Panel system
 - [input-capture.md](input-capture.md) -- Input capture mode
 - [openapi.yaml](openapi.yaml) -- Machine-readable OpenAPI 3.1 spec
