@@ -415,3 +415,265 @@ async fn test_ws_quiesce_ms_emits_sync_after_quiet() {
 
     assert!(got_quiesce_sync, "Expected a quiescence sync event");
 }
+
+// ---------------------------------------------------------------------------
+// HTTP /quiesce generation counter tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_http_quiesce_returns_generation() {
+    let (state, _rx, activity) = create_test_state();
+    let app = api::router(state, None);
+    let addr = start_server(app).await;
+
+    activity.touch();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let (status, json) = http_get(addr, "/sessions/test/quiesce?timeout_ms=100&format=plain").await;
+
+    assert_eq!(status, 200);
+    assert!(
+        json.get("generation").is_some(),
+        "response should have generation field, got: {:?}",
+        json
+    );
+    assert_eq!(json["generation"], 1);
+}
+
+#[tokio::test]
+async fn test_http_quiesce_last_generation_prevents_storm() {
+    let (state, _rx, activity) = create_test_state();
+    let app = api::router(state, None);
+    let addr = start_server(app).await;
+
+    // Touch once, let it settle
+    activity.touch();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // First call: should return immediately with generation=1
+    let start = std::time::Instant::now();
+    let (status, json) = http_get(addr, "/sessions/test/quiesce?timeout_ms=100&format=plain").await;
+    assert_eq!(status, 200);
+    assert_eq!(json["generation"], 1);
+    assert!(start.elapsed() < Duration::from_millis(500));
+
+    // Second call with last_generation=1: should block until new activity
+    let a = activity.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        a.touch(); // generation becomes 2
+    });
+
+    let start = std::time::Instant::now();
+    let (status, json) = http_get(
+        addr,
+        "/sessions/test/quiesce?timeout_ms=100&last_generation=1&format=plain",
+    )
+    .await;
+    let elapsed = start.elapsed();
+
+    assert_eq!(status, 200);
+    assert_eq!(json["generation"], 2);
+    // Should have waited ~200ms for new activity + ~100ms for quiescence
+    assert!(
+        elapsed >= Duration::from_millis(250),
+        "Expected >= 250ms, got {:?}",
+        elapsed
+    );
+}
+
+#[tokio::test]
+async fn test_http_quiesce_last_generation_stale_returns_normally() {
+    let (state, _rx, activity) = create_test_state();
+    let app = api::router(state, None);
+    let addr = start_server(app).await;
+
+    // Touch twice, let it settle
+    activity.touch(); // gen 1
+    activity.touch(); // gen 2
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // last_generation=1 but current is 2: should NOT block on new activity
+    let start = std::time::Instant::now();
+    let (status, json) = http_get(
+        addr,
+        "/sessions/test/quiesce?timeout_ms=100&last_generation=1&format=plain",
+    )
+    .await;
+
+    assert_eq!(status, 200);
+    assert_eq!(json["generation"], 2);
+    assert!(
+        start.elapsed() < Duration::from_millis(500),
+        "Expected fast return for stale generation"
+    );
+}
+
+#[tokio::test]
+async fn test_http_quiesce_last_generation_timeout() {
+    let (state, _rx, _activity) = create_test_state();
+    let app = api::router(state, None);
+    let addr = start_server(app).await;
+
+    // Terminal is idle at generation=0, no new activity will come
+    let (status, json) = http_get(
+        addr,
+        "/sessions/test/quiesce?timeout_ms=100&last_generation=0&max_wait_ms=300&format=plain",
+    )
+    .await;
+
+    // Should timeout because no new activity arrives
+    assert_eq!(status, 408);
+    assert_eq!(json["error"]["code"], "quiesce_timeout");
+}
+
+// ---------------------------------------------------------------------------
+// HTTP /quiesce fresh mode tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_http_quiesce_fresh_always_waits() {
+    let (state, _rx, _activity) = create_test_state();
+    let app = api::router(state, None);
+    let addr = start_server(app).await;
+
+    // Wait for terminal to be idle well past the timeout
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let start = std::time::Instant::now();
+    let (status, json) = http_get(
+        addr,
+        "/sessions/test/quiesce?timeout_ms=200&fresh=true&format=plain",
+    )
+    .await;
+    let elapsed = start.elapsed();
+
+    assert_eq!(status, 200);
+    assert!(json.get("generation").is_some());
+    // Should have waited at least 200ms even though already quiescent
+    assert!(
+        elapsed >= Duration::from_millis(150),
+        "Expected >= 150ms for fresh mode, got {:?}",
+        elapsed
+    );
+}
+
+#[tokio::test]
+async fn test_http_quiesce_fresh_resets_on_activity() {
+    let (state, _rx, activity) = create_test_state();
+    let app = api::router(state, None);
+    let addr = start_server(app).await;
+
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // Touch during the fresh wait to reset the timer
+    let a = activity.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        a.touch();
+    });
+
+    let start = std::time::Instant::now();
+    let (status, _json) = http_get(
+        addr,
+        "/sessions/test/quiesce?timeout_ms=200&fresh=true&format=plain",
+    )
+    .await;
+    let elapsed = start.elapsed();
+
+    assert_eq!(status, 200);
+    // Should wait ~100ms (activity) + ~200ms (fresh timeout after activity)
+    assert!(
+        elapsed >= Duration::from_millis(250),
+        "Expected >= 250ms for fresh mode with activity, got {:?}",
+        elapsed
+    );
+}
+
+// ---------------------------------------------------------------------------
+// WebSocket await_quiesce generation counter tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_ws_await_quiesce_returns_generation() {
+    let (state, _rx, activity) = create_test_state();
+    let app = api::router(state, None);
+    let addr = start_server(app).await;
+
+    activity.touch();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let (mut ws, _resp) =
+        tokio_tungstenite::connect_async(format!("ws://{}/sessions/test/ws/json", addr))
+            .await
+            .expect("WS connect");
+
+    use futures::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    // Read connected message
+    let _ = ws.next().await.unwrap().unwrap();
+
+    let req = serde_json::json!({
+        "id": 1,
+        "method": "await_quiesce",
+        "params": {"timeout_ms": 100, "format": "plain"}
+    });
+    ws.send(Message::Text(req.to_string())).await.unwrap();
+
+    let msg = ws.next().await.unwrap().unwrap();
+    let resp: serde_json::Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
+
+    assert_eq!(resp["id"], 1);
+    assert!(resp["result"].get("generation").is_some(), "expected generation in result: {:?}", resp);
+    assert_eq!(resp["result"]["generation"], 1);
+}
+
+#[tokio::test]
+async fn test_ws_await_quiesce_last_generation_blocks() {
+    let (state, _rx, activity) = create_test_state();
+    let app = api::router(state, None);
+    let addr = start_server(app).await;
+
+    activity.touch(); // generation = 1
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let (mut ws, _resp) =
+        tokio_tungstenite::connect_async(format!("ws://{}/sessions/test/ws/json", addr))
+            .await
+            .expect("WS connect");
+
+    use futures::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    // Read connected message
+    let _ = ws.next().await.unwrap().unwrap();
+
+    // Trigger new activity after 200ms
+    let a = activity.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        a.touch(); // generation = 2
+    });
+
+    // Send await_quiesce with last_generation=1 — should block until generation changes
+    let req = serde_json::json!({
+        "id": 2,
+        "method": "await_quiesce",
+        "params": {"timeout_ms": 100, "last_generation": 1, "format": "plain"}
+    });
+    let start = std::time::Instant::now();
+    ws.send(Message::Text(req.to_string())).await.unwrap();
+
+    let msg = ws.next().await.unwrap().unwrap();
+    let resp: serde_json::Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
+    let elapsed = start.elapsed();
+
+    assert_eq!(resp["id"], 2);
+    assert_eq!(resp["result"]["generation"], 2);
+    assert!(
+        elapsed >= Duration::from_millis(250),
+        "Expected >= 250ms (wait for activity + quiescence), got {:?}",
+        elapsed
+    );
+}

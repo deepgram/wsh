@@ -286,6 +286,8 @@ responsive while waiting — other events and method calls continue normally.
 | `timeout_ms` | integer | (required) | Quiescence threshold in milliseconds |
 | `format` | `"plain"` \| `"styled"` | `"styled"` | Line format for screen snapshot |
 | `max_wait_ms` | integer | (none) | Overall deadline; omit for no deadline |
+| `last_generation` | integer | (none) | Generation from a previous response; if it matches current state, waits for new activity first |
+| `fresh` | boolean | `false` | Always observe real silence for `timeout_ms` before responding |
 
 ```json
 {"id": 8, "method": "await_quiesce", "params": {"timeout_ms": 2000, "format": "plain"}}
@@ -294,7 +296,22 @@ responsive while waiting — other events and method calls continue normally.
 **Result:**
 
 ```json
-{"screen": { ... }, "scrollback_lines": 150}
+{"screen": { ... }, "scrollback_lines": 150, "generation": 42}
+```
+
+The `generation` field is a monotonic counter that increments on each activity
+event. Pass it back as `last_generation` on subsequent requests to prevent
+busy-loop storms when the terminal is already idle:
+
+```json
+{"id": 9, "method": "await_quiesce", "params": {"timeout_ms": 2000, "last_generation": 42}}
+```
+
+Alternatively, set `fresh: true` to always observe real silence without tracking
+generation state — at the cost of always waiting at least `timeout_ms`:
+
+```json
+{"id": 10, "method": "await_quiesce", "params": {"timeout_ms": 2000, "fresh": true}}
 ```
 
 **Error (on timeout):**

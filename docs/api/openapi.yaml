@@ -514,6 +514,26 @@ paths:
             minimum: 1
             default: 30000
           description: Overall deadline in milliseconds
+        - name: last_generation
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+          description: >
+            Generation from a previous quiescence response. If provided and
+            matches the current generation, the server waits for new activity
+            before checking quiescence — preventing busy-loop storms.
+        - name: fresh
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: >
+            When true, always observe at least timeout_ms of real silence
+            before responding, even if the terminal is already idle. Trades
+            latency for API simplicity (no generation tracking required).
       responses:
         "200":
           description: Terminal is quiescent. Returns screen state snapshot.
@@ -1345,13 +1365,33 @@ components:
           type: integer
           minimum: 1
           description: Overall deadline in milliseconds (omit for no deadline)
+        last_generation:
+          type: integer
+          minimum: 0
+          description: >
+            Generation from a previous quiescence response. If provided and
+            matches the current generation, the server waits for new activity
+            before checking quiescence.
+        fresh:
+          type: boolean
+          default: false
+          description: >
+            When true, always observe real silence for timeout_ms before
+            responding, even if the terminal is already idle.
 
     QuiesceResponse:
       type: object
-      required: [screen, scrollback_lines]
+      required: [screen, scrollback_lines, generation]
       properties:
         screen: { $ref: "#/components/schemas/ScreenResponse" }
         scrollback_lines: { type: integer, minimum: 0 }
+        generation:
+          type: integer
+          minimum: 0
+          description: >
+            Monotonic activity generation counter. Pass back as
+            last_generation on subsequent requests to avoid busy-loop
+            storms when the terminal is idle.
 
     EventType:
       type: string

@@ -127,6 +127,13 @@ pub struct AwaitQuiesceParams {
     #[serde(default)]
     pub format: Format,
     pub max_wait_ms: Option<u64>,
+    /// Generation from a previous quiescence response. If provided and matches
+    /// the current generation, the server waits for new activity before
+    /// checking quiescence.
+    pub last_generation: Option<u64>,
+    /// When true, always observe real silence for `timeout_ms` before responding.
+    #[serde(default)]
+    pub fresh: bool,
 }
 
 fn default_interval() -> u64 {

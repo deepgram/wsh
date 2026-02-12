@@ -126,10 +126,11 @@ This is the most common pattern. The key insight: you don't
 have to wait for one to finish before checking another.
 Poll them round-robin:
 
-    quiesce test-unit (short timeout, 1000ms)
-    quiesce test-e2e (short timeout, 1000ms)
-    quiesce lint (short timeout, 1000ms)
+    quiesce test-unit (short timeout, 1000ms, fresh=true)
+    quiesce test-e2e (short timeout, 1000ms, fresh=true)
+    quiesce lint (short timeout, 1000ms, fresh=true)
     # repeat until all show shell prompts
+    # fresh=true prevents busy-loop storms when a session is idle
 
 ### Watcher: Long-Running Process + Working Session
 

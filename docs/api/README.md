@@ -339,37 +339,53 @@ settled" after sending a command.
 | `timeout_ms` | integer | (required) | Quiescence threshold in milliseconds |
 | `format` | `plain` \| `styled` | `styled` | Line format for response |
 | `max_wait_ms` | integer | `30000` | Overall deadline before returning 408 |
+| `last_generation` | integer | (none) | Generation from a previous response; blocks until new activity if it matches |
+| `fresh` | boolean | `false` | Always observe real silence for `timeout_ms` before responding |
 
 If the terminal has already been quiet for `timeout_ms` when the request
-arrives, it responds immediately.
+arrives, it responds immediately (unless `last_generation` or `fresh` are used).
 
 **Response (200):**
 
 ```json
 {
   "screen": { ... },
-  "scrollback_lines": 150
+  "scrollback_lines": 150,
+  "generation": 42
 }
 ```
 
-The `screen` object has the same shape as `GET /screen`.
+The `screen` object has the same shape as `GET /screen`. The `generation` field
+is a monotonic counter that increments on each activity event.
+
+**Preventing busy-loop storms:**
+
+When polling quiescence repeatedly (e.g., waiting for a command that hasn't
+finished), pass back the `generation` from the previous response as
+`last_generation`. If no new activity has occurred, the server blocks until
+something happens — preventing rapid-fire immediate responses:
+
+```bash
+# First call: may return immediately if already idle
+curl 'http://localhost:8080/quiesce?timeout_ms=500&format=plain'
+# Response: {"screen": ..., "generation": 42}
+
+# Subsequent call: blocks until new activity, then waits for quiescence
+curl 'http://localhost:8080/quiesce?timeout_ms=500&last_generation=42&format=plain'
+```
+
+Alternatively, use `fresh=true` to always observe real silence without tracking
+generation state — at the cost of always waiting at least `timeout_ms`:
+
+```bash
+curl 'http://localhost:8080/quiesce?timeout_ms=500&fresh=true&format=plain'
+```
 
 **Errors:**
 
 | Status | Code | When |
 |--------|------|------|
 | 408 | `quiesce_timeout` | `max_wait_ms` exceeded without quiescence |
-
-**Example:**
-
-```bash
-# Send a command, then wait for it to finish
-curl -X POST http://localhost:8080/input -d $'ls\n'
-curl 'http://localhost:8080/quiesce?timeout_ms=2000&format=plain'
-
-# Immediate response when terminal is already idle
-curl 'http://localhost:8080/quiesce?timeout_ms=500&format=plain'
-```
 
 The WebSocket equivalent is the `await_quiesce` method — see
 [websocket.md](websocket.md). Subscriptions can also include automatic

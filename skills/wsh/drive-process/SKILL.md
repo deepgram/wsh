@@ -29,6 +29,10 @@ Every interaction follows the same shape:
 4. **Decide** — did the command succeed? Is there a prompt waiting
    for input? Did something go wrong? Act accordingly.
 
+When re-polling quiescence (e.g., the command isn't done yet), pass
+back the `generation` from the previous response as `last_generation`
+to avoid busy-loop storms. Or use `fresh=true` for simplicity.
+
 ## Sending a Command
 
 Always include a newline to "press Enter":
