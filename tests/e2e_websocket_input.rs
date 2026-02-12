@@ -13,7 +13,7 @@ use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
-use wsh::{api, broker::Broker, input::{InputBroadcaster, InputMode}, overlay::OverlayStore, parser::Parser, pty::{Pty, SpawnCommand}, session::{Session, SessionRegistry}, shutdown::ShutdownCoordinator};
+use wsh::{api, broker::Broker, input::{FocusTracker, InputBroadcaster, InputMode}, overlay::OverlayStore, parser::Parser, pty::{Pty, SpawnCommand}, session::{Session, SessionRegistry}, shutdown::ShutdownCoordinator};
 
 async fn start_server(app: axum::Router) -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -81,8 +81,10 @@ async fn test_websocket_input_reaches_pty_and_output_returns() {
         pty: pty.clone(),
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
+        focus: FocusTracker::new(),
         is_local: false,
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
+        screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
@@ -217,8 +219,10 @@ async fn test_websocket_text_input_reaches_pty() {
         pty: pty.clone(),
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
+        focus: FocusTracker::new(),
         is_local: false,
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
+        screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();

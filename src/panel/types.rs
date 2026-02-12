@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::overlay::{BackgroundStyle, OverlaySpan, RegionWrite};
+use crate::overlay::{BackgroundStyle, OverlaySpan, RegionWrite, ScreenMode, is_normal_mode};
 
 /// Unique identifier for a panel
 pub type PanelId = String;
@@ -29,6 +29,10 @@ pub struct Panel {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub region_writes: Vec<RegionWrite>,
     pub visible: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub focusable: bool,
+    #[serde(default, skip_serializing_if = "is_normal_mode")]
+    pub screen_mode: ScreenMode,
 }
 
 #[cfg(test)]
@@ -71,6 +75,8 @@ mod tests {
             }],
             region_writes: vec![],
             visible: true,
+            focusable: false,
+            screen_mode: ScreenMode::Normal,
         };
         let json = serde_json::to_string(&panel).unwrap();
         let deserialized: Panel = serde_json::from_str(&json).unwrap();
@@ -94,6 +100,8 @@ mod tests {
             spans: vec![],
             region_writes: vec![],
             visible: false,
+            focusable: false,
+            screen_mode: ScreenMode::Normal,
         };
         let json = serde_json::to_string(&panel).unwrap();
         assert!(json.contains("\"visible\":false"));

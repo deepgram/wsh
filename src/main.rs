@@ -435,6 +435,7 @@ async fn run_standalone(cli: Cli) -> Result<(), WshError> {
         session.input_mode.clone(),
         session.input_broadcaster.clone(),
         session.activity.clone(),
+        session.focus.clone(),
     );
 
     // SIGWINCH handler
@@ -689,6 +690,7 @@ fn spawn_stdin_reader(
     input_mode: input::InputMode,
     input_broadcaster: input::InputBroadcaster,
     activity: wsh::activity::ActivityTracker,
+    focus: input::FocusTracker,
 ) {
     tokio::task::spawn_blocking(move || {
         let mut stdin = std::io::stdin();
@@ -701,7 +703,8 @@ fn spawn_stdin_reader(
                     let data = &buf[..n];
                     let mode = input_mode.get();
 
-                    input_broadcaster.broadcast_input(data, mode);
+                    let target = focus.focused();
+                    input_broadcaster.broadcast_input(data, mode, target);
                     activity.touch();
 
                     if input::is_ctrl_backslash(data) && mode == input::Mode::Capture {

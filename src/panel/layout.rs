@@ -104,7 +104,7 @@ pub fn compute_layout(panels: &[Panel], terminal_rows: u16, terminal_cols: u16) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::overlay::OverlaySpan;
+    use crate::overlay::{OverlaySpan, ScreenMode};
 
     fn make_panel(id: &str, position: Position, height: u16, z: i32) -> Panel {
         Panel {
@@ -116,6 +116,8 @@ mod tests {
             spans: vec![],
             region_writes: vec![],
             visible: true,
+            focusable: false,
+            screen_mode: ScreenMode::Normal,
         }
     }
 
@@ -283,6 +285,8 @@ mod tests {
             spans: vec![span("hello")],
             region_writes: vec![],
             visible: true,
+            focusable: false,
+            screen_mode: ScreenMode::Normal,
         }];
         let layout = compute_layout(&panels, 24, 80);
         assert_eq!(layout.bottom_panels[0].spans[0].text, "hello");

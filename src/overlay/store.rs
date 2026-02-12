@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
-use super::types::{BackgroundStyle, Overlay, OverlayId, OverlaySpan, RegionWrite};
+use super::types::{BackgroundStyle, Overlay, OverlayId, OverlaySpan, RegionWrite, ScreenMode};
 
 /// Thread-safe store for overlays
 #[derive(Clone)]
@@ -35,6 +35,8 @@ impl OverlayStore {
         height: u16,
         background: Option<BackgroundStyle>,
         spans: Vec<OverlaySpan>,
+        focusable: bool,
+        screen_mode: ScreenMode,
     ) -> OverlayId {
         let mut inner = self.inner.write().unwrap();
         let id = Uuid::new_v4().to_string();
@@ -57,6 +59,8 @@ impl OverlayStore {
             background,
             spans,
             region_writes: vec![],
+            focusable,
+            screen_mode,
         };
         inner.overlays.insert(id.clone(), overlay);
         id
@@ -173,6 +177,25 @@ impl OverlayStore {
         inner.overlays.remove(id).is_some()
     }
 
+    /// List overlays for a specific screen mode, sorted by z-index (ascending)
+    pub fn list_by_mode(&self, mode: ScreenMode) -> Vec<Overlay> {
+        let inner = self.inner.read().unwrap();
+        let mut overlays: Vec<_> = inner
+            .overlays
+            .values()
+            .filter(|o| o.screen_mode == mode)
+            .cloned()
+            .collect();
+        overlays.sort_by_key(|o| o.z);
+        overlays
+    }
+
+    /// Delete all overlays for a specific screen mode
+    pub fn delete_by_mode(&self, mode: ScreenMode) {
+        let mut inner = self.inner.write().unwrap();
+        inner.overlays.retain(|_, o| o.screen_mode != mode);
+    }
+
     /// Clear all overlays
     pub fn clear(&self) {
         let mut inner = self.inner.write().unwrap();
@@ -194,14 +217,14 @@ mod tests {
     #[test]
     fn test_create_overlay() {
         let store = OverlayStore::new();
-        let id = store.create(0, 0, None, 80, 1, None, vec![]);
+        let id = store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Normal);
         assert!(!id.is_empty());
     }
 
     #[test]
     fn test_get_overlay() {
         let store = OverlayStore::new();
-        let id = store.create(5, 10, Some(50), 80, 1, None, vec![]);
+        let id = store.create(5, 10, Some(50), 80, 1, None, vec![], false, ScreenMode::Normal);
         let overlay = store.get(&id).unwrap();
         assert_eq!(overlay.x, 5);
         assert_eq!(overlay.y, 10);
@@ -211,9 +234,9 @@ mod tests {
     #[test]
     fn test_list_overlays_sorted_by_z() {
         let store = OverlayStore::new();
-        store.create(0, 0, Some(100), 80, 1, None, vec![]);
-        store.create(0, 0, Some(50), 80, 1, None, vec![]);
-        store.create(0, 0, Some(75), 80, 1, None, vec![]);
+        store.create(0, 0, Some(100), 80, 1, None, vec![], false, ScreenMode::Normal);
+        store.create(0, 0, Some(50), 80, 1, None, vec![], false, ScreenMode::Normal);
+        store.create(0, 0, Some(75), 80, 1, None, vec![], false, ScreenMode::Normal);
 
         let list = store.list();
         assert_eq!(list.len(), 3);
@@ -225,7 +248,7 @@ mod tests {
     #[test]
     fn test_delete_overlay() {
         let store = OverlayStore::new();
-        let id = store.create(0, 0, None, 80, 1, None, vec![]);
+        let id = store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Normal);
         assert!(store.delete(&id));
         assert!(store.get(&id).is_none());
     }
@@ -233,8 +256,8 @@ mod tests {
     #[test]
     fn test_clear_overlays() {
         let store = OverlayStore::new();
-        store.create(0, 0, None, 80, 1, None, vec![]);
-        store.create(0, 0, None, 80, 1, None, vec![]);
+        store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Normal);
+        store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Normal);
         store.clear();
         assert!(store.list().is_empty());
     }
@@ -242,8 +265,8 @@ mod tests {
     #[test]
     fn test_auto_increment_z() {
         let store = OverlayStore::new();
-        let id1 = store.create(0, 0, None, 80, 1, None, vec![]);
-        let id2 = store.create(0, 0, None, 80, 1, None, vec![]);
+        let id1 = store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Normal);
+        let id2 = store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Normal);
         let o1 = store.get(&id1).unwrap();
         let o2 = store.get(&id2).unwrap();
         assert!(o2.z > o1.z);
@@ -272,7 +295,7 @@ mod tests {
                 underline: false,
             },
         ];
-        let oid = store.create(0, 0, None, 80, 1, None, spans);
+        let oid = store.create(0, 0, None, 80, 1, None, spans, false, ScreenMode::Normal);
 
         // Update only the "value" span
         let updates = vec![OverlaySpan {
@@ -324,7 +347,7 @@ mod tests {
             italic: false,
             underline: false,
         }];
-        let oid = store.create(0, 0, None, 80, 1, None, spans);
+        let oid = store.create(0, 0, None, 80, 1, None, spans, false, ScreenMode::Normal);
 
         // Update with a span ID that doesn't match anything
         let updates = vec![OverlaySpan {
@@ -346,7 +369,7 @@ mod tests {
     #[test]
     fn test_region_write_stores_writes() {
         let store = OverlayStore::new();
-        let oid = store.create(0, 0, None, 80, 10, None, vec![]);
+        let oid = store.create(0, 0, None, 80, 10, None, vec![], false, ScreenMode::Normal);
 
         let writes = vec![
             RegionWrite {
@@ -385,7 +408,7 @@ mod tests {
     #[test]
     fn test_region_write_replaces_previous() {
         let store = OverlayStore::new();
-        let oid = store.create(0, 0, None, 80, 10, None, vec![]);
+        let oid = store.create(0, 0, None, 80, 10, None, vec![], false, ScreenMode::Normal);
 
         let writes1 = vec![RegionWrite {
             row: 0,

@@ -16,7 +16,7 @@ use wsh::{
     activity::ActivityTracker,
     api,
     broker::Broker,
-    input::{InputBroadcaster, InputMode},
+    input::{FocusTracker, InputBroadcaster, InputMode},
     overlay::OverlayStore,
     parser::Parser,
     session::{Session, SessionRegistry},
@@ -44,8 +44,10 @@ fn create_test_state() -> (api::AppState, mpsc::Receiver<Bytes>, ActivityTracker
         input_mode: InputMode::new(),
         input_broadcaster: InputBroadcaster::new(),
         activity: activity.clone(),
+        focus: FocusTracker::new(),
         is_local: false,
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
+        screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
@@ -708,8 +710,10 @@ fn create_multi_session_state() -> (api::AppState, ActivityTracker, ActivityTrac
             input_mode: InputMode::new(),
             input_broadcaster: InputBroadcaster::new(),
             activity: activity.clone(),
+            focus: FocusTracker::new(),
             is_local: false,
             detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
+            screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
         };
         (session, activity)
     };

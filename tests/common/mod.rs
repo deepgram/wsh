@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
 use wsh::activity::ActivityTracker;
 use wsh::broker::Broker;
-use wsh::input::{InputBroadcaster, InputMode};
+use wsh::input::{FocusTracker, InputBroadcaster, InputMode};
 use wsh::overlay::OverlayStore;
 use wsh::panel::PanelStore;
 use wsh::parser::Parser;
@@ -46,8 +46,10 @@ pub fn create_test_session_with_size(name: &str, rows: u16, cols: u16) -> TestSe
         ),
         terminal_size: TerminalSize::new(rows, cols),
         activity: ActivityTracker::new(),
+        focus: FocusTracker::new(),
         is_local: false,
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
+        screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
     };
     TestSession {
         session,
