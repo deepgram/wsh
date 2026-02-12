@@ -21,6 +21,10 @@ pub enum FrameType {
     Detach = 0x05,
     Resize = 0x06,
     Error = 0x07,
+    ListSessions = 0x08,
+    ListSessionsResponse = 0x09,
+    KillSession = 0x0A,
+    KillSessionResponse = 0x0B,
 
     // Data frames (raw bytes payload)
     PtyOutput = 0x10,
@@ -37,6 +41,10 @@ impl FrameType {
             0x05 => Some(Self::Detach),
             0x06 => Some(Self::Resize),
             0x07 => Some(Self::Error),
+            0x08 => Some(Self::ListSessions),
+            0x09 => Some(Self::ListSessionsResponse),
+            0x0A => Some(Self::KillSession),
+            0x0B => Some(Self::KillSessionResponse),
             0x10 => Some(Self::PtyOutput),
             0x11 => Some(Self::StdinInput),
             _ => None,
@@ -231,6 +239,34 @@ pub struct ErrorMsg {
     pub message: String,
 }
 
+/// Client → Server: request to list all sessions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListSessionsMsg {}
+
+/// Server → Client: response with the list of sessions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListSessionsResponseMsg {
+    pub sessions: Vec<SessionInfoMsg>,
+}
+
+/// Info about a single session, used in list responses.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionInfoMsg {
+    pub name: String,
+}
+
+/// Client → Server: request to kill (destroy) a session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KillSessionMsg {
+    pub name: String,
+}
+
+/// Server → Client: confirmation that a session was killed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KillSessionResponseMsg {
+    pub name: String,
+}
+
 /// Serde helper for base64-encoded byte vectors in JSON.
 mod base64_bytes {
     use base64::Engine;
@@ -263,6 +299,10 @@ mod tests {
             FrameType::Detach,
             FrameType::Resize,
             FrameType::Error,
+            FrameType::ListSessions,
+            FrameType::ListSessionsResponse,
+            FrameType::KillSession,
+            FrameType::KillSessionResponse,
             FrameType::PtyOutput,
             FrameType::StdinInput,
         ];
@@ -277,7 +317,7 @@ mod tests {
     fn frame_type_invalid_byte() {
         assert!(FrameType::from_u8(0xFF).is_none());
         assert!(FrameType::from_u8(0x00).is_none());
-        assert!(FrameType::from_u8(0x08).is_none());
+        assert!(FrameType::from_u8(0x0C).is_none());
     }
 
     #[test]
@@ -452,6 +492,54 @@ mod tests {
         let json_lines = serde_json::json!({"lines": 50});
         let decoded: ScrollbackRequest = serde_json::from_value(json_lines).unwrap();
         assert!(matches!(decoded, ScrollbackRequest::Lines(50)));
+    }
+
+    #[test]
+    fn control_frame_list_sessions() {
+        let msg = ListSessionsMsg {};
+        let frame = Frame::control(FrameType::ListSessions, &msg).unwrap();
+        assert_eq!(frame.frame_type, FrameType::ListSessions);
+        let decoded: ListSessionsMsg = frame.parse_json().unwrap();
+        let _ = decoded; // empty struct, just verify deserialization
+    }
+
+    #[test]
+    fn control_frame_list_sessions_response() {
+        let msg = ListSessionsResponseMsg {
+            sessions: vec![
+                SessionInfoMsg { name: "alpha".to_string() },
+                SessionInfoMsg { name: "beta".to_string() },
+            ],
+        };
+        let frame = Frame::control(FrameType::ListSessionsResponse, &msg).unwrap();
+        let decoded: ListSessionsResponseMsg = frame.parse_json().unwrap();
+        assert_eq!(decoded.sessions.len(), 2);
+        assert_eq!(decoded.sessions[0].name, "alpha");
+        assert_eq!(decoded.sessions[1].name, "beta");
+    }
+
+    #[test]
+    fn control_frame_list_sessions_response_empty() {
+        let msg = ListSessionsResponseMsg { sessions: vec![] };
+        let frame = Frame::control(FrameType::ListSessionsResponse, &msg).unwrap();
+        let decoded: ListSessionsResponseMsg = frame.parse_json().unwrap();
+        assert!(decoded.sessions.is_empty());
+    }
+
+    #[test]
+    fn control_frame_kill_session() {
+        let msg = KillSessionMsg { name: "my-session".to_string() };
+        let frame = Frame::control(FrameType::KillSession, &msg).unwrap();
+        let decoded: KillSessionMsg = frame.parse_json().unwrap();
+        assert_eq!(decoded.name, "my-session");
+    }
+
+    #[test]
+    fn control_frame_kill_session_response() {
+        let msg = KillSessionResponseMsg { name: "killed-session".to_string() };
+        let frame = Frame::control(FrameType::KillSessionResponse, &msg).unwrap();
+        let decoded: KillSessionResponseMsg = frame.parse_json().unwrap();
+        assert_eq!(decoded.name, "killed-session");
     }
 
     #[tokio::test]

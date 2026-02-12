@@ -96,13 +96,9 @@ enum Commands {
 
     /// List active sessions on the server
     List {
-        /// Address of the HTTP/WebSocket API server
-        #[arg(long, default_value = "127.0.0.1:8080")]
-        bind: SocketAddr,
-
-        /// Authentication token
-        #[arg(long, env = "WSH_TOKEN")]
-        token: Option<String>,
+        /// Path to the Unix domain socket
+        #[arg(long)]
+        socket: Option<PathBuf>,
     },
 
     /// Kill (destroy) a session on the server
@@ -110,13 +106,9 @@ enum Commands {
         /// Session name to kill
         name: String,
 
-        /// Address of the HTTP/WebSocket API server
-        #[arg(long, default_value = "127.0.0.1:8080")]
-        bind: SocketAddr,
-
-        /// Authentication token
-        #[arg(long, env = "WSH_TOKEN")]
-        token: Option<String>,
+        /// Path to the Unix domain socket
+        #[arg(long)]
+        socket: Option<PathBuf>,
     },
 
     /// Upgrade a running server to persistent mode (it won't shut down when sessions end)
@@ -182,11 +174,11 @@ async fn main() -> Result<(), WshError> {
         Some(Commands::Attach { name, scrollback, socket }) => {
             run_attach(name, scrollback, socket).await
         }
-        Some(Commands::List { bind, token }) => {
-            run_list(bind, token).await
+        Some(Commands::List { socket }) => {
+            run_list(socket).await
         }
-        Some(Commands::Kill { name, bind, token }) => {
-            run_kill(name, bind, token).await
+        Some(Commands::Kill { name, socket }) => {
+            run_kill(name, socket).await
         }
         Some(Commands::Persist { bind, token }) => {
             run_persist(bind, token).await
@@ -535,8 +527,21 @@ async fn run_attach(
     Ok(())
 }
 
-async fn run_list(bind: SocketAddr, token: Option<String>) -> Result<(), WshError> {
-    let sessions = match client::Client::list_sessions(&bind, &token).await {
+async fn run_list(socket: Option<PathBuf>) -> Result<(), WshError> {
+    let socket_path = socket.unwrap_or_else(server::default_socket_path);
+    let mut c = match client::Client::connect(&socket_path).await {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!(
+                "wsh list: failed to connect to server at {}: {}",
+                socket_path.display(),
+                e
+            );
+            std::process::exit(1);
+        }
+    };
+
+    let sessions = match c.list_sessions().await {
         Ok(s) => s,
         Err(e) => {
             eprintln!("wsh list: {}", e);
@@ -556,8 +561,21 @@ async fn run_list(bind: SocketAddr, token: Option<String>) -> Result<(), WshErro
     Ok(())
 }
 
-async fn run_kill(name: String, bind: SocketAddr, token: Option<String>) -> Result<(), WshError> {
-    if let Err(e) = client::Client::kill_session(&bind, &token, &name).await {
+async fn run_kill(name: String, socket: Option<PathBuf>) -> Result<(), WshError> {
+    let socket_path = socket.unwrap_or_else(server::default_socket_path);
+    let mut c = match client::Client::connect(&socket_path).await {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!(
+                "wsh kill: failed to connect to server at {}: {}",
+                socket_path.display(),
+                e
+            );
+            std::process::exit(1);
+        }
+    };
+
+    if let Err(e) = c.kill_session(&name).await {
         eprintln!("wsh kill: {}", e);
         std::process::exit(1);
     }

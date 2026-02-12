@@ -5,11 +5,9 @@
 //! a streaming I/O proxy loop forwarding stdin/stdout over the socket.
 
 use std::io;
-use std::net::SocketAddr;
 use std::path::Path;
 
 use bytes::Bytes;
-use serde::Deserialize;
 use tokio::io::{AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::UnixStream;
 
@@ -91,6 +89,63 @@ impl Client {
         }
     }
 
+    /// List sessions via the server's Unix socket.
+    pub async fn list_sessions(&mut self) -> io::Result<Vec<SessionInfoMsg>> {
+        let msg = ListSessionsMsg {};
+        let frame = Frame::control(FrameType::ListSessions, &msg)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        frame.write_to(&mut self.stream).await?;
+
+        let resp_frame = Frame::read_from(&mut self.stream).await?;
+        match resp_frame.frame_type {
+            FrameType::ListSessionsResponse => {
+                let resp: ListSessionsResponseMsg = resp_frame
+                    .parse_json()
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                Ok(resp.sessions)
+            }
+            FrameType::Error => {
+                let err: ErrorMsg = resp_frame
+                    .parse_json()
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("{}: {}", err.code, err.message),
+                ))
+            }
+            other => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unexpected response frame type: {:?}", other),
+            )),
+        }
+    }
+
+    /// Kill (destroy) a session via the server's Unix socket.
+    pub async fn kill_session(&mut self, name: &str) -> io::Result<()> {
+        let msg = KillSessionMsg { name: name.to_string() };
+        let frame = Frame::control(FrameType::KillSession, &msg)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        frame.write_to(&mut self.stream).await?;
+
+        let resp_frame = Frame::read_from(&mut self.stream).await?;
+        match resp_frame.frame_type {
+            FrameType::KillSessionResponse => Ok(()),
+            FrameType::Error => {
+                let err: ErrorMsg = resp_frame
+                    .parse_json()
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("{}: {}", err.code, err.message),
+                ))
+            }
+            other => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unexpected response frame type: {:?}", other),
+            )),
+        }
+    }
+
     /// Enter the streaming I/O proxy loop.
     ///
     /// Consumes the client, splits the underlying stream, and runs a
@@ -145,117 +200,6 @@ impl Client {
         streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx).await
     }
 
-    /// List sessions via the server's HTTP API.
-    ///
-    /// This is an associated function (not a method) since it uses HTTP,
-    /// not the Unix socket.
-    pub async fn list_sessions(
-        bind: &SocketAddr,
-        token: &Option<String>,
-    ) -> io::Result<Vec<SessionListEntry>> {
-        let url = format!("http://{}/sessions", bind);
-        let client = reqwest::Client::new();
-        let mut req = client.get(&url);
-        if let Some(t) = token {
-            req = req.bearer_auth(t);
-        }
-
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| reqwest_to_io_error(bind, e))?;
-
-        if !resp.status().is_success() {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("server returned status {}", resp.status()),
-            ));
-        }
-
-        let sessions: Vec<SessionListEntry> = resp
-            .json()
-            .await
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-
-        Ok(sessions)
-    }
-
-    /// Kill (destroy) a session via the server's HTTP API.
-    ///
-    /// This is an associated function (not a method) since it uses HTTP,
-    /// not the Unix socket.
-    pub async fn kill_session(
-        bind: &SocketAddr,
-        token: &Option<String>,
-        name: &str,
-    ) -> io::Result<()> {
-        let url = format!("http://{}/sessions/{}", bind, url_encode_name(name));
-        let client = reqwest::Client::new();
-        let mut req = client.delete(&url);
-        if let Some(t) = token {
-            req = req.bearer_auth(t);
-        }
-
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| reqwest_to_io_error(bind, e))?;
-
-        if resp.status().as_u16() == 404 {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("session not found: {}", name),
-            ));
-        }
-
-        if !resp.status().is_success() {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("server returned status {}", resp.status()),
-            ));
-        }
-
-        Ok(())
-    }
-}
-
-/// Convert a reqwest error into a human-friendly `io::Error`.
-fn reqwest_to_io_error(bind: &SocketAddr, e: reqwest::Error) -> io::Error {
-    if e.is_connect() {
-        io::Error::new(
-            io::ErrorKind::ConnectionRefused,
-            format!("could not connect to wsh server at {} — is the server running?", bind),
-        )
-    } else if e.is_timeout() {
-        io::Error::new(
-            io::ErrorKind::TimedOut,
-            format!("connection to wsh server at {} timed out", bind),
-        )
-    } else {
-        io::Error::new(io::ErrorKind::Other, e)
-    }
-}
-
-/// Percent-encode a session name for use in URL paths.
-fn url_encode_name(name: &str) -> String {
-    let mut encoded = String::with_capacity(name.len());
-    for c in name.chars() {
-        match c {
-            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => encoded.push(c),
-            _ => {
-                for b in c.to_string().as_bytes() {
-                    encoded.push_str(&format!("%{:02X}", b));
-                }
-            }
-        }
-    }
-    encoded
-}
-
-/// Session info returned by the list endpoint.
-#[derive(Debug, Clone, Deserialize)]
-pub struct SessionListEntry {
-    pub name: String,
 }
 
 /// The main streaming loop, factored out of `run_streaming` for testability.
@@ -449,6 +393,73 @@ mod tests {
             cols: 80,
         };
         let result = client.attach(msg).await;
+        assert!(result.is_err());
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[tokio::test]
+    async fn test_client_list_sessions_empty() {
+        let sessions = SessionRegistry::new();
+        let path = start_test_server(sessions).await;
+
+        let mut client = Client::connect(&path).await.unwrap();
+        let list = client.list_sessions().await.unwrap();
+        assert!(list.is_empty());
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[tokio::test]
+    async fn test_client_list_sessions_with_entries() {
+        let sessions = SessionRegistry::new();
+
+        let (s, rx) = crate::session::Session::spawn(
+            "ls-test".to_string(),
+            crate::pty::SpawnCommand::default(),
+            24, 80,
+        ).unwrap();
+        sessions.insert(Some("ls-test".to_string()), s).unwrap();
+        sessions.monitor_child_exit("ls-test".to_string(), rx);
+
+        let path = start_test_server(sessions).await;
+
+        let mut client = Client::connect(&path).await.unwrap();
+        let list = client.list_sessions().await.unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].name, "ls-test");
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[tokio::test]
+    async fn test_client_kill_session() {
+        let sessions = SessionRegistry::new();
+
+        let (s, rx) = crate::session::Session::spawn(
+            "kill-test".to_string(),
+            crate::pty::SpawnCommand::default(),
+            24, 80,
+        ).unwrap();
+        sessions.insert(Some("kill-test".to_string()), s).unwrap();
+        sessions.monitor_child_exit("kill-test".to_string(), rx);
+
+        let path = start_test_server(sessions.clone()).await;
+
+        let mut client = Client::connect(&path).await.unwrap();
+        client.kill_session("kill-test").await.unwrap();
+        assert!(sessions.get("kill-test").is_none());
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[tokio::test]
+    async fn test_client_kill_nonexistent_session() {
+        let sessions = SessionRegistry::new();
+        let path = start_test_server(sessions).await;
+
+        let mut client = Client::connect(&path).await.unwrap();
+        let result = client.kill_session("no-such").await;
         assert!(result.is_err());
 
         std::fs::remove_file(&path).ok();

@@ -106,10 +106,22 @@ async fn handle_client<S: AsyncRead + AsyncWrite + Unpin>(
             })?;
             handle_attach_session(&mut stream, sessions, msg).await
         }
+        FrameType::ListSessions => {
+            handle_list_sessions(&mut stream, sessions).await
+        }
+        FrameType::KillSession => {
+            let msg: KillSessionMsg = frame.parse_json().map_err(|e| {
+                io::Error::new(io::ErrorKind::InvalidData, e)
+            })?;
+            handle_kill_session(&mut stream, sessions, msg).await
+        }
         other => {
             let err = ErrorMsg {
                 code: "invalid_initial_frame".to_string(),
-                message: format!("expected CreateSession or AttachSession, got {:?}", other),
+                message: format!(
+                    "expected CreateSession, AttachSession, ListSessions, or KillSession, got {:?}",
+                    other
+                ),
             };
             let frame = Frame::control(FrameType::Error, &err)
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
@@ -269,6 +281,52 @@ async fn handle_attach_session<S: AsyncRead + AsyncWrite + Unpin>(
 
     // Enter streaming loop
     run_streaming(stream, &session).await
+}
+
+/// Handle a ListSessions request: return all session names and disconnect.
+async fn handle_list_sessions<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: &mut S,
+    sessions: SessionRegistry,
+) -> io::Result<()> {
+    let names = sessions.list();
+    let resp = ListSessionsResponseMsg {
+        sessions: names.into_iter().map(|name| SessionInfoMsg { name }).collect(),
+    };
+    let resp_frame = Frame::control(FrameType::ListSessionsResponse, &resp)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    resp_frame.write_to(stream).await?;
+    Ok(())
+}
+
+/// Handle a KillSession request: remove the session or return an error.
+async fn handle_kill_session<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: &mut S,
+    sessions: SessionRegistry,
+    msg: KillSessionMsg,
+) -> io::Result<()> {
+    match sessions.remove(&msg.name) {
+        Some(_) => {
+            tracing::info!(session = %msg.name, "session killed via socket");
+            let resp = KillSessionResponseMsg { name: msg.name };
+            let resp_frame = Frame::control(FrameType::KillSessionResponse, &resp)
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            resp_frame.write_to(stream).await?;
+            Ok(())
+        }
+        None => {
+            let err = ErrorMsg {
+                code: "session_not_found".to_string(),
+                message: format!("session not found: {}", msg.name),
+            };
+            let err_frame = Frame::control(FrameType::Error, &err)
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            err_frame.write_to(stream).await?;
+            Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("session not found: {}", msg.name),
+            ))
+        }
+    }
 }
 
 /// Main streaming loop: proxy I/O between the client and the session.
@@ -636,6 +694,123 @@ mod tests {
     fn test_default_socket_path() {
         let path = default_socket_path();
         assert!(path.to_str().unwrap().contains("wsh.sock"));
+    }
+
+    #[tokio::test]
+    async fn test_list_sessions_empty() {
+        let sessions = SessionRegistry::new();
+        let path = start_test_server(sessions).await;
+
+        let mut stream = UnixStream::connect(&path).await.unwrap();
+
+        let msg = ListSessionsMsg {};
+        Frame::control(FrameType::ListSessions, &msg)
+            .unwrap()
+            .write_to(&mut stream)
+            .await
+            .unwrap();
+
+        let resp = Frame::read_from(&mut stream).await.unwrap();
+        assert_eq!(resp.frame_type, FrameType::ListSessionsResponse);
+        let list: ListSessionsResponseMsg = resp.parse_json().unwrap();
+        assert!(list.sessions.is_empty());
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[tokio::test]
+    async fn test_list_sessions_with_sessions() {
+        let sessions = SessionRegistry::new();
+
+        // Pre-create two sessions
+        let (session1, rx1) = Session::spawn(
+            "list-a".to_string(),
+            SpawnCommand::default(),
+            24, 80,
+        ).unwrap();
+        sessions.insert(Some("list-a".to_string()), session1).unwrap();
+        sessions.monitor_child_exit("list-a".to_string(), rx1);
+
+        let (session2, rx2) = Session::spawn(
+            "list-b".to_string(),
+            SpawnCommand::default(),
+            24, 80,
+        ).unwrap();
+        sessions.insert(Some("list-b".to_string()), session2).unwrap();
+        sessions.monitor_child_exit("list-b".to_string(), rx2);
+
+        let path = start_test_server(sessions).await;
+
+        let mut stream = UnixStream::connect(&path).await.unwrap();
+        Frame::control(FrameType::ListSessions, &ListSessionsMsg {})
+            .unwrap()
+            .write_to(&mut stream)
+            .await
+            .unwrap();
+
+        let resp = Frame::read_from(&mut stream).await.unwrap();
+        assert_eq!(resp.frame_type, FrameType::ListSessionsResponse);
+        let list: ListSessionsResponseMsg = resp.parse_json().unwrap();
+        assert_eq!(list.sessions.len(), 2);
+        let names: Vec<&str> = list.sessions.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"list-a"));
+        assert!(names.contains(&"list-b"));
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[tokio::test]
+    async fn test_kill_session_success() {
+        let sessions = SessionRegistry::new();
+
+        let (session, rx) = Session::spawn(
+            "kill-me".to_string(),
+            SpawnCommand::default(),
+            24, 80,
+        ).unwrap();
+        sessions.insert(Some("kill-me".to_string()), session).unwrap();
+        sessions.monitor_child_exit("kill-me".to_string(), rx);
+
+        let path = start_test_server(sessions.clone()).await;
+
+        let mut stream = UnixStream::connect(&path).await.unwrap();
+        let msg = KillSessionMsg { name: "kill-me".to_string() };
+        Frame::control(FrameType::KillSession, &msg)
+            .unwrap()
+            .write_to(&mut stream)
+            .await
+            .unwrap();
+
+        let resp = Frame::read_from(&mut stream).await.unwrap();
+        assert_eq!(resp.frame_type, FrameType::KillSessionResponse);
+        let kill_resp: KillSessionResponseMsg = resp.parse_json().unwrap();
+        assert_eq!(kill_resp.name, "kill-me");
+
+        // Session should be gone
+        assert!(sessions.get("kill-me").is_none());
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[tokio::test]
+    async fn test_kill_session_not_found() {
+        let sessions = SessionRegistry::new();
+        let path = start_test_server(sessions).await;
+
+        let mut stream = UnixStream::connect(&path).await.unwrap();
+        let msg = KillSessionMsg { name: "nonexistent".to_string() };
+        Frame::control(FrameType::KillSession, &msg)
+            .unwrap()
+            .write_to(&mut stream)
+            .await
+            .unwrap();
+
+        let resp = Frame::read_from(&mut stream).await.unwrap();
+        assert_eq!(resp.frame_type, FrameType::Error);
+        let err: ErrorMsg = resp.parse_json().unwrap();
+        assert_eq!(err.code, "session_not_found");
+
+        std::fs::remove_file(&path).ok();
     }
 
     /// Helper: create a session via the socket, send some input to generate

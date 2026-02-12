@@ -506,7 +506,120 @@ async fn test_session_registry_after_client_disconnect() {
     std::fs::remove_file(&path).ok();
 }
 
-// ── Test 10: Session events are emitted ────────────────────────────
+// ── Test 10: List sessions (empty) ──────────────────────────────────
+
+#[tokio::test]
+async fn test_list_sessions_empty() {
+    let (path, _sessions) = start_test_server().await;
+
+    let mut client = Client::connect(&path).await.unwrap();
+    let list = client.list_sessions().await.unwrap();
+    assert!(list.is_empty(), "no sessions should exist initially");
+
+    std::fs::remove_file(&path).ok();
+}
+
+// ── Test 11: List sessions with entries ─────────────────────────────
+
+#[tokio::test]
+async fn test_list_sessions_with_entries() {
+    let (path, _sessions) = start_test_server().await;
+
+    // Create two sessions via the socket
+    let mut c1 = Client::connect(&path).await.unwrap();
+    c1.create_session(CreateSessionMsg {
+        name: Some("list-alpha".to_string()),
+        command: None,
+        cwd: None,
+        env: None,
+        rows: 24,
+        cols: 80,
+    })
+    .await
+    .unwrap();
+
+    let mut c2 = Client::connect(&path).await.unwrap();
+    c2.create_session(CreateSessionMsg {
+        name: Some("list-beta".to_string()),
+        command: None,
+        cwd: None,
+        env: None,
+        rows: 24,
+        cols: 80,
+    })
+    .await
+    .unwrap();
+
+    // List sessions from a fresh client
+    let mut lister = Client::connect(&path).await.unwrap();
+    let list = lister.list_sessions().await.unwrap();
+
+    assert_eq!(list.len(), 2);
+    let names: Vec<&str> = list.iter().map(|s| s.name.as_str()).collect();
+    assert!(names.contains(&"list-alpha"), "should contain list-alpha");
+    assert!(names.contains(&"list-beta"), "should contain list-beta");
+
+    std::fs::remove_file(&path).ok();
+}
+
+// ── Test 12: Kill a session ─────────────────────────────────────────
+
+#[tokio::test]
+async fn test_kill_session_via_client() {
+    let (path, sessions) = start_test_server().await;
+
+    // Create a session
+    let mut creator = Client::connect(&path).await.unwrap();
+    creator
+        .create_session(CreateSessionMsg {
+            name: Some("kill-target".to_string()),
+            command: None,
+            cwd: None,
+            env: None,
+            rows: 24,
+            cols: 80,
+        })
+        .await
+        .unwrap();
+
+    assert!(sessions.get("kill-target").is_some());
+
+    // Kill it from a different client
+    let mut killer = Client::connect(&path).await.unwrap();
+    killer.kill_session("kill-target").await.unwrap();
+
+    // Verify it's gone
+    assert!(
+        sessions.get("kill-target").is_none(),
+        "session should be removed after kill"
+    );
+
+    // List should be empty
+    let mut lister = Client::connect(&path).await.unwrap();
+    let list = lister.list_sessions().await.unwrap();
+    assert!(list.is_empty(), "no sessions should remain after kill");
+
+    std::fs::remove_file(&path).ok();
+}
+
+// ── Test 13: Kill nonexistent session ───────────────────────────────
+
+#[tokio::test]
+async fn test_kill_nonexistent_session() {
+    let (path, _sessions) = start_test_server().await;
+
+    let mut client = Client::connect(&path).await.unwrap();
+    let result = client.kill_session("does-not-exist").await;
+
+    assert!(
+        result.is_err(),
+        "killing a nonexistent session should fail"
+    );
+
+    std::fs::remove_file(&path).ok();
+}
+
+// ── Test 14: Session events are emitted ────────────────────────────
 
 #[tokio::test]
 async fn test_ephemeral_server_watches_sessions() {
