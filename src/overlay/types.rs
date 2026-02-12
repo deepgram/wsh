@@ -1,5 +1,22 @@
 use serde::{Deserialize, Serialize};
 
+/// Which screen mode an overlay or panel belongs to.
+///
+/// Elements tagged with a particular mode are only visible (and returned by list
+/// endpoints) when the session is in that mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ScreenMode {
+    #[default]
+    Normal,
+    Alt,
+}
+
+/// Helper for serde `skip_serializing_if` on `ScreenMode` fields.
+pub fn is_normal_mode(mode: &ScreenMode) -> bool {
+    matches!(mode, ScreenMode::Normal)
+}
+
 /// Unique identifier for an overlay
 pub type OverlayId = String;
 
@@ -44,6 +61,10 @@ pub struct Overlay {
     pub spans: Vec<OverlaySpan>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub region_writes: Vec<RegionWrite>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub focusable: bool,
+    #[serde(default, skip_serializing_if = "is_normal_mode")]
+    pub screen_mode: ScreenMode,
 }
 
 /// A styled text span within an overlay
