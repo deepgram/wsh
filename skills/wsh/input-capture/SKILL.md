@@ -46,6 +46,44 @@ Always check before capturing. If input is already
 captured (by another agent or process), don't capture
 again without understanding why.
 
+## Focus Routing
+
+When input is captured, you can direct it to a specific
+overlay or panel by setting focus. The element must be
+created with `focusable: true`. At most one element has
+focus at a time.
+
+Focus is a logical association — it tells the system
+(and any listening clients) which UI element the
+captured input belongs to. This is useful when you have
+multiple overlays or panels visible and want to clarify
+which one is "active."
+
+    create overlay (focusable: true) → get id
+    capture input
+    set focus to overlay id
+
+    # Input events are now associated with this overlay.
+    # The element may receive visual focus indicators
+    # (e.g., highlighted border) depending on the client.
+
+    # Switch focus to a different element:
+    set focus to another-element-id
+
+    # Clear focus:
+    unfocus
+
+Focus is automatically cleared when:
+- Input is released back to passthrough
+- The focused element is deleted
+
+Don't overcomplicate focus management. For a single
+dialog or menu, you often don't need explicit focus —
+you're the only consumer of captured input, and you
+know which overlay you're updating. Focus becomes
+valuable when multiple elements are visible and you
+want to signal which one is "live."
+
 ## Approval Workflows
 
 The most common use of input capture: ask the human a
@@ -63,14 +101,14 @@ yes-or-no question and wait for their answer.
 
 ### Example: Confirm a Dangerous Command
 
-    # Show the prompt
-    create overlay:
+    # Show the prompt (focusable for focus routing)
+    create overlay (focusable: true):
       "┌─ Confirm ──────────────────────┐"
       "│ Delete 47 files from /build ?  │"
       "│         [Y]es    [N]o          │"
       "└────────────────────────────────┘"
 
-    # Capture input
+    # Capture input and set focus
     capture input
 
     # Read keystroke via WebSocket
@@ -97,15 +135,15 @@ arrow keys and Enter.
 
 ### The Pattern
 
-    # Show the menu with one item highlighted
-    create overlay:
+    # Show the menu with one item highlighted (focusable for focus routing)
+    create overlay (focusable: true):
       "┌─ Select environment ──────┐"
       "│   development             │"
       "│ ▸ staging                 │"
       "│   production              │"
       "└───────────────────────────┘"
 
-    # Capture input
+    # Capture input and set focus to the menu overlay
     capture input
 
     # Handle navigation
@@ -172,6 +210,12 @@ Keep input captured across all steps. Show a progress
 indicator so the human knows where they are:
 
     "Step 2 of 3 — Enter version tag"
+
+Use focus routing to track which dialog step currently
+has input. As you advance through steps, move focus
+to the overlay or panel representing the current step.
+This signals to the system (and the human) which
+element is active.
 
 If the human presses Escape at any step, cancel the
 entire flow and release input. Don't trap them in a
