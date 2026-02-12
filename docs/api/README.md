@@ -45,6 +45,7 @@ compatibility.
 | `POST` | `/sessions/:name/input/capture` | Switch to capture mode |
 | `POST` | `/sessions/:name/input/release` | Switch to passthrough mode |
 | `GET` | `/sessions/:name/quiesce` | Wait for terminal quiescence |
+| `POST` | `/sessions/:name/detach` | Detach all clients from the session |
 
 ### Session Management Endpoints
 
@@ -338,20 +339,47 @@ settled" after sending a command.
 | `timeout_ms` | integer | (required) | Quiescence threshold in milliseconds |
 | `format` | `plain` \| `styled` | `styled` | Line format for response |
 | `max_wait_ms` | integer | `30000` | Overall deadline before returning 408 |
+| `last_generation` | integer | (none) | Generation from a previous response; blocks until new activity if it matches |
+| `fresh` | boolean | `false` | Always observe real silence for `timeout_ms` before responding |
 
 If the terminal has already been quiet for `timeout_ms` when the request
-arrives, it responds immediately.
+arrives, it responds immediately (unless `last_generation` or `fresh` are used).
 
 **Response (200):**
 
 ```json
 {
   "screen": { ... },
-  "scrollback_lines": 150
+  "scrollback_lines": 150,
+  "generation": 42
 }
 ```
 
-The `screen` object has the same shape as `GET /screen`.
+The `screen` object has the same shape as `GET /screen`. The `generation` field
+is a monotonic counter that increments on each activity event.
+
+**Preventing busy-loop storms:**
+
+When polling quiescence repeatedly (e.g., waiting for a command that hasn't
+finished), pass back the `generation` from the previous response as
+`last_generation`. If no new activity has occurred, the server blocks until
+something happens — preventing rapid-fire immediate responses:
+
+```bash
+# First call: may return immediately if already idle
+curl 'http://localhost:8080/quiesce?timeout_ms=500&format=plain'
+# Response: {"screen": ..., "generation": 42}
+
+# Subsequent call: blocks until new activity, then waits for quiescence
+curl 'http://localhost:8080/quiesce?timeout_ms=500&last_generation=42&format=plain'
+```
+
+Alternatively, use `fresh=true` to always observe real silence without tracking
+generation state — at the cost of always waiting at least `timeout_ms`:
+
+```bash
+curl 'http://localhost:8080/quiesce?timeout_ms=500&fresh=true&format=plain'
+```
 
 **Errors:**
 
@@ -359,20 +387,64 @@ The `screen` object has the same shape as `GET /screen`.
 |--------|------|------|
 | 408 | `quiesce_timeout` | `max_wait_ms` exceeded without quiescence |
 
-**Example:**
-
-```bash
-# Send a command, then wait for it to finish
-curl -X POST http://localhost:8080/input -d $'ls\n'
-curl 'http://localhost:8080/quiesce?timeout_ms=2000&format=plain'
-
-# Immediate response when terminal is already idle
-curl 'http://localhost:8080/quiesce?timeout_ms=500&format=plain'
-```
-
 The WebSocket equivalent is the `await_quiesce` method — see
 [websocket.md](websocket.md). Subscriptions can also include automatic
 quiescence sync via the `quiesce_ms` parameter.
+
+### Server-Level Quiescence (Any Session)
+
+```
+GET /quiesce?timeout_ms=2000
+```
+
+Races quiescence detection across **all** sessions, returning the first
+session to become quiescent. The response includes the session name so you
+know which session settled.
+
+**Query parameters:**
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `timeout_ms` | integer | (required) | Quiescence threshold in milliseconds |
+| `format` | `plain` \| `styled` | `styled` | Line format for response |
+| `max_wait_ms` | integer | `30000` | Overall deadline before returning 408 |
+| `last_generation` | integer | (none) | Generation from a previous response; paired with `last_session` |
+| `last_session` | string | (none) | Session name from a previous response; paired with `last_generation` |
+| `fresh` | boolean | `false` | Always observe real silence for `timeout_ms` before responding |
+
+**Response (200):**
+
+```json
+{
+  "session": "build",
+  "screen": { ... },
+  "scrollback_lines": 150,
+  "generation": 42
+}
+```
+
+**Preventing busy-loop storms:**
+
+Pass back both `last_session` and `last_generation` from the previous
+response. The named session waits for new activity before checking
+quiescence, while all other sessions are checked immediately:
+
+```bash
+# First call: returns whichever session becomes quiescent first
+curl 'http://localhost:8080/quiesce?timeout_ms=500&format=plain'
+# Response: {"session": "build", "screen": ..., "generation": 42}
+
+# Subsequent call: "build" won't return until it has new activity,
+# but other sessions can still win the race
+curl 'http://localhost:8080/quiesce?timeout_ms=500&last_session=build&last_generation=42&format=plain'
+```
+
+**Errors:**
+
+| Status | Code | When |
+|--------|------|------|
+| 404 | `no_sessions` | No sessions exist in the registry |
+| 408 | `quiesce_timeout` | `max_wait_ms` exceeded without quiescence on any session |
 
 ## Server Mode
 
@@ -391,6 +463,7 @@ wsh provides several subcommands for interacting with a running server:
 | `wsh attach <name>` | Attach to a session (local terminal I/O over Unix socket) |
 | `wsh list` | List active sessions |
 | `wsh kill <name>` | Destroy a session |
+| `wsh detach <name>` | Detach all clients from a session |
 | `wsh persist` | Switch the server to persistent mode |
 
 #### `wsh server`
@@ -425,22 +498,32 @@ date.
 |------|---------|-------------|
 | `--scrollback` | `all` | Scrollback replay: `all`, `none`, or a line count |
 | `--socket` | `$XDG_RUNTIME_DIR/wsh.sock` | Path to the Unix domain socket |
+| `--alt-screen` | off | Use alternate screen buffer (restores previous screen on exit, but disables native terminal scrollback while attached) |
 
 #### `wsh list`
 
 ```bash
-wsh list [--bind <addr>] [--token <token>]
+wsh list [--socket <path>]
 ```
 
-Lists active sessions on the server via the HTTP API.
+Lists active sessions on the server via the Unix socket.
 
 #### `wsh kill`
 
 ```bash
-wsh kill <name> [--bind <addr>] [--token <token>]
+wsh kill <name> [--socket <path>]
 ```
 
-Destroys a named session on the server via the HTTP API.
+Destroys a named session on the server via the Unix socket.
+
+#### `wsh detach`
+
+```bash
+wsh detach <name> [--socket <path>]
+```
+
+Detaches all connected clients from a named session via the Unix socket. The
+session itself remains alive -- only the client connections are dropped.
 
 #### `wsh persist`
 
@@ -603,6 +686,31 @@ Destroys the session and its PTY.
 curl -X DELETE http://localhost:8080/sessions/dev
 ```
 
+### Detach a Session
+
+```
+POST /sessions/:name/detach
+```
+
+Detaches all connected clients (Unix socket `wsh attach` sessions) from the
+named session. The session itself remains alive -- only the client connections
+are dropped. Useful for forcibly disconnecting attached terminals without
+destroying the session.
+
+**Response:** `204 No Content`
+
+**Errors:**
+
+| Status | Code | When |
+|--------|------|------|
+| 404 | `session_not_found` | No session with that name |
+
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/sessions/dev/detach
+```
+
 ### Server Persist
 
 ```
@@ -653,6 +761,7 @@ events. After connecting, the server sends `{"connected": true}`.
 | `list_sessions` | List all active sessions |
 | `create_session` | Create a new session |
 | `kill_session` | Destroy a session |
+| `detach_session` | Detach all clients from a session |
 | `set_server_mode` | Set server mode (ephemeral/persistent) |
 
 **Per-session methods** require a `session` field in the request:

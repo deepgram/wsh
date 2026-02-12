@@ -108,6 +108,7 @@ pub fn router(state: AppState, token: Option<String>) -> Router {
                 .delete(session_kill),
         )
         .route("/sessions/:name/detach", post(session_detach))
+        .route("/quiesce", get(quiesce_any))
         .route("/server/persist", post(server_persist))
         .route("/ws/json", get(ws_json_server));
 

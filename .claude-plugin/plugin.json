@@ -1,0 +1,5 @@
+{
+  "name": "wsh",
+  "description": "AI skills for wsh — the terminal as a service. Teaches agents how to drive CLI programs, operate TUIs, manage multiple sessions, create visual feedback, and more through the wsh HTTP/WebSocket API.",
+  "version": "1.0.0"
+}

@@ -1,81 +1,66 @@
-# wsh: The Web Shell
+# wsh: An API for Your Terminal
 
-> The terminal as a service. Your shell, exposed to the modern world.
+> Give AI agents the ability to *interact* with your terminal -- not just run commands, but use programs the way a human does. The terminal is the fundamental interface of modern computers. `wsh` makes it programmable.
 
 ---
 
 ## The Problem
 
-**The Terminal Paradox**
+**AI Can Run Commands. It Can't Use Them.**
 
-The terminal is experiencing a renaissance. Tools like Claude Code, modern CLI applications, and sophisticated TUIs have made the command line more powerful than ever. Yet this power comes with a constraint: you must be *present*. Physically seated at a keyboard, watching output scroll by, ready to respond.
+Today's AI agents can execute shell commands. They spawn a process, capture stdout, and parse the result. This works for `ls` and `grep`. It falls apart for everything else.
 
-This constraint chafes against modern reality. We carry powerful computers in our pockets, connected everywhere. But when you need to approve a command, answer a question, or review a diff from your AI coding assistant, your phone becomes useless. The options are grim:
+The terminal is not a batch processor. It's an *interactive* medium. Programs prompt for input. TUIs render full-screen interfaces. Installers ask questions. Build tools stream progress. Debuggers wait for breakpoints. AI coding assistants (like Claude Code itself) carry on extended conversations through the terminal.
 
-1. **Mobile SSH clients**: Cramped terminal emulators fighting with touch keyboards. Escape sequences become finger gymnastics. The experience is hostile.
+An agent that can only run commands and read output is like a person who can only send letters. They can't have a conversation. They can't react to what they see. They can't navigate a menu, answer a prompt, approve a change, or recover from an error. They're locked out of the most powerful interface on the computer.
 
-2. **Web-based terminals**: Marginally better, but fundamentally the same problem. They faithfully recreate the 1980s fixed-grid terminal in your browser - scroll hijacking, tiny fonts or horizontal panning, IME conflicts with autocorrect.
+This is the gap: **AI has no way to sit at a terminal and use it like a human does.**
 
-3. **Just wait**: Accept that terminal work requires a "real" computer. Lose momentum. Context-switch. Forget what you were doing.
+**The Scale of What's Missing**
 
-The irony is thick: we have web browsers capable of rendering rich, responsive, touch-friendly interfaces, yet we use them to simulate hardware terminals from four decades ago.
+The terminal is not just *an* interface -- it's *the* interface. Every server, every container, every CI pipeline, every development environment bottlenecks through a terminal. The entire modern computing stack is operated through shell sessions. When you give AI the ability to interact with terminals, you give it the ability to:
 
-**The Deeper Problem**
+- **Drive interactive tools**: AI coding assistants, installers, debuggers, REPLs, configuration wizards -- anything that expects a human at the keyboard
+- **Operate in parallel**: Not one shell session, but dozens -- running builds, tests, deployments, and development tasks simultaneously
+- **Provide live assistance**: Watch what a human is doing and offer contextual help, warnings, or suggestions in real time
+- **Audit and monitor**: Observe shell sessions for security, compliance, or operational awareness
+- **Set up entire environments**: Configure a new machine from scratch, test everything end-to-end, and document the process
+- **Orchestrate other agents**: Use terminal-based AI tools (including other instances of itself) as sub-agents for complex tasks
 
-But there's a more fundamental tension emerging. In an increasingly AI-enabled world, the ideal modality for on-the-move interaction is *voice*. Voice is inherently high-level - you speak intent, not keystrokes. Yet our most powerful tools remain locked behind terminals and keyboards, demanding low-level character-by-character input.
+The terminal is the fundamental UI of the modern computer. Giving AI full access to it -- the ability to see, type, react, and interact -- makes AI a *co-processor* for both the machine and the human operating it.
 
-We need more than a better mobile terminal. We need a bridge that can evolve: from terminal to web, from web to voice, from direct manipulation to agent-mediated interaction. Imagine AI agents that can summarize terminal output in a sentence, convert your spoken response into the appropriate keystrokes, and liaise between you and your development environment while you're walking the dog.
+**Why This Doesn't Exist Yet**
 
-The problem isn't the terminal *paradigm*. The problem is that we've conflated the terminal *interface* (a fixed character grid) with the terminal *protocol* (streams of text with control sequences). The protocol is fine. The interface needs reimagining - first for the web, then for voice, then for agents.
+The terminal has been around for fifty years, and the tools for working with it remotely have barely changed. SSH gives you a remote session. Tmux gives you persistence. Screen recording gives you playback. But none of these expose terminal I/O as a *structured, programmable API*.
+
+There's no tool that lets an AI agent:
+- See what's on the screen right now (as structured data, not raw bytes)
+- Send keystrokes that interleave naturally with local input
+- Subscribe to output events in real time
+- Detect whether the terminal is idle or busy
+- Manage multiple sessions in parallel
+- All while the human continues to use their terminal normally
+
+This is the missing infrastructure.
 
 ---
 
 ## The Insight
 
-**Separate Protocol from Presentation**
+**The Terminal as a Service**
 
-A terminal emulator does two things: it interprets a *protocol* (the stream of bytes, ANSI escape sequences, and control codes coming from programs) and it provides a *presentation* (rendering characters in a fixed grid, handling keyboard input). Every terminal emulator - xterm, alacritty, iTerm2 - fuses these together.
+A terminal emulator does two things: it interprets a *protocol* (the stream of bytes, ANSI escape sequences, and control codes from programs) and provides a *presentation* (rendering characters in a grid, handling keyboard input). Every terminal emulator -- xterm, alacritty, iTerm2 -- fuses these together.
 
 `wsh` cleaves them apart.
 
-The insight is this: the terminal protocol is rich and well-specified. Programs output styled text, move cursors, switch screen buffers, report mouse events. None of this *requires* a fixed character grid. A sufficiently smart interpreter can translate this protocol into whatever presentation makes sense for the context:
-
-- On a desktop terminal: traditional fixed-grid rendering (let alacritty do what it does best)
-- On a mobile browser: reflowing HTML with native scrolling and touch-friendly text selection
-- Running a full-screen TUI: switch to grid mode temporarily, then back to flowing text
-- Via an API: consumed by agents, security auditors, automation tools, or anything else
-
-The terminal becomes a *universal protocol* for program interaction, with presentations adapted to context.
-
-**The Multiplexer Model**
-
-`wsh` sits in the middle. It spawns your shell inside a PTY it controls, captures all I/O, maintains the full terminal state, and exposes it to multiple consumers simultaneously:
-
-- Your local terminal emulator sees the same output as always
-- A web browser sees a web-native rendering of that output
-- An AI agent receives structured terminal state via API
-- A voice interface gets summaries and sends transcribed commands
-- Security tools monitor for anomalies in real-time
-- Unix pipes and scripts integrate via standard I/O
-
-The web UI is the obvious first frontend - visual, immediate, useful today. But `wsh` is architected as a terminal *service*. Expose terminal I/O via WebSocket, via MCP-style RPC, via REST, via Unix socket - and suddenly the terminal is accessible to the entire modern tooling ecosystem. Ancient Unix philosophy meets contemporary infrastructure.
-
-You start `wsh` in alacritty on your workstation. You pull up the web UI on your phone. An agent watches the session, ready to help. Same session. Same state. Multiple presentations, each native to its context.
-
----
-
-## Architecture Overview
-
-**Core Principle: The Terminal as a Service**
-
-At its heart, `wsh` is a PTY multiplexer with an API. Everything else - the web UI, future voice interfaces, agent integrations - are clients of that API.
+`wsh` sits between your terminal emulator and your shell. It captures all I/O, maintains a complete terminal state machine, and exposes everything through a structured API. Your terminal works exactly as before. But now agents, automation, web clients, and any other consumer can tap into that same session -- seeing what you see, typing alongside you, reacting to output in real time.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                         wsh daemon                              │
+│                         wsh                                      │
 │  ┌─────────────┐    ┌─────────────┐    ┌─────────────────────┐  │
 │  │ PTY Manager │───▶│  Terminal   │───▶│    API Server       │  │
-│  │             │    │  State      │    │  (WebSocket/HTTP)   │  │
+│  │             │    │  State      │    │  (HTTP/WebSocket)   │  │
 │  │ spawns      │    │  Machine    │    │                     │  │
 │  │ $SHELL      │    │             │    │  • Stream output    │  │
 │  │             │◀───│  • Parser   │    │  • Accept input     │  │
@@ -84,7 +69,7 @@ At its heart, `wsh` is a PTY multiplexer with an API. Everything else - the web 
 │        │            └─────────────┘    └─────────────────────┘  │
 │        ▼                                         │              │
 │  ┌─────────────┐                                 │              │
-│  │ Local TTY   │ (passthrough to alacritty)      │              │
+│  │ Local TTY   │ (passthrough to your terminal)  │              │
 │  └─────────────┘                                 │              │
 └──────────────────────────────────────────────────│──────────────┘
                                                    │
@@ -92,63 +77,116 @@ At its heart, `wsh` is a PTY multiplexer with an API. Everything else - the web 
                     │                              │               │
                     ▼                              ▼               ▼
              ┌────────────┐                 ┌────────────┐  ┌────────────┐
-             │  Web UI    │                 │   Agent    │  │  Other     │
-             │  (bundled) │                 │   (MCP)    │  │  Tools     │
+             │ AI Agents  │                 │  Web UI    │  │  Other     │
+             │ (skills)   │                 │  (mobile)  │  │  Tools     │
              └────────────┘                 └────────────┘  └────────────┘
 ```
 
-**The Nested PTY Model**
-
-You run `wsh` inside your existing terminal (alacritty, kitty, whatever you prefer). `wsh` allocates a new PTY pair, spawns your shell on the slave side, and sits on the master side. To alacritty, `wsh` is just a program producing output. To your shell, it's running in a normal terminal. `wsh` is invisible - a transparent proxy that happens to expose everything over an API.
-
 **What the API Exposes**
 
-- **Output stream**: Real-time terminal output, either raw bytes or parsed/structured
-- **Input injection**: Send keystrokes, paste text, inject control sequences
-- **State queries**: Current screen contents, cursor position, scrollback buffer, alternate screen status
-- **Events**: Subscribe to state changes, screen updates, mode transitions
+- **Screen state**: Current screen contents as structured data -- text, colors, cursor position, alternate screen mode
+- **Scrollback buffer**: Complete output history, paginated and queryable
+- **Input injection**: Send keystrokes, paste text, inject control sequences -- indistinguishable from human input
+- **Real-time events**: Subscribe to output changes, cursor movement, mode transitions via WebSocket
+- **Quiescence detection**: Wait for the terminal to go idle -- essential for the send-wait-read pattern agents use
+- **Visual feedback**: Overlays and panels that agents can render directly in the user's terminal
+- **Input capture**: Temporarily intercept keyboard input for agent-driven dialogs and approvals
+- **Session management**: Create, list, attach to, and destroy named sessions -- enabling parallel operation
 
-**The Bundled Web UI**
-
-`wsh` ships with a web-based terminal client as a first-class feature. It connects to the API over WebSocket and renders terminal state using web-native technologies. This isn't a demo - it's a production-quality interface for mobile/remote access. But architecturally, it's just another API client.
+The API is the product. Everything else is a client.
 
 ---
 
-## Terminal Emulation & Rendering
+## AI as Co-Processor
+
+**The Agent Loop**
+
+With `wsh`, an AI agent interacts with a terminal the same way a human does: send input, wait for output, read the screen, decide what to do next.
+
+```
+Send input  →  Wait for quiescence  →  Read screen  →  Decide  →  repeat
+```
+
+This loop is simple but powerful. It works for any program, any interface, any situation. The agent doesn't need to understand the program's internals or speak its protocol. It reads what's on screen and types what's needed -- exactly like a human.
+
+**What This Enables**
+
+*Driving interactive tools:* An agent can run an installer, answer its prompts, handle errors, and verify the result. It can operate `vim`, navigate `lazygit`, step through a debugger, or interact with a REPL. Any program that a human can use through a terminal, an agent can use through `wsh`.
+
+*Orchestrating AI coding tools:* An agent can launch Claude Code (or any terminal-based AI tool) in a `wsh` session, feed it tasks, monitor its progress, approve or reject its actions, and collect results. It can run multiple instances in parallel across separate sessions, coordinating a fleet of AI workers.
+
+*Providing live assistance:* An agent can watch a human's terminal session in real time, understand what they're doing, and proactively offer help -- rendering suggestions as overlays directly in the terminal, or intercepting input to offer contextual menus.
+
+*Auditing and monitoring:* An agent can observe all terminal activity across sessions, flagging security concerns, logging commands for compliance, or alerting on anomalous behavior.
+
+*End-to-end automation:* An agent can set up an entire development environment: install dependencies, configure services, run tests, troubleshoot failures, and produce a step-by-step guide of everything it did -- all through interactive terminal sessions, handling every prompt and error along the way.
+
+**Multiple Sessions, Parallel Work**
+
+`wsh` operates in two modes:
+
+- **Standalone mode**: One `wsh` process, one session, attached to your terminal. Simple. Immediate.
+- **Server mode**: A headless daemon managing multiple named sessions. Agents can create sessions on demand, run work in parallel, and tear them down when done.
+
+Server mode is where the co-processor vision comes alive. An agent can spin up a dozen sessions, run different tasks in each, monitor progress across all of them, and report results -- while the human continues working in their own terminal undisturbed.
+
+---
+
+## Skills: Teaching AI What It Can Do
+
+`wsh` provides the infrastructure -- the API, the sessions, the state machine. But AI agents also need to know *how* to use that infrastructure effectively. This is where **skills** come in.
+
+Skills are structured knowledge documents that teach AI agents the patterns, techniques, and strategies for using `wsh` to accomplish specific tasks. They're not code libraries -- they're expertise, packaged for AI consumption.
+
+### Why Skills Matter
+
+An AI agent with raw API access can technically do anything. But without guidance, it will fumble. It won't know the send-wait-read loop. It won't know to wait for quiescence before reading the screen. It won't know how to detect that a TUI has finished loading, or how to navigate a menu, or how to safely operate a destructive command.
+
+Skills encode this operational knowledge:
+
+| Skill | What It Teaches |
+|-------|-----------------|
+| **Core** | The API primitives and the fundamental send/wait/read/decide loop |
+| **Drive Process** | Running CLI commands, handling prompts, detecting errors and exit codes |
+| **TUI** | Operating full-screen applications (vim, htop, lazygit, k9s) |
+| **Multi-Session** | Creating and managing parallel sessions for concurrent work |
+| **Agent Orchestration** | Driving other AI agents through their terminal interfaces |
+| **Monitor** | Watching human terminal activity and reacting to events |
+| **Visual Feedback** | Using overlays and panels to communicate with users |
+| **Input Capture** | Intercepting keyboard input for dialogs, approvals, and menus |
+| **Generative UI** | Building dynamic, interactive terminal experiences |
+
+### Skills as a Platform
+
+Anyone can author skills for `wsh`. The skill format is AI-native: plain text documents that describe *what* to do, not *how* to call an API. This means skills are portable across protocols (HTTP, MCP, etc.) and can be consumed by any AI agent that can read.
+
+Examples of skills that could be built:
+
+- **Claude Code Orchestrator**: Drive multiple Claude Code instances to work on different parts of a codebase in parallel
+- **Environment Setup**: Configure a new machine with a full development stack, interactively handling every installer and configuration prompt
+- **Security Auditor**: Monitor terminal sessions for credential exposure, dangerous commands, or policy violations
+- **Contextual Helper**: Watch what the user is doing and overlay relevant documentation, suggestions, or warnings
+- **Local AI Setup**: Install and configure local AI tools (image generation, embeddings, etc.), test everything end-to-end, and produce a user guide
+
+Skills turn `wsh` from an API into a *capability platform*. The API gives agents hands. Skills give them expertise.
+
+---
+
+## Terminal Emulation
 
 **The State Machine**
 
 `wsh` maintains a complete terminal state machine. Every byte from the PTY is parsed and interpreted: ANSI escape sequences, control characters, UTF-8 text, OSC codes, mouse events. The result is a structured representation of the terminal's state at any moment:
 
-- **Scrollback buffer**: All output history in normal mode, stored as styled text spans
+- **Scrollback buffer**: All output history, stored as styled text spans
 - **Alternate screen buffer**: The fixed-grid screen used by full-screen TUIs (vim, htop, etc.)
 - **Cursor state**: Position, visibility, style
 - **Text attributes**: Current foreground/background colors, bold, italic, underline, etc.
 - **Mode flags**: Alternate screen active, bracketed paste mode, mouse reporting mode, etc.
 
-This state machine lives in the Rust backend. It's the single source of truth. Frontends don't interpret raw terminal output - they receive structured state and render it appropriately.
+This state machine is the single source of truth. API clients don't interpret raw terminal output -- they receive structured data and use it however they need.
 
-**Two Rendering Modes**
-
-The web UI operates in two distinct modes, switching automatically based on terminal state:
-
-**Normal Mode** (default):
-- Renders scrollback as styled HTML elements (`<div>`, `<span>` with CSS)
-- Text reflows naturally to fit viewport width
-- Native browser scrolling - no scroll hijacking
-- Touch-friendly text selection using native browser capabilities
-- Carriage returns, backspaces, and line-local cursor movement update the current line in place
-
-**Alternate Screen Mode** (for TUIs):
-- Activated when the terminal enters alternate screen (`\e[?1049h`)
-- Renders as a fixed character grid sized to the session dimensions
-- Full cursor positioning and screen manipulation
-- When the program exits alternate screen, this view is discarded entirely
-- Scrollback resumes exactly where it left off - no TUI garbage in history
-
-The transition is seamless. Run `vim`, and the view switches to grid mode. Exit `vim`, and you're back to reflowing HTML with your full scrollback intact.
-
-**Supported Terminal Features**
+**Supported Features**
 
 - ANSI SGR (colors: 16, 256, true color; bold, italic, underline, inverse, strikethrough)
 - Cursor positioning and movement
@@ -158,7 +196,7 @@ The transition is seamless. Run `vim`, and the view switches to grid mode. Exit 
 - Mouse reporting (for tmux, vim, etc.)
 - Bracketed paste mode
 - Window title (OSC 0/2)
-- Clipboard integration (OSC 52) - passthrough to local terminal
+- Clipboard integration (OSC 52) -- passthrough to local terminal
 
 ---
 
@@ -168,15 +206,11 @@ The transition is seamless. Run `vim`, and the view switches to grid mode. Exit 
 
 `wsh` accepts input from multiple sources simultaneously:
 
-- The local terminal (your keyboard in alacritty)
-- The web UI (your phone's on-screen keyboard)
-- The API (agents, scripts, automation tools)
+- The local terminal (your keyboard)
+- The API (AI agents, automation scripts)
+- Future clients (web UI, voice interfaces)
 
-All input sources are equal. Keystrokes arrive at the PTY in the order they're received, regardless of origin. There's no concept of "primary" or "secondary" - every connected client can type, and every keystroke is immediately visible to all other clients.
-
-**No Conflict Resolution**
-
-What happens if you type on your phone while someone (or something) types at the local terminal? The keystrokes interleave. This is a deliberate non-design: in practice, you're only actively typing from one place at a time. The rare case of simultaneous input doesn't warrant complex locking, cursor ownership, or last-writer-wins semantics. The terminal has always been a single-cursor, single-input-stream interface. `wsh` keeps it that way - it just allows that input stream to originate from anywhere.
+All input sources are equal. Keystrokes arrive at the PTY in the order they're received, regardless of origin. There's no concept of "primary" or "secondary" -- every connected client can type, and every keystroke is immediately visible to all other clients.
 
 **Real-Time Output Distribution**
 
@@ -186,15 +220,15 @@ Output flows the opposite direction with the same philosophy:
 2. `wsh` reads from PTY master
 3. `wsh` updates internal terminal state
 4. `wsh` broadcasts to all connected clients:
-   - Raw bytes forwarded to local terminal (alacritty)
-   - Structured state updates pushed via WebSocket to web clients
-   - Events emitted to API subscribers
+   - Raw bytes forwarded to local terminal
+   - Structured state updates pushed via WebSocket to API clients
+   - Events emitted to subscribers
 
-Latency is minimal. A keystroke on your phone appears in alacritty instantly. Output from a command appears on your phone as fast as your network allows.
+Latency is minimal. An agent's keystroke appears in your terminal instantly. Output from a command reaches the agent as fast as the local socket allows.
 
 **Connection Resilience**
 
-The web UI is a stateless view into `wsh`'s state. If your phone loses connectivity and reconnects, it simply re-fetches the current terminal state and scrollback - no session corruption, no desync. The PTY session is owned by `wsh`, not by any individual client. Clients come and go; the session persists.
+API clients are stateless views into `wsh`'s state. If a client disconnects and reconnects, it simply re-fetches the current terminal state and scrollback -- no session corruption, no desync. The PTY session is owned by `wsh`, not by any individual client. Clients come and go; the session persists.
 
 ---
 
@@ -202,259 +236,78 @@ The web UI is a stateless view into `wsh`'s state. If your phone loses connectiv
 
 **The Stakes**
 
-`wsh` exposes terminal access over a network. A compromised `wsh` instance means arbitrary command execution on your machine. Security isn't optional - it's existential.
+`wsh` exposes terminal access via an API. A compromised `wsh` instance means arbitrary command execution on your machine. Security is existential.
 
 **Defense in Depth**
 
-The security model has multiple layers:
+**Layer 1: Localhost by Default**
 
-**Layer 1: Bind Address Defaults**
-
-By default, `wsh` binds to `127.0.0.1` (localhost only). The API and web UI are accessible only from the local machine. To access remotely, you must explicitly bind to another address:
+By default, `wsh` binds to `127.0.0.1` only. The API is accessible only from the local machine. To expose it remotely, you must explicitly bind to another address.
 
 ```bash
 wsh                          # localhost:8080, no remote access
 wsh --bind 0.0.0.0:8080      # all interfaces, requires auth
-wsh --bind 192.168.1.50:9000 # specific interface, requires auth
 ```
-
-If you're binding to localhost, you presumably already have local access to the machine. No additional authentication is required - it would be security theater.
 
 **Layer 2: Token Authentication**
 
-When binding to any non-localhost address, `wsh` requires a bearer token for all API and WebSocket connections. On startup, `wsh` either:
-
-- Generates a random token and prints it to the terminal
-- Accepts a user-provided token via `--token` or environment variable
-
-The web UI prompts for this token before connecting. API clients must include it in their requests. No token, no access.
+When binding to any non-localhost address, `wsh` requires a bearer token for all API and WebSocket connections. On startup, `wsh` either generates a random token or accepts one via `--token` or environment variable.
 
 **Layer 3: Your Network, Your Responsibility**
 
-`wsh` provides authentication, not encryption. For remote access over untrusted networks, you should use:
-
-- **SSH tunneling**: `ssh -L 8080:localhost:8080 yourserver`, then connect to localhost
-- **Tailscale/WireGuard**: Access your machine over an encrypted mesh VPN
-- **Reverse proxy with TLS**: Put `wsh` behind nginx/caddy with HTTPS
-
-This is intentional. `wsh` doesn't bundle a TLS implementation or certificate management - that's infrastructure you likely already have. Keep the tool simple; compose it with your existing security stack.
+`wsh` provides authentication, not encryption. For remote access, compose it with your existing security stack: SSH tunneling, Tailscale/WireGuard, or a reverse proxy with TLS.
 
 ---
 
-## Web User Interface
+## Web UI
 
-**Design Philosophy**
+`wsh` ships with a web-based terminal client as one demonstration of the API's power. It connects over WebSocket and renders terminal state using web-native technologies -- reflowing HTML in normal mode, fixed character grid for full-screen TUIs.
 
-The web UI is not a terminal emulator trapped in a browser. It's a native web application that happens to display terminal content. Every design decision asks: "What would a web-first interface do here?"
+The web UI is designed for mobile: native scrolling, touch-friendly text selection, a modifier bar for special keys (Ctrl, Esc, arrows), and responsive layout. It's a production-quality interface for accessing your terminal from a phone or tablet.
 
-**Layout**
-
-The interface is minimal:
-
-- **Main content area**: Terminal output rendered as styled HTML (normal mode) or a character grid (alternate screen mode)
-- **Input area**: A text field at the bottom for composing input, with the system keyboard
-- **Modifier bar**: A compact row of buttons for special keys (Esc, Tab, Ctrl, Alt, arrow keys)
-- **Overflow menu**: Expand button for less common keys and modifiers
-
-No chrome. No sidebars. No tabs (in standalone mode). The terminal content dominates the viewport.
-
-**Mobile-First Interactions**
-
-- **Native scrolling**: Swipe to scroll through history. No scroll hijacking. The browser's scrollbar works normally.
-- **Native text selection**: Long-press to select text. Drag handles work. Copy via system menu.
-- **System keyboard**: Tap the input area to bring up your phone's keyboard. Autocorrect and predictive text work normally. Text is sent on Enter (or character-by-character for interactive programs - configurable).
-- **Responsive sizing**: The UI adapts to viewport size. On a phone, you see fewer columns but readable text. No horizontal scrolling in normal mode.
-
-**The Modifier Bar**
-
-Mobile keyboards lack Ctrl, Alt, Esc, and function keys. A persistent toolbar provides these:
-
-```
-[ Esc ] [ Tab ] [ Ctrl ] [ Alt ] [ ↑ ] [ ↓ ] [ ← ] [ → ] [ ⋯ ]
-```
-
-Tap `Ctrl`, then type `c` = sends Ctrl+C. The `⋯` button expands to reveal less common keys (function keys, Super, etc.). The bar is compact enough to remain visible without consuming excessive screen space.
-
-**Desktop Experience**
-
-On a desktop browser, the UI works identically but assumes a physical keyboard is available. The modifier bar remains accessible for touchscreen laptops or convenience, but keyboard shortcuts work natively.
-
----
-
-## Future Roadmap
-
-**The Path Forward**
-
-`wsh` v1 delivers the core: a transparent PTY wrapper with an API, bundled with a production-quality web UI. But the architecture is designed to grow. Here's where it goes next.
-
-**Follow-up Package: Server Mode**
-
-The initial release runs in standalone mode - one `wsh` invocation, one session, one web UI. Server mode introduces a persistent daemon:
-
-- A background service manages multiple `wsh` sessions
-- New `wsh` invocations register with the daemon instead of running independently
-- The web UI presents a session list - switch between active sessions with a tap
-- Sessions persist even when the originating terminal disconnects
-
-This transforms `wsh` from a tool you run into infrastructure you rely on.
-
-**Follow-up Package: Voice Integration**
-
-Mobile interaction shouldn't require typing. Voice integration adds:
-
-- **Speech-to-text input**: Speak a command, have it transcribed and sent to the terminal
-- **Text-to-speech output**: Terminal output summarized and spoken aloud
-- Native integration with platform voice services (Web Speech API, system dictation)
-
-Voice is inherently high-level. Saying "approve" is easier than finding the `y` key on a phone keyboard.
-
-**Follow-up Package: Agent Hooks**
-
-The API already exposes terminal I/O to external consumers. Agent hooks formalize this:
-
-- **MCP-style interface**: Expose terminal state and input capabilities via Model Context Protocol or similar
-- **Structured events**: Semantic notifications like "command completed," "prompt detected," "approval requested"
-- **Agent middleware**: Allow AI agents to observe, summarize, filter, and respond to terminal activity
-
-Imagine an agent that watches your Claude Code session, summarizes what it's doing, and asks you via voice notification whether to approve a file edit - while you're away from your desk.
-
-**Follow-up Package: Gesture Input**
-
-For power users on mobile, gestures provide faster access to common operations:
-
-- Swipe patterns for Esc, Ctrl+C, Ctrl+D
-- Long-press modifiers
-- Customizable gesture mappings
-
-Gestures complement rather than replace the modifier bar - an optimization for those who want it.
-
-**Follow-up Package: Plugin Architecture**
-
-Context-aware enhancements without tight coupling:
-
-- Plugins can detect specific programs (tmux, Claude Code) and offer tailored UI
-- Quick-action buttons that appear only when relevant
-- Custom rendering for recognized output patterns
-
-This is deliberately last. The core must be solid and context-agnostic before we layer intelligence on top.
+But architecturally, it's just another API client -- no different from an AI agent or an automation script. It demonstrates what `wsh` makes possible; it is not the point.
 
 ---
 
 ## Why Not Use...
 
-**The Landscape**
+Every existing terminal-sharing tool asks the same question: *"How do I put a terminal in a browser?"*
 
-Terminal-over-web isn't a new idea. Several tools exist in this space. But they all share a common assumption: the goal is to *view and interact with* a terminal remotely. `wsh` has a different premise: the goal is to *expose terminal I/O as a service* that arbitrary consumers - humans, web UIs, agents, security tools, automation - can hook into.
+`wsh` asks a different question: *"How do I expose terminal I/O to anything that wants to consume or produce it?"*
 
-### The Fundamental Difference
+This isn't a subtle distinction. Existing tools are *viewers*. `wsh` is a *platform*. The API is the product.
 
-Every existing tool asks: "How do I put a terminal in a browser?"
-
-`wsh` asks: "How do I expose terminal input and output to anything that wants to consume or produce it?"
-
-This isn't a subtle distinction. It's architectural. Existing tools are *viewers*. `wsh` is a *platform*. The web UI is one client. An AI agent watching your session is another. A security monitor scanning for credential leaks is another. An MCP server exposing your terminal to Claude is another. They all connect to the same API, receiving the same state, able to inject the same input.
-
-No existing tool does this.
-
-### Web Terminal Tools
-
-**ttyd / gotty / wetty**
-
-These are the most direct comparisons for the web UI specifically.
-
-- *What they do*: Spawn a shell, attach xterm.js in the browser, bridge input/output over WebSocket
-- *Why not*: They're exactly the "terminal emulator in a browser" problem. Fixed grid, scroll hijacking, hostile to mobile. No bidirectional sync with a local terminal - you use the web UI *instead of* your terminal, not *alongside* it. And critically: **no API**. You can't hook an agent into ttyd. You can't query terminal state programmatically. It's a viewer, not a service.
-
-**Domterm**
-
-A terminal emulator that renders using HTML/CSS instead of a character grid.
-
-- *What they do*: Replace your terminal emulator entirely with a web-technology-based one
-- *Why not*: You must replace alacritty/kitty/your terminal. No bidirectional sync - it *is* the terminal. And again: **no API exposure**. Domterm solves the rendering problem but doesn't expose terminal I/O as a service for agents or tooling.
-
-**shellinabox**
-
-An older web terminal with HTML rendering.
-
-- *What they do*: Pre-xterm.js web terminal
-- *Why not*: Dated, unmaintained, no mobile optimization, no local terminal sync, **no API**. A historical curiosity.
-
-### Terminal Sharing / Collaboration
-
-**tmate / teleconsole / upterm**
-
-These focus on sharing your terminal with other humans.
-
-- *What they do*: Create tunneled connections so others can view/control your terminal
-- *Why not*: Different use case. They're about *sharing*, not *exposing as a service*. Traditional terminal rendering. **No programmatic API** - a human must be on the other end, not an agent.
-
-### Persistent Connections
-
-**Mosh / Eternal Terminal**
-
-These solve connection reliability over unreliable networks.
-
-- *What they do*: Better-than-SSH protocols for roaming and intermittent connectivity
-- *Why not*: Great technology, wrong problem. Still a traditional terminal experience with a human at a keyboard. **No API**. You can't hook an AI agent into Mosh.
-
-### Tmux Integration
-
-**tmux control mode (-CC)**
-
-Tmux can expose its state in a machine-readable format.
-
-- *What they do*: Structured protocol for querying and controlling tmux
-- *Why not*: Tmux-specific - doesn't work for non-tmux sessions. Requires a custom client that speaks the protocol. No web UI. But more importantly: it's designed for IDE integration (iTerm2), not for arbitrary consumers. You couldn't easily hook an MCP server or AI agent into tmux control mode without significant custom work.
-
-### Low-Level Building Blocks
-
-**node-pty / portable-pty / websocketd / socat**
-
-Libraries and tools for PTY management and stream bridging.
-
-- *What they do*: Provide primitives - allocate PTYs, bridge streams to WebSockets
-- *Why not*: They're building blocks. You'd use these *to build* `wsh`. websocketd can pipe a PTY to a WebSocket, but you get raw bytes - no state management, no escape sequence parsing, no structured API, no ability to query "what's on screen right now?" or "is the terminal in alternate screen mode?" The intelligence is missing.
-
-### IDEs with Terminals
-
-**code-server / JupyterLab / Theia**
-
-Full development environments with embedded terminals.
-
-- *What they do*: Bring VS Code or Jupyter to the web, with xterm.js terminals included
-- *Why not*: The terminal is a feature, not the focus. Same xterm.js problems. And **no external API** - you can't hook an agent into the VS Code terminal from outside VS Code.
-
-### Agent / AI Tooling
-
-**Nothing.**
-
-This is the gap. Where is the tool that lets you:
-
-- Start a terminal session
-- Expose a structured API over WebSocket/HTTP
-- Query: "What is the current screen content?"
-- Query: "What's in the scrollback buffer?"
-- Subscribe: "Notify me when output contains 'error'"
-- Inject: "Send these keystrokes"
-- All while your local terminal continues to work normally?
-
-This tool doesn't exist. If you want to connect Claude to your terminal via MCP, you're writing custom code. If you want a security agent monitoring your session for credential leaks, you're writing custom code. If you want a voice interface that can read terminal output and send spoken commands, you're writing custom code.
-
-`wsh` is the missing infrastructure. The API is the product. The web UI is a proof of capability.
-
-### Summary
-
-| Tool | Web UI | Mobile-Native | Local Sync | Programmatic API | Agent-Ready |
-|------|--------|---------------|------------|------------------|-------------|
-| ttyd/gotty | Yes | No | No | No | No |
-| Domterm | Yes | No | No | No | No |
-| tmate/upterm | Yes | No | No | No | No |
+| Tool | Programmatic API | Agent-Ready | Local Sync | Multi-Session | Web UI |
+|------|------------------|-------------|------------|---------------|--------|
+| ttyd/gotty | No | No | No | No | Yes |
+| Domterm | No | No | No | No | Yes |
+| tmate/upterm | No | No | No | No | Yes |
 | Mosh/et | No | No | No | No | No |
-| tmux -CC | No | No | Partial | Partial | No |
-| code-server | Yes | No | No | No | No |
-| **wsh** | Yes | Yes | Yes | Yes | Yes |
+| tmux -CC | Partial | No | Partial | Yes | No |
+| code-server | No | No | No | No | Yes |
+| **wsh** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** |
 
-If a tool that does this already exists, we haven't found it. If you have, please tell us before we write any more code.
+The critical columns are the first two. No existing tool provides a structured, programmable API for terminal I/O that AI agents can use. `wsh` is the missing infrastructure.
+
+---
+
+## Roadmap
+
+**Now: The API Platform**
+
+The core is built: PTY management, terminal state machine, HTTP/WebSocket API, session management, overlays, panels, input capture, quiescence detection. AI agents can drive interactive terminal sessions today.
+
+**Next: Richer Agent Capabilities**
+
+- **MCP integration**: Expose `wsh` as an MCP server so AI assistants can discover and use terminal sessions natively
+- **Structured events**: Semantic notifications -- "command completed," "prompt detected," "approval requested" -- layered on top of raw terminal output
+- **Agent middleware**: Allow agents to observe, filter, transform, and respond to terminal activity through composable hooks
+
+**Future: New Modalities**
+
+- **Voice integration**: Speech-to-text input and text-to-speech output summaries for hands-free terminal interaction
+- **Web UI enhancements**: Session switching, gesture input, plugin architecture for context-aware UI
+- **Distributed operation**: Manage `wsh` sessions across multiple machines from a single control plane
 
 ---
 
@@ -462,21 +315,21 @@ If a tool that does this already exists, we haven't found it. If you have, pleas
 
 **What `wsh` Is**
 
-`wsh` is a transparent PTY wrapper that exposes terminal I/O via an API. It sits invisibly between your terminal emulator and your shell, capturing everything, exposing everything, while changing nothing about your native terminal experience.
+`wsh` is an API for your terminal. It sits transparently between your terminal emulator and your shell, capturing all I/O, maintaining structured state, and exposing everything through HTTP and WebSocket. Your terminal works exactly as before. But now AI agents can see what you see, type what's needed, and interact with programs the way a human does.
 
-The bundled web UI demonstrates the power of this architecture: a mobile-friendly, web-native interface to your terminal that stays perfectly synchronized with your local session. But the web UI is just one client. The API enables agents, voice interfaces, security tools, automation scripts, and applications we haven't imagined yet.
+The terminal is the fundamental UI of the modern computer. `wsh` makes it programmable -- turning AI into a co-processor for both the machine and the human operating it.
 
 **What `wsh` Is Not**
 
 - Not a new terminal emulator (use alacritty, kitty, whatever you love)
 - Not a tmux replacement (use tmux inside `wsh` if you want)
 - Not a remote desktop solution (it's terminal-specific by design)
-- Not a security product (it provides authentication; you provide encryption)
+- Not just a web terminal (the web UI is one client among many)
 
 **The Vision**
 
-Today: run `wsh`, open the web UI on your phone, interact with Claude Code while away from your desk.
+Today: AI agents drive interactive terminal sessions -- running builds, operating TUIs, orchestrating other AI tools, providing live help -- through a structured API.
 
-Tomorrow: speak to an agent that watches your terminal, summarizes activity, and executes your intent - the terminal as a voice-controlled service.
+Tomorrow: `wsh` becomes the default interface between AI and computers. Every shell session is a `wsh` session. Agents and humans share the terminal as co-processors, each contributing what they do best.
 
-The terminal protocol has survived for fifty years because it's simple, universal, and composable. `wsh` doesn't replace it. `wsh` opens it up to the modern world.
+The terminal protocol has survived for fifty years because it's simple, universal, and composable. `wsh` doesn't replace it. `wsh` opens it up to AI.
