@@ -95,6 +95,10 @@ thinking phases. Use longer timeouts (10-30 seconds) and
 always read the screen to distinguish "thinking" from
 "waiting for input."
 
+When re-polling, use `last_generation` or `fresh=true` to
+avoid busy-loop storms where the server responds immediately
+because nothing has changed since the last check.
+
 ## Feeding Tasks
 
 Keep instructions clear and self-contained. The agent can't

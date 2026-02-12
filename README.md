@@ -191,6 +191,7 @@ curl -s http://localhost:8080/sessions/default/screen | jq .
 curl -s 'http://localhost:8080/sessions/default/scrollback?offset=0&limit=50' | jq .
 
 # Wait for terminal to be idle for 500ms (with 10s deadline)
+# Response includes a "generation" counter for efficient re-polling
 curl -s 'http://localhost:8080/sessions/default/quiesce?timeout_ms=500&max_wait_ms=10000' | jq .
 
 # Connect to raw WebSocket

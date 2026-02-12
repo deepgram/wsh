@@ -165,11 +165,11 @@ async fn handle_ws_json(
     // Input subscription (lazily created when EventType::Input is subscribed)
     let mut input_rx: Option<tokio::sync::broadcast::Receiver<crate::input::InputEvent>> = None;
 
-    // Pending await_quiesce: (request_id, future resolving to true=quiescent/false=timeout)
+    // Pending await_quiesce: (request_id, format, future resolving to Some(generation) or None on timeout)
     let mut pending_quiesce: Option<(
         Option<serde_json::Value>,
         crate::parser::state::Format,
-        std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>>,
+        std::pin::Pin<Box<dyn std::future::Future<Output = Option<u64>> + Send>>,
     )> = None;
 
     // Quiescence subscription: background task signals through this channel
@@ -242,7 +242,7 @@ async fn handle_ws_json(
                 }
             } => {
                 let (req_id, format, _) = pending_quiesce.take().unwrap();
-                if result {
+                if let Some(generation) = result {
                     // Quiescent — query screen and return
                     if let Ok(crate::parser::state::QueryResponse::Screen(screen)) = session
                         .parser
@@ -256,6 +256,7 @@ async fn handle_ws_json(
                             serde_json::json!({
                                 "screen": screen,
                                 "scrollback_lines": scrollback_lines,
+                                "generation": generation,
                             }),
                         );
                         if let Ok(json) = serde_json::to_string(&resp) {
@@ -370,8 +371,8 @@ async fn handle_ws_json(
                                                 if watch_rx.changed().await.is_err() {
                                                     break;
                                                 }
-                                                // Wait for quiescence
-                                                activity.wait_for_quiescence(timeout).await;
+                                                // Wait for quiescence (None: already gated on changed())
+                                                activity.wait_for_quiescence(timeout, None).await;
                                                 // Signal the main loop
                                                 if tx.send(()).await.is_err() {
                                                     break;
@@ -434,18 +435,29 @@ async fn handle_ws_json(
                                     let timeout = std::time::Duration::from_millis(params.timeout_ms);
                                     let format = params.format;
                                     let activity = session.activity.clone();
+                                    let last_generation = params.last_generation;
+                                    let fresh = params.fresh;
 
-                                    let fut: std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>> = if let Some(max_wait) = params.max_wait_ms {
+                                    let fut: std::pin::Pin<Box<dyn std::future::Future<Output = Option<u64>> + Send>> = if let Some(max_wait) = params.max_wait_ms {
                                         let deadline = std::time::Duration::from_millis(max_wait);
                                         Box::pin(async move {
-                                            tokio::time::timeout(deadline, activity.wait_for_quiescence(timeout))
+                                            let inner = if fresh {
+                                                futures::future::Either::Left(activity.wait_for_fresh_quiescence(timeout))
+                                            } else {
+                                                futures::future::Either::Right(activity.wait_for_quiescence(timeout, last_generation))
+                                            };
+                                            tokio::time::timeout(deadline, inner)
                                                 .await
-                                                .is_ok()
+                                                .ok()
                                         })
                                     } else {
                                         Box::pin(async move {
-                                            activity.wait_for_quiescence(timeout).await;
-                                            true
+                                            let gen = if fresh {
+                                                activity.wait_for_fresh_quiescence(timeout).await
+                                            } else {
+                                                activity.wait_for_quiescence(timeout, last_generation).await
+                                            };
+                                            Some(gen)
                                         })
                                     };
 
@@ -1149,6 +1161,15 @@ pub(super) struct QuiesceQuery {
     format: Format,
     #[serde(default = "default_max_wait")]
     max_wait_ms: u64,
+    /// Generation from a previous quiescence response. If provided and matches
+    /// the current generation, the server waits for new activity before
+    /// checking quiescence — preventing a busy-loop storm.
+    last_generation: Option<u64>,
+    /// When true, always observe at least `timeout_ms` of real silence before
+    /// responding, even if the terminal is already idle. Trades latency for
+    /// API simplicity (no generation tracking required).
+    #[serde(default)]
+    fresh: bool,
 }
 
 fn default_max_wait() -> u64 {
@@ -1164,10 +1185,17 @@ pub(super) async fn quiesce(
     let timeout = std::time::Duration::from_millis(params.timeout_ms);
     let deadline = std::time::Duration::from_millis(params.max_wait_ms);
 
-    let quiesce_fut = session.activity.wait_for_quiescence(timeout);
+    let activity = &session.activity;
+    let quiesce_fut = if params.fresh {
+        futures::future::Either::Left(activity.wait_for_fresh_quiescence(timeout))
+    } else {
+        futures::future::Either::Right(
+            activity.wait_for_quiescence(timeout, params.last_generation),
+        )
+    };
 
     match tokio::time::timeout(deadline, quiesce_fut).await {
-        Ok(()) => {
+        Ok(generation) => {
             // Quiescent — query screen state
             let response = session
                 .parser
@@ -1181,6 +1209,7 @@ pub(super) async fn quiesce(
                     Ok(Json(serde_json::json!({
                         "screen": screen,
                         "scrollback_lines": scrollback_lines,
+                        "generation": generation,
                     })))
                 }
                 _ => Err(ApiError::ParserUnavailable),

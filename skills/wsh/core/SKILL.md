@@ -63,9 +63,19 @@ working without producing output.
 
     curl -s http://localhost:8080/quiesce?timeout_ms=2000
 
-Returns the current screen snapshot once idle. Returns 408 if the
-terminal doesn't settle within 30 seconds (configurable via
-`max_wait_ms`).
+Returns the current screen snapshot plus a `generation` counter once
+idle. Returns 408 if the terminal doesn't settle within 30 seconds
+(configurable via `max_wait_ms`).
+
+When polling repeatedly, pass back the `generation` from the previous
+response as `last_generation` to avoid busy-loop storms:
+
+    curl -s 'http://localhost:8080/quiesce?timeout_ms=2000&last_generation=42'
+
+Or use `fresh=true` to always observe real silence (simpler, but
+always waits at least `timeout_ms`):
+
+    curl -s 'http://localhost:8080/quiesce?timeout_ms=2000&fresh=true'
 
 ### Read the Screen
 Get the current visible screen contents.
