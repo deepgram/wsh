@@ -128,11 +128,20 @@ The `parsed` field attempts to identify the key from raw bytes:
 When the key cannot be identified (multi-byte sequences, non-standard
 terminals), `parsed` is `null` and you can fall back to inspecting `raw`.
 
-## Escape Hatch
+## Keyboard Toggle
 
-The `Ctrl+\` key combination is treated as an escape hatch. Even in capture
-mode, it is handled specially to allow the user to regain control if an API
-client has captured input and become unresponsive.
+The `Ctrl+\` key combination **toggles** input capture mode. Pressing it
+switches from passthrough to capture, or from capture back to passthrough.
+`Ctrl+\` is never forwarded to the PTY — it is always consumed by wsh.
+
+This gives the user a physical escape hatch: if an agent has captured input
+and become unresponsive, the user presses `Ctrl+\` to regain control. It also
+gives agents a signal when the user *wants* to interact — entering capture mode
+manually is a hint that the user is seeking agent attention.
+
+In server mode (attached client), double-tapping `Ctrl+\` detaches from the
+session. Each press still toggles capture mode on the server (so two rapid
+presses cancel out, leaving capture mode unchanged after re-attach).
 
 ## Example: Approval Workflow
 

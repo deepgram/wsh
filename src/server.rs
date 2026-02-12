@@ -388,6 +388,9 @@ async fn run_streaming<S: AsyncRead + AsyncWrite + Unpin>(
     let parser = session.parser.clone();
     let activity = session.activity.clone();
     let terminal_size = session.terminal_size.clone();
+    let input_mode = session.input_mode.clone();
+    let input_broadcaster = session.input_broadcaster.clone();
+    let focus = session.focus.clone();
     let mut detach_rx = session.detach_signal.subscribe();
 
     // Main loop: read from client and session output concurrently
@@ -420,7 +423,25 @@ async fn run_streaming<S: AsyncRead + AsyncWrite + Unpin>(
                     Ok(f) => {
                         match f.frame_type {
                             FrameType::StdinInput => {
+                                let data = &f.payload;
+                                let mode = input_mode.get();
+                                let target = focus.focused();
+                                input_broadcaster.broadcast_input(data, mode, target);
                                 activity.touch();
+
+                                // Ctrl+\ toggles input capture; never forwarded to PTY
+                                if crate::input::is_ctrl_backslash(data) {
+                                    let new_mode = input_mode.toggle();
+                                    input_broadcaster.broadcast_mode(new_mode);
+                                    tracing::debug!("Ctrl+\\ pressed, toggled to {new_mode:?} mode");
+                                    continue;
+                                }
+
+                                // In capture mode, don't forward to PTY
+                                if mode == crate::input::Mode::Capture {
+                                    continue;
+                                }
+
                                 if input_tx.send(f.payload).await.is_err() {
                                     break;
                                 }

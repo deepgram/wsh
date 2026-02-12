@@ -21,9 +21,17 @@ keystroke.
     # Do your thing — build a menu, ask a question, etc.
     release input       # give it back
 
-While captured, the human can always press Ctrl+\ to
-force-release. This is a safety valve — never disable it,
-never tell the human to avoid it. It's their escape hatch.
+The human can press Ctrl+\ at any time to **toggle** input
+capture. If input is in passthrough mode, Ctrl+\ enters
+capture. If input is already captured, Ctrl+\ releases it.
+This is a physical toggle — never disable it, never tell
+the human to avoid it. It's their escape hatch.
+
+When the human presses Ctrl+\ to *enter* capture mode
+manually, this is a signal that they want to interact with
+you. If you don't already have overlays or panels visible,
+this is your cue to create UI elements and engage.
+Subscribe to mode change events to detect this.
 
 ## Reading Captured Input
 
@@ -263,14 +271,20 @@ still in the same capture session. Design your flows
 to be flat: capture once, do your multi-step dialog,
 release once.
 
-### Remember Ctrl+\
-The human can force-release at any time with Ctrl+\.
+### Remember Ctrl+\ Toggles
+The human can toggle capture at any time with Ctrl+\.
 Your code must handle this gracefully. If you're
 mid-dialog and input is suddenly released:
 - Your WebSocket will stop receiving input events
+  in capture mode
 - Your overlay is still showing a stale prompt
 - Clean up: remove the overlay, abandon the flow
 - Don't re-capture without the human's consent
+
+Conversely, if the human presses Ctrl+\ to *enter*
+capture mode and you have no UI, consider this an
+invitation to engage — create appropriate overlays
+or panels and start interacting.
 
 Check the input mode if you're unsure whether you
 still have capture.

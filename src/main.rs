@@ -707,10 +707,11 @@ fn spawn_stdin_reader(
                     input_broadcaster.broadcast_input(data, mode, target);
                     activity.touch();
 
-                    if input::is_ctrl_backslash(data) && mode == input::Mode::Capture {
-                        input_mode.release();
-                        input_broadcaster.broadcast_mode(input::Mode::Passthrough);
-                        tracing::debug!("Ctrl+\\ pressed, switching to passthrough mode");
+                    // Ctrl+\ toggles input capture; never forwarded to PTY
+                    if input::is_ctrl_backslash(data) {
+                        let new_mode = input_mode.toggle();
+                        input_broadcaster.broadcast_mode(new_mode);
+                        tracing::debug!("Ctrl+\\ pressed, toggled to {new_mode:?} mode");
                         continue;
                     }
 

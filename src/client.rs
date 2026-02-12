@@ -242,10 +242,14 @@ async fn streaming_loop(
     stdin_rx: &mut tokio::sync::mpsc::Receiver<Bytes>,
     sigwinch_rx: &mut tokio::sync::mpsc::Receiver<(u16, u16)>,
 ) -> io::Result<()> {
-    // Ctrl+\ double-tap detection state
-    let mut pending_ctrl_backslash = false;
-    let ctrl_backslash_timer = tokio::time::sleep(std::time::Duration::from_millis(500));
-    tokio::pin!(ctrl_backslash_timer);
+    // Ctrl+\ double-tap detection for detach.
+    // Each Ctrl+\ is forwarded to the server immediately (the server toggles
+    // input capture mode). If a second Ctrl+\ arrives within the timeout,
+    // we also detach. Two rapid toggles cancel out, leaving capture mode
+    // unchanged after re-attach.
+    let mut pending_detach = false;
+    let detach_timer = tokio::time::sleep(std::time::Duration::from_millis(500));
+    tokio::pin!(detach_timer);
 
     loop {
         tokio::select! {
@@ -254,27 +258,26 @@ async fn streaming_loop(
                 match data {
                     Some(data) => {
                         if crate::input::is_ctrl_backslash(&data) {
-                            if pending_ctrl_backslash {
+                            // Always forward immediately — server handles the toggle
+                            let frame = Frame::data(FrameType::StdinInput, data);
+                            if frame.write_to(&mut writer).await.is_err() {
+                                break;
+                            }
+
+                            if pending_detach {
                                 // Double-tap: detach
                                 let detach = Frame::new(FrameType::Detach, Bytes::new());
                                 let _ = detach.write_to(&mut writer).await;
                                 break;
                             } else {
-                                // First tap: buffer it, start timer
-                                pending_ctrl_backslash = true;
-                                ctrl_backslash_timer.as_mut().reset(
+                                // Start double-tap timer
+                                pending_detach = true;
+                                detach_timer.as_mut().reset(
                                     tokio::time::Instant::now() + std::time::Duration::from_millis(500)
                                 );
                             }
                         } else {
-                            if pending_ctrl_backslash {
-                                // Flush the buffered Ctrl+\ first
-                                pending_ctrl_backslash = false;
-                                let flush = Frame::data(FrameType::StdinInput, Bytes::from_static(&[0x1c]));
-                                if flush.write_to(&mut writer).await.is_err() {
-                                    break;
-                                }
-                            }
+                            pending_detach = false;
                             let frame = Frame::data(FrameType::StdinInput, data);
                             if frame.write_to(&mut writer).await.is_err() {
                                 break;
@@ -282,11 +285,7 @@ async fn streaming_loop(
                         }
                     }
                     None => {
-                        // Stdin closed — flush buffered Ctrl+\ if pending, then detach
-                        if pending_ctrl_backslash {
-                            let flush = Frame::data(FrameType::StdinInput, Bytes::from_static(&[0x1c]));
-                            let _ = flush.write_to(&mut writer).await;
-                        }
+                        // Stdin closed — detach
                         let detach = Frame::new(FrameType::Detach, Bytes::new());
                         let _ = detach.write_to(&mut writer).await;
                         break;
@@ -335,13 +334,9 @@ async fn streaming_loop(
                 }
             }
 
-            // Ctrl+\ single-tap timeout — forward the buffered keystroke
-            () = &mut ctrl_backslash_timer, if pending_ctrl_backslash => {
-                pending_ctrl_backslash = false;
-                let flush = Frame::data(FrameType::StdinInput, Bytes::from_static(&[0x1c]));
-                if flush.write_to(&mut writer).await.is_err() {
-                    break;
-                }
+            // Ctrl+\ double-tap timeout expired — no detach
+            () = &mut detach_timer, if pending_detach => {
+                pending_detach = false;
             }
         }
     }
@@ -736,21 +731,41 @@ mod tests {
         stdin_tx.send(Bytes::from_static(&[0x1c])).await.unwrap();
         stdin_tx.send(Bytes::from_static(&[0x1c])).await.unwrap();
 
-        // Should receive a Detach frame (not two StdinInput frames)
-        let frame = tokio::time::timeout(
+        // Both Ctrl+\ are forwarded immediately as StdinInput, then Detach
+        let frame1 = tokio::time::timeout(
             std::time::Duration::from_secs(2),
             Frame::read_from(&mut server_stream),
         )
         .await
         .unwrap()
         .unwrap();
-        assert_eq!(frame.frame_type, FrameType::Detach);
+        assert_eq!(frame1.frame_type, FrameType::StdinInput);
+        assert_eq!(frame1.payload.as_ref(), &[0x1c]);
+
+        let frame2 = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            Frame::read_from(&mut server_stream),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(frame2.frame_type, FrameType::StdinInput);
+        assert_eq!(frame2.payload.as_ref(), &[0x1c]);
+
+        let frame3 = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            Frame::read_from(&mut server_stream),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(frame3.frame_type, FrameType::Detach);
 
         loop_handle.await.unwrap().unwrap();
     }
 
     #[tokio::test]
-    async fn test_ctrl_backslash_single_tap_timeout_forwards_keystroke() {
+    async fn test_ctrl_backslash_single_tap_forwarded_immediately() {
         let (client_stream, mut server_stream) = TokioUnixStream::pair().unwrap();
 
         let (reader, writer) = tokio::io::split(client_stream);
@@ -761,12 +776,11 @@ mod tests {
             streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx).await
         });
 
-        // Send a single Ctrl+\ and wait for the timeout
+        // Send a single Ctrl+\ — should be forwarded immediately (no delay)
         stdin_tx.send(Bytes::from_static(&[0x1c])).await.unwrap();
 
-        // After 500ms timeout, the keystroke should be forwarded
         let frame = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
+            std::time::Duration::from_millis(100),
             Frame::read_from(&mut server_stream),
         )
         .await
@@ -777,7 +791,6 @@ mod tests {
 
         // Clean up
         drop(stdin_tx);
-        // Expect Detach frame on stdin close
         let detach = tokio::time::timeout(
             std::time::Duration::from_secs(2),
             Frame::read_from(&mut server_stream),
@@ -804,11 +817,10 @@ mod tests {
 
         // Send Ctrl+\ followed by 'a'
         stdin_tx.send(Bytes::from_static(&[0x1c])).await.unwrap();
-        // Small delay to ensure ordering
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         stdin_tx.send(Bytes::from_static(b"a")).await.unwrap();
 
-        // Should receive the buffered Ctrl+\ first
+        // Ctrl+\ is forwarded immediately
         let frame1 = tokio::time::timeout(
             std::time::Duration::from_secs(2),
             Frame::read_from(&mut server_stream),
@@ -819,7 +831,7 @@ mod tests {
         assert_eq!(frame1.frame_type, FrameType::StdinInput);
         assert_eq!(frame1.payload.as_ref(), &[0x1c]);
 
-        // Then the 'a'
+        // Then the 'a' (resets double-tap state)
         let frame2 = tokio::time::timeout(
             std::time::Duration::from_secs(2),
             Frame::read_from(&mut server_stream),
@@ -840,7 +852,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_ctrl_backslash_pending_on_stdin_close_flushes_then_detaches() {
+    async fn test_ctrl_backslash_then_stdin_close_sends_detach() {
         let (client_stream, mut server_stream) = TokioUnixStream::pair().unwrap();
 
         let (reader, writer) = tokio::io::split(client_stream);
@@ -853,11 +865,10 @@ mod tests {
 
         // Send Ctrl+\ then immediately close stdin
         stdin_tx.send(Bytes::from_static(&[0x1c])).await.unwrap();
-        // Small delay to let the loop process the Ctrl+\ before dropping
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         drop(stdin_tx);
 
-        // Should get the flushed Ctrl+\ as StdinInput
+        // Ctrl+\ is forwarded immediately
         let frame1 = tokio::time::timeout(
             std::time::Duration::from_secs(2),
             Frame::read_from(&mut server_stream),
@@ -868,7 +879,7 @@ mod tests {
         assert_eq!(frame1.frame_type, FrameType::StdinInput);
         assert_eq!(frame1.payload.as_ref(), &[0x1c]);
 
-        // Then the Detach frame
+        // Then the Detach frame (stdin close)
         let frame2 = tokio::time::timeout(
             std::time::Duration::from_secs(2),
             Frame::read_from(&mut server_stream),

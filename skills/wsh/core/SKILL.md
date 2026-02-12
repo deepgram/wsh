@@ -234,8 +234,8 @@ Intercept keyboard input so it comes to you instead of the shell.
     curl -s -X POST http://localhost:8080/input/release    # release back
 
 While captured, keystrokes are available via WebSocket subscription
-instead of going to the PTY. The human can always press Ctrl+\ to
-force-release.
+instead of going to the PTY. The human can press Ctrl+\ to toggle
+capture mode (it switches between passthrough and capture).
 
 **Focus routing:** Direct captured input to a specific focusable
 overlay or panel. At most one element has focus at a time.

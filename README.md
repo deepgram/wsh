@@ -226,7 +226,7 @@ All session-specific endpoints are nested under `/sessions/:name/`. In standalon
 | `POST` | `/sessions/:name/input/capture` | Capture input (don't forward to PTY) |
 | `POST` | `/sessions/:name/input/release` | Release input (resume forwarding) |
 
-When input is captured, local keyboard input is not forwarded to the PTY. Press Ctrl+\ to escape capture mode from the local terminal.
+When input is captured, local keyboard input is not forwarded to the PTY. Press Ctrl+\ to toggle capture mode — it switches between passthrough and capture. Ctrl+\ is never forwarded to the PTY.
 
 ### Server Management
 
