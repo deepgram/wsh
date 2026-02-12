@@ -30,6 +30,8 @@ schemars = "1.0"
 tokio-util = { version = "0.7", features = ["rt"] }
 libc = "0.2"
 subtle = "2"
+rust-embed = "8"
+mime_guess = "2"
 
 [dev-dependencies]
 tower = { version = "0.4", features = ["util"] }

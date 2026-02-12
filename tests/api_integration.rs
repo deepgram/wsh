@@ -564,9 +564,10 @@ async fn test_websocket_multiple_outputs() {
 }
 
 #[tokio::test]
-async fn test_nonexistent_route_returns_404() {
+async fn test_nonexistent_route_serves_web_ui() {
     let (app, _input_rx, _output_tx) = create_test_app();
 
+    // Non-API routes are served by the web asset fallback (SPA)
     let response = app
         .oneshot(
             Request::builder()
@@ -577,7 +578,7 @@ async fn test_nonexistent_route_returns_404() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(response.status(), StatusCode::OK);
 }
 
 #[tokio::test]
