@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
-use super::types::{BackgroundStyle, Overlay, OverlayId, OverlaySpan};
+use super::types::{BackgroundStyle, Overlay, OverlayId, OverlaySpan, RegionWrite};
 
 /// Thread-safe store for overlays
 #[derive(Clone)]
@@ -56,6 +56,7 @@ impl OverlayStore {
             height,
             background,
             spans,
+            region_writes: vec![],
         };
         inner.overlays.insert(id.clone(), overlay);
         id
@@ -147,6 +148,19 @@ impl OverlayStore {
                     }
                 }
             }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Replace the stored region writes for an overlay.
+    ///
+    /// Returns false if the overlay does not exist.
+    pub fn region_write(&self, id: &str, writes: Vec<RegionWrite>) -> bool {
+        let mut inner = self.inner.write().unwrap();
+        if let Some(overlay) = inner.overlays.get_mut(id) {
+            overlay.region_writes = writes;
             true
         } else {
             false
@@ -327,5 +341,98 @@ mod tests {
         // Original span should be unchanged
         let overlay = store.get(&oid).unwrap();
         assert_eq!(overlay.spans[0].text, "Hello");
+    }
+
+    #[test]
+    fn test_region_write_stores_writes() {
+        let store = OverlayStore::new();
+        let oid = store.create(0, 0, None, 80, 10, None, vec![]);
+
+        let writes = vec![
+            RegionWrite {
+                row: 0,
+                col: 5,
+                text: "Hello".to_string(),
+                fg: Some(Color::Named(NamedColor::Green)),
+                bg: None,
+                bold: true,
+                italic: false,
+                underline: false,
+            },
+            RegionWrite {
+                row: 1,
+                col: 0,
+                text: "World".to_string(),
+                fg: None,
+                bg: None,
+                bold: false,
+                italic: false,
+                underline: false,
+            },
+        ];
+        assert!(store.region_write(&oid, writes));
+
+        let overlay = store.get(&oid).unwrap();
+        assert_eq!(overlay.region_writes.len(), 2);
+        assert_eq!(overlay.region_writes[0].text, "Hello");
+        assert_eq!(overlay.region_writes[0].row, 0);
+        assert_eq!(overlay.region_writes[0].col, 5);
+        assert!(overlay.region_writes[0].bold);
+        assert_eq!(overlay.region_writes[1].text, "World");
+        assert_eq!(overlay.region_writes[1].row, 1);
+    }
+
+    #[test]
+    fn test_region_write_replaces_previous() {
+        let store = OverlayStore::new();
+        let oid = store.create(0, 0, None, 80, 10, None, vec![]);
+
+        let writes1 = vec![RegionWrite {
+            row: 0,
+            col: 0,
+            text: "First".to_string(),
+            fg: None,
+            bg: None,
+            bold: false,
+            italic: false,
+            underline: false,
+        }];
+        assert!(store.region_write(&oid, writes1));
+        assert_eq!(store.get(&oid).unwrap().region_writes.len(), 1);
+
+        let writes2 = vec![
+            RegionWrite {
+                row: 0,
+                col: 0,
+                text: "A".to_string(),
+                fg: None,
+                bg: None,
+                bold: false,
+                italic: false,
+                underline: false,
+            },
+            RegionWrite {
+                row: 1,
+                col: 0,
+                text: "B".to_string(),
+                fg: None,
+                bg: None,
+                bold: false,
+                italic: false,
+                underline: false,
+            },
+        ];
+        assert!(store.region_write(&oid, writes2));
+
+        let overlay = store.get(&oid).unwrap();
+        assert_eq!(overlay.region_writes.len(), 2);
+        assert_eq!(overlay.region_writes[0].text, "A");
+        assert_eq!(overlay.region_writes[1].text, "B");
+    }
+
+    #[test]
+    fn test_region_write_nonexistent_overlay() {
+        let store = OverlayStore::new();
+        assert!(!store.region_write("nonexistent", vec![]));
     }
 }

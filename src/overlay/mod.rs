@@ -8,4 +8,4 @@ pub use render::{
     restore_cursor, save_cursor,
 };
 pub use store::OverlayStore;
-pub use types::{BackgroundStyle, Color, NamedColor, Overlay, OverlayId, OverlaySpan, Style};
+pub use types::{BackgroundStyle, Color, NamedColor, Overlay, OverlayId, OverlaySpan, RegionWrite, Style};

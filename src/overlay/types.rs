@@ -9,6 +9,27 @@ pub struct BackgroundStyle {
     pub bg: Color,
 }
 
+/// A styled text write at a specific (row, col) offset within an overlay or panel.
+///
+/// Enables freeform cell-level drawing for charts, visualizations, and other
+/// non-linear content.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegionWrite {
+    pub row: u16,
+    pub col: u16,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fg: Option<Color>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bg: Option<Color>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bold: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub italic: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub underline: bool,
+}
+
 /// An overlay displayed on top of terminal content
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Overlay {
@@ -21,6 +42,8 @@ pub struct Overlay {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background: Option<BackgroundStyle>,
     pub spans: Vec<OverlaySpan>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub region_writes: Vec<RegionWrite>,
 }
 
 /// A styled text span within an overlay

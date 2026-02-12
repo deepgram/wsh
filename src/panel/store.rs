@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
-use crate::overlay::OverlaySpan;
+use crate::overlay::{BackgroundStyle, OverlaySpan, RegionWrite};
 
 use super::types::{Panel, PanelId, Position};
 
@@ -33,6 +33,7 @@ impl PanelStore {
         position: Position,
         height: u16,
         z: Option<i32>,
+        background: Option<BackgroundStyle>,
         spans: Vec<OverlaySpan>,
     ) -> PanelId {
         let mut inner = self.inner.write().unwrap();
@@ -50,7 +51,9 @@ impl PanelStore {
             position,
             height,
             z,
+            background,
             spans,
+            region_writes: vec![],
             visible: true,
         };
         inner.panels.insert(id.clone(), panel);
@@ -98,6 +101,7 @@ impl PanelStore {
         position: Option<Position>,
         height: Option<u16>,
         z: Option<i32>,
+        background: Option<BackgroundStyle>,
         spans: Option<Vec<OverlaySpan>>,
     ) -> bool {
         let mut inner = self.inner.write().unwrap();
@@ -118,6 +122,9 @@ impl PanelStore {
         }
         if let Some(z) = z {
             panel.z = z;
+        }
+        if let Some(background) = background {
+            panel.background = Some(background);
         }
         if let Some(spans) = spans {
             panel.spans = spans;
@@ -146,6 +153,19 @@ impl PanelStore {
                     }
                 }
             }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Replace the stored region writes for a panel.
+    ///
+    /// Returns false if the panel does not exist.
+    pub fn region_write(&self, id: &str, writes: Vec<RegionWrite>) -> bool {
+        let mut inner = self.inner.write().unwrap();
+        if let Some(panel) = inner.panels.get_mut(id) {
+            panel.region_writes = writes;
             true
         } else {
             false
@@ -186,14 +206,14 @@ mod tests {
     #[test]
     fn test_create_panel() {
         let store = PanelStore::new();
-        let id = store.create(Position::Bottom, 1, None, vec![]);
+        let id = store.create(Position::Bottom, 1, None, None, vec![]);
         assert!(!id.is_empty());
     }
 
     #[test]
     fn test_get_panel() {
         let store = PanelStore::new();
-        let id = store.create(Position::Top, 2, Some(10), vec![]);
+        let id = store.create(Position::Top, 2, Some(10), None, vec![]);
         let panel = store.get(&id).unwrap();
         assert_eq!(panel.position, Position::Top);
         assert_eq!(panel.height, 2);
@@ -204,10 +224,10 @@ mod tests {
     #[test]
     fn test_list_sorted_by_position_then_z_desc() {
         let store = PanelStore::new();
-        store.create(Position::Bottom, 1, Some(5), vec![]);
-        store.create(Position::Top, 1, Some(3), vec![]);
-        store.create(Position::Top, 1, Some(10), vec![]);
-        store.create(Position::Bottom, 1, Some(20), vec![]);
+        store.create(Position::Bottom, 1, Some(5), None, vec![]);
+        store.create(Position::Top, 1, Some(3), None, vec![]);
+        store.create(Position::Top, 1, Some(10), None, vec![]);
+        store.create(Position::Bottom, 1, Some(20), None, vec![]);
 
         let list = store.list();
         assert_eq!(list.len(), 4);
@@ -226,7 +246,7 @@ mod tests {
     #[test]
     fn test_update_spans() {
         let store = PanelStore::new();
-        let id = store.create(Position::Bottom, 1, None, vec![]);
+        let id = store.create(Position::Bottom, 1, None, None, vec![]);
         let new_spans = vec![OverlaySpan {
             text: "updated".to_string(),
             id: None,
@@ -244,17 +264,17 @@ mod tests {
     #[test]
     fn test_patch_partial() {
         let store = PanelStore::new();
-        let id = store.create(Position::Bottom, 1, Some(0), vec![]);
+        let id = store.create(Position::Bottom, 1, Some(0), None, vec![]);
 
         // Patch only height
-        assert!(store.patch(&id, None, Some(3), None, None));
+        assert!(store.patch(&id, None, Some(3), None, None, None));
         let panel = store.get(&id).unwrap();
         assert_eq!(panel.height, 3);
         assert_eq!(panel.position, Position::Bottom);
         assert_eq!(panel.z, 0);
 
         // Patch position and z
-        assert!(store.patch(&id, Some(Position::Top), None, Some(99), None));
+        assert!(store.patch(&id, Some(Position::Top), None, Some(99), None, None));
         let panel = store.get(&id).unwrap();
         assert_eq!(panel.position, Position::Top);
         assert_eq!(panel.z, 99);
@@ -264,7 +284,7 @@ mod tests {
     #[test]
     fn test_delete_panel() {
         let store = PanelStore::new();
-        let id = store.create(Position::Top, 1, None, vec![]);
+        let id = store.create(Position::Top, 1, None, None, vec![]);
         assert!(store.delete(&id));
         assert!(store.get(&id).is_none());
     }
@@ -278,8 +298,8 @@ mod tests {
     #[test]
     fn test_clear_panels() {
         let store = PanelStore::new();
-        store.create(Position::Top, 1, None, vec![]);
-        store.create(Position::Bottom, 1, None, vec![]);
+        store.create(Position::Top, 1, None, None, vec![]);
+        store.create(Position::Bottom, 1, None, None, vec![]);
         store.clear();
         assert!(store.list().is_empty());
     }
@@ -287,8 +307,8 @@ mod tests {
     #[test]
     fn test_auto_increment_z() {
         let store = PanelStore::new();
-        let id1 = store.create(Position::Bottom, 1, None, vec![]);
-        let id2 = store.create(Position::Bottom, 1, None, vec![]);
+        let id1 = store.create(Position::Bottom, 1, None, None, vec![]);
+        let id2 = store.create(Position::Bottom, 1, None, None, vec![]);
         let p1 = store.get(&id1).unwrap();
         let p2 = store.get(&id2).unwrap();
         assert!(p2.z > p1.z);
@@ -297,7 +317,7 @@ mod tests {
     #[test]
     fn test_set_visible() {
         let store = PanelStore::new();
-        let id = store.create(Position::Top, 1, None, vec![]);
+        let id = store.create(Position::Top, 1, None, None, vec![]);
         assert!(store.get(&id).unwrap().visible);
         store.set_visible(&id, false);
         assert!(!store.get(&id).unwrap().visible);
@@ -330,7 +350,7 @@ mod tests {
                 underline: false,
             },
         ];
-        let pid = store.create(Position::Bottom, 1, None, spans);
+        let pid = store.create(Position::Bottom, 1, None, None, spans);
 
         // Update only the "status" span
         let updates = vec![OverlaySpan {
@@ -382,7 +402,7 @@ mod tests {
             italic: false,
             underline: false,
         }];
-        let pid = store.create(Position::Bottom, 1, None, spans);
+        let pid = store.create(Position::Bottom, 1, None, None, spans);
 
         // Update with a span ID that doesn't match anything
         let updates = vec![OverlaySpan {
@@ -399,5 +419,100 @@ mod tests {
         // Original span should be unchanged
         let panel = store.get(&pid).unwrap();
         assert_eq!(panel.spans[0].text, "Hello");
+    }
+
+    #[test]
+    fn test_region_write_stores_writes() {
+        use crate::overlay::types::{Color, NamedColor};
+
+        let store = PanelStore::new();
+        let pid = store.create(Position::Bottom, 3, None, None, vec![]);
+
+        let writes = vec![
+            RegionWrite {
+                row: 0,
+                col: 0,
+                text: "A".to_string(),
+                fg: Some(Color::Named(NamedColor::Red)),
+                bg: None,
+                bold: true,
+                italic: false,
+                underline: false,
+            },
+            RegionWrite {
+                row: 1,
+                col: 5,
+                text: "B".to_string(),
+                fg: None,
+                bg: None,
+                bold: false,
+                italic: false,
+                underline: false,
+            },
+        ];
+        assert!(store.region_write(&pid, writes));
+
+        let panel = store.get(&pid).unwrap();
+        assert_eq!(panel.region_writes.len(), 2);
+        assert_eq!(panel.region_writes[0].text, "A");
+        assert_eq!(panel.region_writes[0].row, 0);
+        assert!(panel.region_writes[0].bold);
+        assert_eq!(panel.region_writes[1].text, "B");
+        assert_eq!(panel.region_writes[1].col, 5);
+    }
+
+    #[test]
+    fn test_region_write_replaces_previous() {
+        let store = PanelStore::new();
+        let pid = store.create(Position::Top, 2, None, None, vec![]);
+
+        let writes1 = vec![RegionWrite {
+            row: 0,
+            col: 0,
+            text: "First".to_string(),
+            fg: None,
+            bg: None,
+            bold: false,
+            italic: false,
+            underline: false,
+        }];
+        assert!(store.region_write(&pid, writes1));
+        assert_eq!(store.get(&pid).unwrap().region_writes.len(), 1);
+
+        // Replace with new writes
+        let writes2 = vec![
+            RegionWrite {
+                row: 0,
+                col: 0,
+                text: "X".to_string(),
+                fg: None,
+                bg: None,
+                bold: false,
+                italic: false,
+                underline: false,
+            },
+            RegionWrite {
+                row: 0,
+                col: 1,
+                text: "Y".to_string(),
+                fg: None,
+                bg: None,
+                bold: false,
+                italic: false,
+                underline: false,
+            },
+        ];
+        assert!(store.region_write(&pid, writes2));
+
+        let panel = store.get(&pid).unwrap();
+        assert_eq!(panel.region_writes.len(), 2);
+        assert_eq!(panel.region_writes[0].text, "X");
+        assert_eq!(panel.region_writes[1].text, "Y");
+    }
+
+    #[test]
+    fn test_region_write_nonexistent_panel() {
+        let store = PanelStore::new();
+        assert!(!store.region_write("nonexistent", vec![]));
     }
 }

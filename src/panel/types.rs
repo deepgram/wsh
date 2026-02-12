@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::overlay::OverlaySpan;
+use crate::overlay::{BackgroundStyle, OverlaySpan, RegionWrite};
 
 /// Unique identifier for a panel
 pub type PanelId = String;
@@ -23,7 +23,11 @@ pub struct Panel {
     pub position: Position,
     pub height: u16,
     pub z: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<BackgroundStyle>,
     pub spans: Vec<OverlaySpan>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub region_writes: Vec<RegionWrite>,
     pub visible: bool,
 }
 
@@ -55,6 +59,7 @@ mod tests {
             position: Position::Bottom,
             height: 2,
             z: 5,
+            background: None,
             spans: vec![OverlaySpan {
                 text: "status".to_string(),
                 id: None,
@@ -64,6 +69,7 @@ mod tests {
                 italic: false,
                 underline: false,
             }],
+            region_writes: vec![],
             visible: true,
         };
         let json = serde_json::to_string(&panel).unwrap();
@@ -84,7 +90,9 @@ mod tests {
             position: Position::Top,
             height: 1,
             z: 0,
+            background: None,
             spans: vec![],
+            region_writes: vec![],
             visible: false,
         };
         let json = serde_json::to_string(&panel).unwrap();
