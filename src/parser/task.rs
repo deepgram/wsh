@@ -69,19 +69,21 @@ pub async fn run(
                         }
 
                         // Emit line events for changed lines.
-                        // Only collect all lines when there are actual changes
-                        // to avoid O(n) iteration on every PTY chunk.
+                        // changes.lines contains view-relative indices (screen row 0..rows-1)
+                        // Use vt.view() to get the correct visible line content.
+                        // Only collect when there are actual changes to avoid
+                        // O(n) iteration on every PTY chunk.
                         if !changed_lines.is_empty() {
-                            let all_lines: Vec<_> = vt.lines().collect();
-                            let total_lines = all_lines.len();
+                            let total_lines = vt.lines().count();
+                            let view_lines: Vec<_> = vt.view().collect();
                             for line_idx in changed_lines {
-                                if let Some(line) = all_lines.get(line_idx) {
+                                if let Some(line) = view_lines.get(line_idx) {
                                     seq = seq.wrapping_add(1);
                                     let _ = event_tx.send(Event::Line {
                                         seq,
                                         index: line_idx,
                                         total_lines,
-                                        line: format_line(line, true),
+                                        line: format_line(*line, true),
                                     });
                                 }
                             }
