@@ -239,6 +239,8 @@ pub struct CreatePanelParams {
     pub height: u16,
     pub z: Option<i32>,
     #[serde(default)]
+    pub background: Option<crate::overlay::BackgroundStyle>,
+    #[serde(default)]
     pub spans: Vec<OverlaySpan>,
 }
 
@@ -259,6 +261,8 @@ pub struct PatchPanelParams {
     pub position: Option<Position>,
     pub height: Option<u16>,
     pub z: Option<i32>,
+    #[serde(default)]
+    pub background: Option<crate::overlay::BackgroundStyle>,
     pub spans: Option<Vec<OverlaySpan>>,
 }
 
@@ -541,7 +545,7 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
             };
             let panel_id = session
                 .panels
-                .create(params.position, params.height, params.z, params.spans);
+                .create(params.position, params.height, params.z, params.background, params.spans);
             crate::panel::reconfigure_layout(
                 &session.panels,
                 &session.terminal_size,
@@ -591,6 +595,7 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                 Some(params.position.clone()),
                 Some(params.height),
                 Some(params.z),
+                None,
                 Some(params.spans),
             ) {
                 return WsResponse::error(
@@ -641,6 +646,7 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                 params.position.clone(),
                 params.height,
                 params.z,
+                params.background,
                 params.spans.clone(),
             ) {
                 return WsResponse::error(
@@ -1187,6 +1193,7 @@ mod tests {
             crate::panel::Position::Top,
             1,
             None,
+            None,
             vec![crate::overlay::OverlaySpan {
                 text: "Test".to_string(),
                 id: None, fg: None, bg: None, bold: false, italic: false, underline: false,
@@ -1223,6 +1230,7 @@ mod tests {
         let panel_id = session.panels.create(
             crate::panel::Position::Top,
             1,
+            None,
             None,
             vec![],
         );
@@ -1273,6 +1281,7 @@ mod tests {
             crate::panel::Position::Top,
             1,
             None,
+            None,
             vec![],
         );
         let req = WsRequest {
@@ -1311,6 +1320,7 @@ mod tests {
             crate::panel::Position::Bottom,
             2,
             None,
+            None,
             vec![],
         );
         assert_eq!(session.panels.list().len(), 1);
@@ -1341,8 +1351,8 @@ mod tests {
     #[tokio::test]
     async fn dispatch_clear_panels() {
         let (session, _rx) = create_test_session();
-        session.panels.create(crate::panel::Position::Top, 1, None, vec![]);
-        session.panels.create(crate::panel::Position::Bottom, 1, None, vec![]);
+        session.panels.create(crate::panel::Position::Top, 1, None, None, vec![]);
+        session.panels.create(crate::panel::Position::Bottom, 1, None, None, vec![]);
         assert_eq!(session.panels.list().len(), 2);
 
         let req = WsRequest {
@@ -1362,6 +1372,7 @@ mod tests {
         session.panels.create(
             crate::panel::Position::Top,
             1,
+            None,
             None,
             vec![crate::overlay::OverlaySpan {
                 text: "A".to_string(),

@@ -112,7 +112,9 @@ mod tests {
             position,
             height,
             z,
+            background: None,
             spans: vec![],
+            region_writes: vec![],
             visible: true,
         }
     }
@@ -269,7 +271,9 @@ mod tests {
             position: Position::Bottom,
             height: 1,
             z: 0,
+            background: None,
             spans: vec![span("hello")],
+            region_writes: vec![],
             visible: true,
         }];
         let layout = compute_layout(&panels, 24, 80);

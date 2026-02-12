@@ -224,7 +224,9 @@ mod tests {
             position,
             height,
             z,
+            background: None,
             spans: vec![],
+            region_writes: vec![],
             visible: true,
         }
     }
@@ -246,7 +248,9 @@ mod tests {
             position: Position::Bottom,
             height: 1,
             z: 0,
+            background: None,
             spans: vec![span("hello")],
+            region_writes: vec![],
             visible: true,
         };
         let result = render_panel(&panel, 23, 10);
@@ -264,7 +268,9 @@ mod tests {
             position: Position::Top,
             height: 2,
             z: 0,
+            background: None,
             spans: vec![span("line1\nline2")],
+            region_writes: vec![],
             visible: true,
         };
         let result = render_panel(&panel, 0, 10);
@@ -283,7 +289,9 @@ mod tests {
             position: Position::Top,
             height: 3,
             z: 0,
+            background: None,
             spans: vec![span("only one line")],
+            region_writes: vec![],
             visible: true,
         };
         let result = render_panel(&panel, 0, 20);
@@ -299,6 +307,7 @@ mod tests {
             position: Position::Bottom,
             height: 1,
             z: 0,
+            background: None,
             spans: vec![OverlaySpan {
                 text: "error".to_string(),
                 id: None,
@@ -308,6 +317,7 @@ mod tests {
                 italic: false,
                 underline: false,
             }],
+            region_writes: vec![],
             visible: true,
         };
         let result = render_panel(&panel, 23, 10);

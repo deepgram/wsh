@@ -359,6 +359,7 @@ mod tests {
                 italic: false,
                 underline: false,
             }],
+            region_writes: vec![],
         };
         let result = render_overlay(&overlay);
         // y=5, x=10 (0-indexed) -> row=6, col=11 (1-indexed)
@@ -473,6 +474,7 @@ mod tests {
                 italic: false,
                 underline: false,
             }],
+            region_writes: vec![],
         }];
         let result = render_all_overlays(&overlays);
         assert!(
@@ -563,6 +565,7 @@ mod tests {
                 italic: false,
                 underline: false,
             }],
+            region_writes: vec![],
         };
         let extents = overlay_line_extents(&overlay);
         assert_eq!(extents, vec![(3, 5, 5)]);
@@ -587,6 +590,7 @@ mod tests {
                 italic: false,
                 underline: false,
             }],
+            region_writes: vec![],
         };
         let extents = overlay_line_extents(&overlay);
         assert_eq!(extents, vec![(0, 0, 2), (1, 0, 3), (2, 0, 1)]);
@@ -622,6 +626,7 @@ mod tests {
                     underline: false,
                 },
             ],
+            region_writes: vec![],
         };
         let extents = overlay_line_extents(&overlay);
         // Two spans on same line: width = 2 + 2 = 4
@@ -658,6 +663,7 @@ mod tests {
                     underline: false,
                 },
             ],
+            region_writes: vec![],
         };
         let extents = overlay_line_extents(&overlay);
         // First span: "ab\n" -> line "ab" (width 2), then newline
@@ -684,6 +690,7 @@ mod tests {
                 italic: false,
                 underline: false,
             }],
+            region_writes: vec![],
         };
         let result = erase_overlay(&overlay);
         // Should position cursor at (3,5) -> \x1b[4;6H then 5 spaces
@@ -709,6 +716,7 @@ mod tests {
                 italic: false,
                 underline: false,
             }],
+            region_writes: vec![],
         };
         let result = erase_overlay(&overlay);
         // Line 1: row 0, col 0, width 2 -> \x1b[1;1H + 2 spaces

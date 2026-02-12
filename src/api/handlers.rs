@@ -1541,6 +1541,8 @@ pub(super) struct CreatePanelRequest {
     height: u16,
     z: Option<i32>,
     #[serde(default)]
+    background: Option<BackgroundStyle>,
+    #[serde(default)]
     spans: Vec<OverlaySpan>,
 }
 
@@ -1562,6 +1564,8 @@ pub(super) struct PatchPanelRequest {
     position: Option<Position>,
     height: Option<u16>,
     z: Option<i32>,
+    #[serde(default)]
+    background: Option<BackgroundStyle>,
     spans: Option<Vec<OverlaySpan>>,
 }
 
@@ -1575,7 +1579,7 @@ pub(super) async fn panel_create(
     let session = get_session(&state.sessions, &name)?;
     let id = session
         .panels
-        .create(req.position, req.height, req.z, req.spans);
+        .create(req.position, req.height, req.z, req.background, req.spans);
     panel::reconfigure_layout(&session.panels, &session.terminal_size, &session.pty, &session.parser)
         .await;
     Ok((StatusCode::CREATED, Json(CreatePanelResponse { id })))
@@ -1615,7 +1619,7 @@ pub(super) async fn panel_update(
     // Full replace: update all fields via patch
     if !session
         .panels
-        .patch(&id, Some(req.position.clone()), Some(req.height), Some(req.z), Some(req.spans))
+        .patch(&id, Some(req.position.clone()), Some(req.height), Some(req.z), None, Some(req.spans))
     {
         return Err(ApiError::PanelNotFound(id));
     }
@@ -1647,7 +1651,7 @@ pub(super) async fn panel_patch(
 
     if !session
         .panels
-        .patch(&id, req.position.clone(), req.height, req.z, req.spans.clone())
+        .patch(&id, req.position.clone(), req.height, req.z, req.background, req.spans.clone())
     {
         return Err(ApiError::PanelNotFound(id));
     }
