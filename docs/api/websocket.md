@@ -712,9 +712,11 @@ Create a new session.
 | `command` | string | no | Command to run (defaults to user's shell) |
 | `rows` | integer | no | Terminal rows (default: 24) |
 | `cols` | integer | no | Terminal columns (default: 80) |
+| `cwd` | string | no | Working directory |
+| `env` | object | no | Additional environment variables |
 
 ```json
-{"id": 2, "method": "create_session", "params": {"name": "dev", "command": "bash"}}
+{"id": 2, "method": "create_session", "params": {"name": "dev", "command": "bash", "cwd": "/home/user/project"}}
 ```
 
 **Result:**
@@ -734,6 +736,20 @@ Destroy a session.
 ```
 
 **Result:** `{}`
+
+#### `detach_session`
+
+Detach all connected clients from a session. The session remains alive.
+
+**Params:** `name` (string, required)
+
+```json
+{"id": 5, "method": "detach_session", "params": {"name": "dev"}}
+```
+
+**Result:** `{}`
+
+**Errors:** `session_not_found` if the session doesn't exist.
 
 #### `rename_session`
 

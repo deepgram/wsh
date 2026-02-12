@@ -45,6 +45,7 @@ compatibility.
 | `POST` | `/sessions/:name/input/capture` | Switch to capture mode |
 | `POST` | `/sessions/:name/input/release` | Switch to passthrough mode |
 | `GET` | `/sessions/:name/quiesce` | Wait for terminal quiescence |
+| `POST` | `/sessions/:name/detach` | Detach all clients from the session |
 
 ### Session Management Endpoints
 
@@ -391,6 +392,7 @@ wsh provides several subcommands for interacting with a running server:
 | `wsh attach <name>` | Attach to a session (local terminal I/O over Unix socket) |
 | `wsh list` | List active sessions |
 | `wsh kill <name>` | Destroy a session |
+| `wsh detach <name>` | Detach all clients from a session |
 | `wsh persist` | Switch the server to persistent mode |
 
 #### `wsh server`
@@ -425,22 +427,32 @@ date.
 |------|---------|-------------|
 | `--scrollback` | `all` | Scrollback replay: `all`, `none`, or a line count |
 | `--socket` | `$XDG_RUNTIME_DIR/wsh.sock` | Path to the Unix domain socket |
+| `--alt-screen` | off | Use alternate screen buffer (restores previous screen on exit, but disables native terminal scrollback while attached) |
 
 #### `wsh list`
 
 ```bash
-wsh list [--bind <addr>] [--token <token>]
+wsh list [--socket <path>]
 ```
 
-Lists active sessions on the server via the HTTP API.
+Lists active sessions on the server via the Unix socket.
 
 #### `wsh kill`
 
 ```bash
-wsh kill <name> [--bind <addr>] [--token <token>]
+wsh kill <name> [--socket <path>]
 ```
 
-Destroys a named session on the server via the HTTP API.
+Destroys a named session on the server via the Unix socket.
+
+#### `wsh detach`
+
+```bash
+wsh detach <name> [--socket <path>]
+```
+
+Detaches all connected clients from a named session via the Unix socket. The
+session itself remains alive -- only the client connections are dropped.
 
 #### `wsh persist`
 
@@ -603,6 +615,31 @@ Destroys the session and its PTY.
 curl -X DELETE http://localhost:8080/sessions/dev
 ```
 
+### Detach a Session
+
+```
+POST /sessions/:name/detach
+```
+
+Detaches all connected clients (Unix socket `wsh attach` sessions) from the
+named session. The session itself remains alive -- only the client connections
+are dropped. Useful for forcibly disconnecting attached terminals without
+destroying the session.
+
+**Response:** `204 No Content`
+
+**Errors:**
+
+| Status | Code | When |
+|--------|------|------|
+| 404 | `session_not_found` | No session with that name |
+
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/sessions/dev/detach
+```
+
 ### Server Persist
 
 ```
@@ -653,6 +690,7 @@ events. After connecting, the server sends `{"connected": true}`.
 | `list_sessions` | List all active sessions |
 | `create_session` | Create a new session |
 | `kill_session` | Destroy a session |
+| `detach_session` | Detach all clients from a session |
 | `set_server_mode` | Set server mode (ephemeral/persistent) |
 
 **Per-session methods** require a `session` field in the request:

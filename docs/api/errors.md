@@ -49,6 +49,12 @@ change between versions.
 |--------|------|---------|------|
 | `409` | `session_name_conflict` | Session name already exists: {name}. | Session name already in use |
 
+### Timeout Errors
+
+| Status | Code | Message | When |
+|--------|------|---------|------|
+| `408` | `quiesce_timeout` | Terminal did not become quiescent within the deadline. | `max_wait_ms` exceeded on `GET /quiesce` or `await_quiesce` WS method |
+
 ### Server Errors
 
 | Status | Code | Message | When |

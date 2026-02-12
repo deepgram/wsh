@@ -872,6 +872,35 @@ paths:
         "404":
           description: Session not found.
 
+  /sessions/{name}/detach:
+    post:
+      operationId: detachSession
+      summary: Detach all clients from a session
+      tags: [session]
+      description: >
+        Detaches all connected clients (Unix socket wsh attach sessions) from
+        the named session. The session itself remains alive.
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Session name
+      responses:
+        "204":
+          description: All clients detached.
+        "404":
+          description: Session not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
   # --- Server Management ---
 
   /server/persist:
@@ -1223,8 +1252,8 @@ components:
         Client-to-server request over /ws/json. All messages use this envelope.
         On the server-level WebSocket, per-session methods require a "session"
         field to identify the target session. Server-level methods
-        (list_sessions, create_session, kill_session, set_server_mode) do not
-        require it.
+        (list_sessions, create_session, kill_session, detach_session,
+        rename_session, set_server_mode) do not require it.
       type: object
       required: [method]
       properties:
