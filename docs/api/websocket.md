@@ -516,6 +516,155 @@ Delete all panels.
 
 **Result:** `{}`
 
+### `update_overlay_spans`
+
+Partial update of overlay spans by ID. Only spans with a matching `id` are
+updated; unmatched spans are left unchanged.
+
+**Params:** `id` (string, required), `spans` (array, required)
+
+```json
+{"id": 30, "method": "update_overlay_spans", "params": {"id": "overlay-uuid", "spans": [{"id": "value", "text": "Updated", "fg": "green"}]}}
+```
+
+**Result:** `{}`
+
+### `overlay_region_write`
+
+Write styled text at specific (row, col) positions within an overlay.
+
+**Params:** `id` (string, required), `writes` (array, required)
+
+```json
+{"id": 31, "method": "overlay_region_write", "params": {"id": "overlay-uuid", "writes": [{"row": 0, "col": 0, "text": "X", "fg": "red"}]}}
+```
+
+**Result:** `{}`
+
+### `update_panel_spans`
+
+Partial update of panel spans by ID. Only spans with a matching `id` are
+updated; unmatched spans are left unchanged.
+
+**Params:** `id` (string, required), `spans` (array, required)
+
+```json
+{"id": 32, "method": "update_panel_spans", "params": {"id": "panel-uuid", "spans": [{"id": "value", "text": "Updated", "fg": "green"}]}}
+```
+
+**Result:** `{}`
+
+### `panel_region_write`
+
+Write styled text at specific (row, col) positions within a panel.
+
+**Params:** `id` (string, required), `writes` (array, required)
+
+```json
+{"id": 33, "method": "panel_region_write", "params": {"id": "panel-uuid", "writes": [{"row": 0, "col": 0, "text": "X", "fg": "red"}]}}
+```
+
+**Result:** `{}`
+
+### `batch_update`
+
+Atomically update both spans and region writes on an overlay or panel in a
+single call. Useful for reducing round trips when updating both at once.
+
+**Params:**
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | string | yes | Overlay or panel ID |
+| `type` | `"overlay"` \| `"panel"` | yes | Target element type |
+| `spans` | array | no | Spans to update by ID (same as `update_*_spans`) |
+| `writes` | array | no | Region writes (same as `*_region_write`) |
+
+```json
+{"id": 34, "method": "batch_update", "params": {"id": "overlay-uuid", "type": "overlay", "spans": [{"id": "value", "text": "OK"}], "writes": [{"row": 0, "col": 0, "text": "X"}]}}
+```
+
+**Result:** `{}`
+
+### `focus`
+
+Set input focus to a focusable overlay or panel.
+
+**Params:** `id` (string, required)
+
+```json
+{"id": 35, "method": "focus", "params": {"id": "overlay-uuid"}}
+```
+
+**Result:** `{}`
+
+**Errors:** `invalid_request` if element not found, `not_focusable` if element
+is not focusable.
+
+### `unfocus`
+
+Clear input focus.
+
+```json
+{"id": 36, "method": "unfocus"}
+```
+
+**Result:** `{}`
+
+### `get_focus`
+
+Get the currently focused element's ID.
+
+```json
+{"id": 37, "method": "get_focus"}
+```
+
+**Result:**
+
+```json
+{"focused": "overlay-uuid"}
+```
+
+or `{"focused": null}` when nothing is focused.
+
+### `get_screen_mode`
+
+Get the session's current screen mode.
+
+```json
+{"id": 38, "method": "get_screen_mode"}
+```
+
+**Result:**
+
+```json
+{"mode": "normal"}
+```
+
+### `enter_alt_screen`
+
+Switch to alternate screen mode.
+
+```json
+{"id": 39, "method": "enter_alt_screen"}
+```
+
+**Result:** `{}`
+
+**Error:** `already_in_alt_screen` if already in alt mode.
+
+### `exit_alt_screen`
+
+Switch back to normal screen mode. Deletes all alt-mode overlays and panels.
+
+```json
+{"id": 40, "method": "exit_alt_screen"}
+```
+
+**Result:** `{}`
+
+**Error:** `not_in_alt_screen` if already in normal mode.
+
 ---
 
 ## Error Responses
