@@ -1222,6 +1222,101 @@ pub(super) async fn quiesce(
     }
 }
 
+// Server-level quiescence query parameters (any session)
+#[derive(Deserialize)]
+pub(super) struct QuiesceAnyQuery {
+    timeout_ms: u64,
+    #[serde(default)]
+    format: Format,
+    #[serde(default = "default_max_wait")]
+    max_wait_ms: u64,
+    /// Generation from a previous quiescence response, paired with `last_session`.
+    /// When both are provided, the named session waits for new activity before
+    /// checking quiescence (preventing busy-loop storms). Other sessions are
+    /// checked immediately.
+    last_generation: Option<u64>,
+    /// The session name from a previous quiescence response.
+    /// Used together with `last_generation`.
+    last_session: Option<String>,
+    /// When true, always observe at least `timeout_ms` of real silence before
+    /// responding, even if a session is already idle.
+    #[serde(default)]
+    fresh: bool,
+}
+
+pub(super) async fn quiesce_any(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<QuiesceAnyQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let names = state.sessions.list();
+    if names.is_empty() {
+        return Err(ApiError::NoSessions);
+    }
+
+    let timeout = std::time::Duration::from_millis(params.timeout_ms);
+    let deadline = std::time::Duration::from_millis(params.max_wait_ms);
+
+    // Build a quiescence future for each session, racing them all.
+    let mut futs = Vec::with_capacity(names.len());
+    for name in &names {
+        let session = match state.sessions.get(name) {
+            Some(s) => s,
+            None => continue, // session removed between list() and get()
+        };
+        let activity = session.activity.clone();
+        let session_name = name.clone();
+
+        let last_seen = if params.last_session.as_deref() == Some(name.as_str()) {
+            params.last_generation
+        } else {
+            None
+        };
+
+        let fut = async move {
+            let generation = if params.fresh {
+                activity.wait_for_fresh_quiescence(timeout).await
+            } else {
+                activity.wait_for_quiescence(timeout, last_seen).await
+            };
+            (session_name, generation)
+        };
+        futs.push(fut);
+    }
+
+    // Race all futures under the overall deadline.
+    let race = async {
+        // select_all requires pinned futures
+        let pinned: Vec<_> = futs.into_iter().map(|f| Box::pin(f)).collect();
+        let (result, _index, _remaining) = futures::future::select_all(pinned).await;
+        result
+    };
+
+    match tokio::time::timeout(deadline, race).await {
+        Ok((session_name, generation)) => {
+            let session = get_session(&state.sessions, &session_name)?;
+            let response = session
+                .parser
+                .query(Query::Screen { format: params.format })
+                .await
+                .map_err(|_| ApiError::ParserUnavailable)?;
+
+            match response {
+                crate::parser::state::QueryResponse::Screen(screen) => {
+                    let scrollback_lines = screen.total_lines;
+                    Ok(Json(serde_json::json!({
+                        "session": session_name,
+                        "screen": screen,
+                        "scrollback_lines": scrollback_lines,
+                        "generation": generation,
+                    })))
+                }
+                _ => Err(ApiError::ParserUnavailable),
+            }
+        }
+        Err(_) => Err(ApiError::QuiesceTimeout),
+    }
+}
+
 #[derive(Deserialize)]
 pub(super) struct ScreenQuery {
     #[serde(default)]

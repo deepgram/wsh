@@ -486,13 +486,17 @@ paths:
 
   /quiesce:
     get:
-      operationId: getQuiesce
-      summary: Wait for terminal quiescence
-      tags: [terminal]
+      operationId: getQuiesceAny
+      summary: Wait for quiescence on any session
+      tags: [session]
       description: >
-        Long-polls until the terminal has been idle for timeout_ms milliseconds,
-        then returns a full screen state snapshot. Returns 408 if max_wait_ms
-        is exceeded without quiescence.
+        Server-level long-poll that races quiescence detection across all
+        sessions. Returns the first session to become quiescent, along with
+        its screen state and the session name. When last_session and
+        last_generation are provided, the named session waits for new activity
+        before checking quiescence (preventing busy-loop storms for that
+        session), while all other sessions are checked immediately.
+        Returns 404 if no sessions exist.
       parameters:
         - name: timeout_ms
           in: query
@@ -500,7 +504,7 @@ paths:
           schema:
             type: integer
             minimum: 1
-          description: Quiescence threshold in milliseconds
+          description: Quiescence threshold in milliseconds (per session)
         - name: format
           in: query
           required: false
@@ -521,9 +525,18 @@ paths:
             type: integer
             minimum: 0
           description: >
-            Generation from a previous quiescence response. If provided and
-            matches the current generation, the server waits for new activity
-            before checking quiescence — preventing busy-loop storms.
+            Generation from a previous quiescence response. Used together
+            with last_session. If the named session's current generation
+            matches, it waits for new activity before checking quiescence.
+        - name: last_session
+          in: query
+          required: false
+          schema:
+            type: string
+          description: >
+            Session name from a previous quiescence response. Used together
+            with last_generation to prevent busy-loop storms on a specific
+            session while still racing all other sessions.
         - name: fresh
           in: query
           required: false
@@ -532,21 +545,27 @@ paths:
             default: false
           description: >
             When true, always observe at least timeout_ms of real silence
-            before responding, even if the terminal is already idle. Trades
+            before responding, even if a session is already idle. Trades
             latency for API simplicity (no generation tracking required).
       responses:
         "200":
-          description: Terminal is quiescent. Returns screen state snapshot.
+          description: A session is quiescent. Returns session name and screen state.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/QuiesceResponse"
+                $ref: "#/components/schemas/QuiesceAnyResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "404":
+          description: No sessions exist.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "408":
-          description: Deadline exceeded without quiescence.
+          description: Deadline exceeded without quiescence on any session.
           content:
             application/json:
               schema:
@@ -1393,6 +1412,23 @@ components:
             last_generation on subsequent requests to avoid busy-loop
             storms when the terminal is idle.
 
+    QuiesceAnyResponse:
+      type: object
+      required: [session, screen, scrollback_lines, generation]
+      properties:
+        session:
+          type: string
+          description: Name of the session that became quiescent.
+        screen: { $ref: "#/components/schemas/ScreenResponse" }
+        scrollback_lines: { type: integer, minimum: 0 }
+        generation:
+          type: integer
+          minimum: 0
+          description: >
+            Monotonic activity generation counter for the quiescent session.
+            Pass back as last_generation (with last_session) on subsequent
+            requests to avoid busy-loop storms.
+
     EventType:
       type: string
       enum: [lines, chars, cursor, mode, diffs, input, overlay]
@@ -1550,6 +1586,7 @@ components:
                 - parser_unavailable
                 - input_send_failed
                 - quiesce_timeout
+                - no_sessions
                 - session_create_failed
                 - session_name_conflict
                 - internal_error

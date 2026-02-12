@@ -124,7 +124,19 @@ them for completion:
 
 This is the most common pattern. The key insight: you don't
 have to wait for one to finish before checking another.
-Poll them round-robin:
+
+**Best approach — wait for any session:**
+
+    wait for quiescence on any session (timeout 1000ms)
+    # returns the name of whichever session settled first
+    # read its screen, check if done
+    # repeat with last_session + last_generation to avoid
+    # re-returning the same session immediately
+
+This races all sessions and returns the first to settle.
+Much more efficient than polling each one individually.
+
+**Alternative — poll round-robin:**
 
     quiesce test-unit (short timeout, 1000ms, fresh=true)
     quiesce test-e2e (short timeout, 1000ms, fresh=true)

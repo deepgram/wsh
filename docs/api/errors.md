@@ -49,6 +49,12 @@ change between versions.
 |--------|------|---------|------|
 | `409` | `session_name_conflict` | Session name already exists: {name}. | Session name already in use |
 
+### Not Found Errors (Sessions)
+
+| Status | Code | Message | When |
+|--------|------|---------|------|
+| `404` | `no_sessions` | No sessions exist. | Server-level `GET /quiesce` called with no sessions in the registry |
+
 ### Timeout Errors
 
 | Status | Code | Message | When |

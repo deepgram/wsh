@@ -206,6 +206,23 @@ as a prefix:
 
 Overlays, panels, and input capture are also per-session.
 
+### Wait for Quiescence on Any Session
+In server mode, you can race quiescence across all sessions:
+
+    curl -s 'http://localhost:8080/quiesce?timeout_ms=2000&format=plain'
+
+Returns the first session to become quiescent, including its name:
+
+    {"session": "build", "screen": {...}, "scrollback_lines": 42, "generation": 7}
+
+To avoid re-returning the same session, pass `last_session` and
+`last_generation` from the previous response:
+
+    curl -s 'http://localhost:8080/quiesce?timeout_ms=2000&last_session=build&last_generation=7'
+
+Returns 404 (`no_sessions`) if no sessions exist. Returns 408 if no
+session settles within `max_wait_ms`.
+
 ### Session Lifecycle
 
     curl -s http://localhost:8080/sessions              # list all

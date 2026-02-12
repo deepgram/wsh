@@ -391,6 +391,61 @@ The WebSocket equivalent is the `await_quiesce` method — see
 [websocket.md](websocket.md). Subscriptions can also include automatic
 quiescence sync via the `quiesce_ms` parameter.
 
+### Server-Level Quiescence (Any Session)
+
+```
+GET /quiesce?timeout_ms=2000
+```
+
+Races quiescence detection across **all** sessions, returning the first
+session to become quiescent. The response includes the session name so you
+know which session settled.
+
+**Query parameters:**
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `timeout_ms` | integer | (required) | Quiescence threshold in milliseconds |
+| `format` | `plain` \| `styled` | `styled` | Line format for response |
+| `max_wait_ms` | integer | `30000` | Overall deadline before returning 408 |
+| `last_generation` | integer | (none) | Generation from a previous response; paired with `last_session` |
+| `last_session` | string | (none) | Session name from a previous response; paired with `last_generation` |
+| `fresh` | boolean | `false` | Always observe real silence for `timeout_ms` before responding |
+
+**Response (200):**
+
+```json
+{
+  "session": "build",
+  "screen": { ... },
+  "scrollback_lines": 150,
+  "generation": 42
+}
+```
+
+**Preventing busy-loop storms:**
+
+Pass back both `last_session` and `last_generation` from the previous
+response. The named session waits for new activity before checking
+quiescence, while all other sessions are checked immediately:
+
+```bash
+# First call: returns whichever session becomes quiescent first
+curl 'http://localhost:8080/quiesce?timeout_ms=500&format=plain'
+# Response: {"session": "build", "screen": ..., "generation": 42}
+
+# Subsequent call: "build" won't return until it has new activity,
+# but other sessions can still win the race
+curl 'http://localhost:8080/quiesce?timeout_ms=500&last_session=build&last_generation=42&format=plain'
+```
+
+**Errors:**
+
+| Status | Code | When |
+|--------|------|------|
+| 404 | `no_sessions` | No sessions exist in the registry |
+| 408 | `quiesce_timeout` | `max_wait_ms` exceeded without quiescence on any session |
+
 ## Server Mode
 
 Server mode (`wsh server`) runs a headless daemon that manages multiple terminal

@@ -43,6 +43,8 @@ pub enum ApiError {
     SessionCreateFailed(String),
     /// 409 - Session name already exists.
     SessionNameConflict(String),
+    /// 404 - No sessions exist in the registry.
+    NoSessions,
     /// 500 - Catch-all internal error.
     InternalError(String),
 }
@@ -67,6 +69,7 @@ impl ApiError {
             ApiError::QuiesceTimeout => StatusCode::REQUEST_TIMEOUT,
             ApiError::SessionCreateFailed(_) => StatusCode::INTERNAL_SERVER_ERROR,
             ApiError::SessionNameConflict(_) => StatusCode::CONFLICT,
+            ApiError::NoSessions => StatusCode::NOT_FOUND,
             ApiError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -90,6 +93,7 @@ impl ApiError {
             ApiError::QuiesceTimeout => "quiesce_timeout",
             ApiError::SessionCreateFailed(_) => "session_create_failed",
             ApiError::SessionNameConflict(_) => "session_name_conflict",
+            ApiError::NoSessions => "no_sessions",
             ApiError::InternalError(_) => "internal_error",
         }
     }
@@ -121,6 +125,7 @@ impl ApiError {
             ApiError::SessionNameConflict(name) => {
                 format!("Session name already exists: {}.", name)
             }
+            ApiError::NoSessions => "No sessions exist.".to_string(),
             ApiError::InternalError(detail) => format!("Internal error: {}.", detail),
         }
     }
