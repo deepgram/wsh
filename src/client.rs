@@ -163,7 +163,7 @@ impl Client {
         let resp = req
             .send()
             .await
-            .map_err(|e| io::Error::new(io::ErrorKind::ConnectionRefused, e))?;
+            .map_err(|e| reqwest_to_io_error(bind, e))?;
 
         if !resp.status().is_success() {
             return Err(io::Error::new(
@@ -199,7 +199,7 @@ impl Client {
         let resp = req
             .send()
             .await
-            .map_err(|e| io::Error::new(io::ErrorKind::ConnectionRefused, e))?;
+            .map_err(|e| reqwest_to_io_error(bind, e))?;
 
         if resp.status().as_u16() == 404 {
             return Err(io::Error::new(
@@ -216,6 +216,23 @@ impl Client {
         }
 
         Ok(())
+    }
+}
+
+/// Convert a reqwest error into a human-friendly `io::Error`.
+fn reqwest_to_io_error(bind: &SocketAddr, e: reqwest::Error) -> io::Error {
+    if e.is_connect() {
+        io::Error::new(
+            io::ErrorKind::ConnectionRefused,
+            format!("could not connect to wsh server at {} — is the server running?", bind),
+        )
+    } else if e.is_timeout() {
+        io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!("connection to wsh server at {} timed out", bind),
+        )
+    } else {
+        io::Error::new(io::ErrorKind::Other, e)
     }
 }
 

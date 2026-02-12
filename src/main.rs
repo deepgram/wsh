@@ -536,10 +536,13 @@ async fn run_attach(
 }
 
 async fn run_list(bind: SocketAddr, token: Option<String>) -> Result<(), WshError> {
-    let sessions = client::Client::list_sessions(&bind, &token).await.map_err(|e| {
-        eprintln!("wsh list: {}", e);
-        WshError::Io(e)
-    })?;
+    let sessions = match client::Client::list_sessions(&bind, &token).await {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("wsh list: {}", e);
+            std::process::exit(1);
+        }
+    };
 
     if sessions.is_empty() {
         println!("No active sessions.");
@@ -554,10 +557,10 @@ async fn run_list(bind: SocketAddr, token: Option<String>) -> Result<(), WshErro
 }
 
 async fn run_kill(name: String, bind: SocketAddr, token: Option<String>) -> Result<(), WshError> {
-    client::Client::kill_session(&bind, &token, &name).await.map_err(|e| {
+    if let Err(e) = client::Client::kill_session(&bind, &token, &name).await {
         eprintln!("wsh kill: {}", e);
-        WshError::Io(e)
-    })?;
+        std::process::exit(1);
+    }
 
     println!("Session '{}' killed.", name);
     Ok(())
@@ -571,10 +574,17 @@ async fn run_persist(bind: SocketAddr, token: Option<String>) -> Result<(), WshE
         req = req.bearer_auth(t);
     }
 
-    let resp = req.send().await.map_err(|e| {
-        eprintln!("wsh persist: failed to connect to server at {}: {}", bind, e);
-        WshError::Io(std::io::Error::new(std::io::ErrorKind::ConnectionRefused, e))
-    })?;
+    let resp = match req.send().await {
+        Ok(r) => r,
+        Err(e) => {
+            if e.is_connect() {
+                eprintln!("wsh persist: could not connect to wsh server at {} — is the server running?", bind);
+            } else {
+                eprintln!("wsh persist: {}", e);
+            }
+            std::process::exit(1);
+        }
+    };
 
     if !resp.status().is_success() {
         eprintln!("wsh persist: server returned status {}", resp.status());
