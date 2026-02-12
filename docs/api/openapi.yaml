@@ -340,6 +340,76 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
 
+  /overlay/{id}/spans:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Overlay ID
+    post:
+      operationId: updateOverlaySpans
+      summary: Partial span update by ID
+      tags: [overlay]
+      description: >
+        Updates only spans whose id matches a span in the request.
+        Non-matching spans are left unchanged.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSpansRequest"
+      responses:
+        "204":
+          description: Spans updated.
+        "404":
+          description: Overlay not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /overlay/{id}/write:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Overlay ID
+    post:
+      operationId: overlayRegionWrite
+      summary: Region write (cell-level drawing)
+      tags: [overlay]
+      description: >
+        Writes styled text at specific (row, col) positions within the
+        overlay's bounding rectangle.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegionWriteRequest"
+      responses:
+        "204":
+          description: Region writes applied.
+        "404":
+          description: Overlay not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
   /panel:
     post:
       operationId: createPanel
@@ -484,6 +554,75 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
 
+  /panel/{id}/spans:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Panel ID
+    post:
+      operationId: updatePanelSpans
+      summary: Partial span update by ID
+      tags: [panel]
+      description: >
+        Updates only spans whose id matches a span in the request.
+        Non-matching spans are left unchanged.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSpansRequest"
+      responses:
+        "204":
+          description: Spans updated.
+        "404":
+          description: Panel not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /panel/{id}/write:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Panel ID
+    post:
+      operationId: panelRegionWrite
+      summary: Region write (cell-level drawing)
+      tags: [panel]
+      description: >
+        Writes styled text at specific (row, col) positions within the panel.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegionWriteRequest"
+      responses:
+        "204":
+          description: Region writes applied.
+        "404":
+          description: Panel not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
   /quiesce:
     get:
       operationId: getQuiesceAny
@@ -611,10 +750,127 @@ paths:
       tags: [input]
       description: >
         In passthrough mode, keyboard input goes to both API subscribers
-        and the PTY. Idempotent.
+        and the PTY. Idempotent. Also clears input focus.
       responses:
         "204":
           description: Mode switched to passthrough.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /input/focus:
+    get:
+      operationId: getInputFocus
+      summary: Get current input focus
+      tags: [input]
+      responses:
+        "200":
+          description: Current focus state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FocusResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      operationId: postInputFocus
+      summary: Set input focus to a focusable element
+      tags: [input]
+      description: >
+        Sets input focus to the specified overlay or panel. The element
+        must exist and have focusable: true.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FocusRequest"
+      responses:
+        "204":
+          description: Focus set.
+        "400":
+          description: Element not found or not focusable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /input/unfocus:
+    post:
+      operationId: postInputUnfocus
+      summary: Clear input focus
+      tags: [input]
+      responses:
+        "204":
+          description: Focus cleared.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /screen_mode:
+    get:
+      operationId: getScreenMode
+      summary: Get current screen mode
+      tags: [terminal]
+      responses:
+        "200":
+          description: Current screen mode.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScreenModeResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /screen_mode/enter_alt:
+    post:
+      operationId: enterAltScreen
+      summary: Enter alternate screen mode
+      tags: [terminal]
+      description: >
+        Switches the session to alternate screen mode. New overlays and panels
+        are tagged with screen_mode alt. Returns 409 if already in alt mode.
+      responses:
+        "204":
+          description: Entered alt screen mode.
+        "409":
+          description: Already in alt screen mode.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /screen_mode/exit_alt:
+    post:
+      operationId: exitAltScreen
+      summary: Exit alternate screen mode
+      tags: [terminal]
+      description: >
+        Switches back to normal screen mode. All alt-mode overlays and panels
+        are deleted. Returns 409 if already in normal mode.
+      responses:
+        "204":
+          description: Exited alt screen mode.
+        "409":
+          description: Not in alt screen mode.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -1114,6 +1370,9 @@ components:
       type: object
       required: [text]
       properties:
+        id:
+          type: string
+          description: Named identifier for partial span updates.
         text: { type: string }
         fg: { $ref: "#/components/schemas/OverlayColor" }
         bg: { $ref: "#/components/schemas/OverlayColor" }
@@ -1121,24 +1380,68 @@ components:
         italic: { type: boolean, default: false }
         underline: { type: boolean, default: false }
 
+    BackgroundStyle:
+      type: object
+      required: [bg]
+      properties:
+        bg: { $ref: "#/components/schemas/OverlayColor" }
+      description: Background fill color for an overlay or panel.
+
+    RegionWrite:
+      type: object
+      required: [row, col, text]
+      properties:
+        row: { type: integer, minimum: 0 }
+        col: { type: integer, minimum: 0 }
+        text: { type: string }
+        fg: { $ref: "#/components/schemas/OverlayColor" }
+        bg: { $ref: "#/components/schemas/OverlayColor" }
+        bold: { type: boolean, default: false }
+        italic: { type: boolean, default: false }
+        underline: { type: boolean, default: false }
+      description: Styled text write at a specific (row, col) offset.
+
+    ScreenMode:
+      type: string
+      enum: [normal, alt]
+      description: Which screen mode an element belongs to.
+
     Overlay:
       type: object
-      required: [id, x, y, z, spans]
+      required: [id, x, y, z, width, height, spans]
       properties:
         id: { type: string }
         x: { type: integer, minimum: 0 }
         y: { type: integer, minimum: 0 }
         z: { type: integer }
+        width: { type: integer, minimum: 0 }
+        height: { type: integer, minimum: 0 }
+        background: { $ref: "#/components/schemas/BackgroundStyle" }
         spans: { type: array, items: { $ref: "#/components/schemas/OverlaySpan" } }
+        region_writes:
+          type: array
+          items: { $ref: "#/components/schemas/RegionWrite" }
+          description: Omitted when empty.
+        focusable:
+          type: boolean
+          default: false
+          description: Omitted when false.
+        screen_mode:
+          $ref: "#/components/schemas/ScreenMode"
+          description: Omitted when normal.
 
     CreateOverlayRequest:
       type: object
-      required: [x, y, spans]
+      required: [x, y, width, height, spans]
       properties:
         x: { type: integer, minimum: 0 }
         y: { type: integer, minimum: 0 }
         z: { type: integer }
+        width: { type: integer, minimum: 0 }
+        height: { type: integer, minimum: 0 }
+        background: { $ref: "#/components/schemas/BackgroundStyle" }
         spans: { type: array, items: { $ref: "#/components/schemas/OverlaySpan" } }
+        focusable: { type: boolean, default: false }
 
     CreateOverlayResponse:
       type: object
@@ -1158,6 +1461,25 @@ components:
         x: { type: integer, minimum: 0 }
         y: { type: integer, minimum: 0 }
         z: { type: integer }
+        width: { type: integer, minimum: 0 }
+        height: { type: integer, minimum: 0 }
+
+    UpdateSpansRequest:
+      type: object
+      required: [spans]
+      properties:
+        spans:
+          type: array
+          items: { $ref: "#/components/schemas/OverlaySpan" }
+          description: Spans with id fields to match against existing spans.
+
+    RegionWriteRequest:
+      type: object
+      required: [writes]
+      properties:
+        writes:
+          type: array
+          items: { $ref: "#/components/schemas/RegionWrite" }
 
     # --- Panels ---
 
@@ -1173,8 +1495,20 @@ components:
         position: { $ref: "#/components/schemas/PanelPosition" }
         height: { type: integer, minimum: 1 }
         z: { type: integer }
+        background: { $ref: "#/components/schemas/BackgroundStyle" }
         spans: { type: array, items: { $ref: "#/components/schemas/OverlaySpan" } }
+        region_writes:
+          type: array
+          items: { $ref: "#/components/schemas/RegionWrite" }
+          description: Omitted when empty.
         visible: { type: boolean }
+        focusable:
+          type: boolean
+          default: false
+          description: Omitted when false.
+        screen_mode:
+          $ref: "#/components/schemas/ScreenMode"
+          description: Omitted when normal.
 
     CreatePanelRequest:
       type: object
@@ -1183,7 +1517,9 @@ components:
         position: { $ref: "#/components/schemas/PanelPosition" }
         height: { type: integer, minimum: 1 }
         z: { type: integer }
+        background: { $ref: "#/components/schemas/BackgroundStyle" }
         spans: { type: array, items: { $ref: "#/components/schemas/OverlaySpan" } }
+        focusable: { type: boolean, default: false }
 
     CreatePanelResponse:
       type: object
@@ -1206,6 +1542,7 @@ components:
         position: { $ref: "#/components/schemas/PanelPosition" }
         height: { type: integer, minimum: 1 }
         z: { type: integer }
+        background: { $ref: "#/components/schemas/BackgroundStyle" }
         spans: { type: array, items: { $ref: "#/components/schemas/OverlaySpan" } }
 
     # --- Input ---
@@ -1215,6 +1552,30 @@ components:
       required: [mode]
       properties:
         mode: { $ref: "#/components/schemas/InputMode" }
+
+    FocusRequest:
+      type: object
+      required: [id]
+      properties:
+        id:
+          type: string
+          description: ID of the overlay or panel to focus.
+
+    FocusResponse:
+      type: object
+      required: [focused]
+      properties:
+        focused:
+          oneOf:
+            - type: string
+            - type: "null"
+          description: ID of the focused element, or null.
+
+    ScreenModeResponse:
+      type: object
+      required: [mode]
+      properties:
+        mode: { $ref: "#/components/schemas/ScreenMode" }
 
     # --- Sessions ---
 
@@ -1589,5 +1950,8 @@ components:
                 - no_sessions
                 - session_create_failed
                 - session_name_conflict
+                - not_focusable
+                - already_in_alt_screen
+                - not_in_alt_screen
                 - internal_error
             message: { type: string }
