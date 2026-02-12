@@ -1,8 +1,18 @@
-# wsh: The Web Shell
+# wsh: An API for Your Terminal
 
-A transparent PTY wrapper that exposes terminal I/O via HTTP/WebSocket API. Run your shell normally while making it accessible to agents, automation tools, and (soon) web clients. Operates in standalone mode for single-session use or server mode for managing multiple persistent sessions.
+An API that lets AI agents *interact* with terminal programs -- not just run commands, but use them the way a human does. Send keystrokes, read the screen, wait for output, react to prompts. The terminal is the fundamental interface of the modern computer. `wsh` makes it programmable.
+
+`wsh` sits transparently between your terminal emulator and your shell, capturing all I/O, maintaining structured terminal state, and exposing everything via HTTP/WebSocket API. Your terminal works exactly as before -- but now AI agents, automation tools, and other clients can tap into the same session.
 
 See [docs/VISION.md](docs/VISION.md) for the full project vision.
+
+## What This Enables
+
+- **Drive interactive tools**: Agents can operate installers, debuggers, REPLs, TUIs, and AI coding assistants -- anything that expects a human at the keyboard
+- **Orchestrate AI in parallel**: Run multiple Claude Code instances (or any terminal-based AI tool) across separate sessions, coordinating a fleet of AI workers
+- **Provide live assistance**: Watch a human's terminal session and offer contextual help, rendered as overlays directly in their terminal
+- **Audit and monitor**: Observe terminal activity for security, compliance, or operational awareness
+- **Automate end-to-end**: Set up entire environments, handling every interactive prompt and error along the way
 
 ## Quick Start
 
@@ -42,6 +52,67 @@ wsh kill dev
 ```
 
 The server exposes the same HTTP/WS API on `127.0.0.1:8080` and a Unix domain socket for client commands (`list`, `kill`, `attach`, `detach`). Sessions must be created via the API before attaching. In ephemeral mode (default), the server shuts down when its last session exits. Use `wsh persist` to upgrade a running server to persistent mode.
+
+## The Agent Loop
+
+AI agents interact with `wsh` sessions using a simple, universal pattern:
+
+```
+Send input  →  Wait for quiescence  →  Read screen  →  Decide  →  repeat
+```
+
+```bash
+# Send a command
+curl -X POST http://localhost:8080/sessions/default/input -d 'ls\n'
+
+# Wait for terminal to be idle
+curl -s 'http://localhost:8080/sessions/default/quiesce?timeout_ms=500&max_wait_ms=10000'
+
+# Read what's on screen
+curl -s http://localhost:8080/sessions/default/screen | jq .
+
+# Decide what to do next, then repeat
+```
+
+This loop works for any program, any interface, any situation. The agent reads what's on screen and types what's needed -- exactly like a human.
+
+## AI Skills (Claude Code Plugin)
+
+`wsh` ships with **skills** -- structured knowledge documents that teach AI agents how to use the terminal API effectively. When installed as a Claude Code plugin, skills are loaded automatically based on context.
+
+Skills encode operational expertise: the send/wait/read pattern, how to detect errors, how to navigate TUIs, how to manage parallel sessions. They turn raw API access into competent terminal operation.
+
+| Skill | What It Teaches |
+|-------|-----------------|
+| `wsh:core` | API mechanics and the fundamental send/wait/read/decide loop |
+| `wsh:drive-process` | Running CLI commands, handling prompts, detecting errors |
+| `wsh:tui` | Operating full-screen apps (vim, htop, lazygit, k9s) |
+| `wsh:multi-session` | Creating and managing parallel sessions for concurrent work |
+| `wsh:agent-orchestration` | Driving other AI agents through their terminal interfaces |
+| `wsh:monitor` | Watching human terminal activity and reacting to events |
+| `wsh:visual-feedback` | Using overlays and panels to communicate with users |
+| `wsh:input-capture` | Intercepting keyboard input for dialogs and approvals |
+| `wsh:generative-ui` | Building dynamic, interactive terminal experiences |
+
+### Installing as a Claude Code Plugin
+
+**From a local checkout (development):**
+
+```bash
+claude --plugin-dir /path/to/wsh
+```
+
+**Or install persistently:**
+
+```bash
+# From a local directory
+claude /plugin install /path/to/wsh
+
+# From a git repository
+claude /plugin install https://github.com/deepgram/wsh
+```
+
+Once installed, the skills are available automatically. Claude Code will load the core skill as background knowledge and invoke specialized skills based on the task at hand.
 
 ## CLI Reference
 
@@ -246,44 +317,6 @@ curl -X POST http://localhost:8080/sessions/dev/detach
 # Upgrade to persistent mode (server survives last session exit)
 wsh persist
 ```
-
-## AI Skills (Claude Code Plugin)
-
-wsh ships with a set of AI skills that teach Claude Code (and other agents) how to use the wsh API. When installed as a Claude Code plugin, the skills are automatically loaded based on context — Claude learns how to drive CLI programs, operate TUIs, orchestrate multiple sessions, create visual overlays, and more.
-
-### Skills Included
-
-| Skill | Description |
-|-------|-------------|
-| `wsh:core` | Foundation — API mechanics, primitives, the send/wait/read/decide loop |
-| `wsh:drive-process` | Run CLI commands, handle prompts, detect errors |
-| `wsh:tui` | Operate full-screen apps (vim, htop, lazygit, k9s) |
-| `wsh:multi-session` | Parallel sessions in server mode |
-| `wsh:agent-orchestration` | Drive other AI agents through their terminal interfaces |
-| `wsh:monitor` | Watch human terminal activity and react |
-| `wsh:visual-feedback` | Overlays and panels for communicating with users |
-| `wsh:input-capture` | Intercept keyboard input for dialogs and approvals |
-| `wsh:generative-ui` | Build dynamic interactive terminal experiences |
-
-### Installing as a Claude Code Plugin
-
-**From a local checkout (development):**
-
-```bash
-claude --plugin-dir /path/to/wsh
-```
-
-**Or install persistently:**
-
-```bash
-# From a local directory
-claude /plugin install /path/to/wsh
-
-# From a git repository
-claude /plugin install https://github.com/deepgram/wsh
-```
-
-Once installed, the skills are available automatically. Claude Code will load the core skill as background knowledge and invoke specialized skills based on the task at hand.
 
 ## Authentication
 
