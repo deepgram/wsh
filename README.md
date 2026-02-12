@@ -246,6 +246,44 @@ curl -X POST http://localhost:8080/sessions/dev/detach
 wsh persist
 ```
 
+## AI Skills (Claude Code Plugin)
+
+wsh ships with a set of AI skills that teach Claude Code (and other agents) how to use the wsh API. When installed as a Claude Code plugin, the skills are automatically loaded based on context — Claude learns how to drive CLI programs, operate TUIs, orchestrate multiple sessions, create visual overlays, and more.
+
+### Skills Included
+
+| Skill | Description |
+|-------|-------------|
+| `wsh:core` | Foundation — API mechanics, primitives, the send/wait/read/decide loop |
+| `wsh:drive-process` | Run CLI commands, handle prompts, detect errors |
+| `wsh:tui` | Operate full-screen apps (vim, htop, lazygit, k9s) |
+| `wsh:multi-session` | Parallel sessions in server mode |
+| `wsh:agent-orchestration` | Drive other AI agents through their terminal interfaces |
+| `wsh:monitor` | Watch human terminal activity and react |
+| `wsh:visual-feedback` | Overlays and panels for communicating with users |
+| `wsh:input-capture` | Intercept keyboard input for dialogs and approvals |
+| `wsh:generative-ui` | Build dynamic interactive terminal experiences |
+
+### Installing as a Claude Code Plugin
+
+**From a local checkout (development):**
+
+```bash
+claude --plugin-dir /path/to/wsh
+```
+
+**Or install persistently:**
+
+```bash
+# From a local directory
+claude /plugin install /path/to/wsh
+
+# From a git repository
+claude /plugin install https://github.com/deepgram/wsh
+```
+
+Once installed, the skills are available automatically. Claude Code will load the core skill as background knowledge and invoke specialized skills based on the task at hand.
+
 ## Authentication
 
 When binding to localhost (default), no authentication is required. When
@@ -360,6 +398,18 @@ docs/
     ├── overlays.md
     ├── panels.md
     └── websocket.md
+
+skills/
+└── wsh/
+    ├── core/SKILL.md              # API mechanics and primitives
+    ├── drive-process/SKILL.md     # CLI command interaction
+    ├── tui/SKILL.md               # Full-screen TUI operation
+    ├── multi-session/SKILL.md     # Parallel session orchestration
+    ├── agent-orchestration/SKILL.md # Driving other AI agents
+    ├── monitor/SKILL.md           # Watching and reacting
+    ├── visual-feedback/SKILL.md   # Overlays and panels
+    ├── input-capture/SKILL.md     # Keyboard interception
+    └── generative-ui/SKILL.md     # Dynamic terminal experiences
 
 tests/
 ├── common/
