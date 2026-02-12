@@ -95,7 +95,7 @@ Spans support formatting attributes. Use them for
 visual hierarchy:
 
     {"spans": [
-      {"text": "Warning: ", "bold": true, "fg": {"indexed": 3}},
+      {"text": "Warning: ", "bold": true, "fg": "yellow"},
       {"text": "this deletes 47 files"}
     ]}
 
@@ -115,12 +115,12 @@ in the overlay or panel.
 
     {"spans": [
       {"id": "label", "text": "Status: ", "bold": true},
-      {"id": "value", "text": "building", "fg": {"indexed": 3}}
+      {"id": "value", "text": "building", "fg": "yellow"}
     ]}
 
 Later, update just the "value" span:
 
-    update span "value" → {"text": "complete", "fg": {"indexed": 2}}
+    update span "value" → {"text": "complete", "fg": "green"}
 
 The "label" span stays untouched. This is good for:
 - Live-updating status fields that change frequently
@@ -232,11 +232,11 @@ Use `│` or `|` between inline elements:
 
     {"spans": [
       {"text": " build: "},
-      {"text": "ok", "fg": {"indexed": 2}},
+      {"text": "ok", "fg": "green"},
       {"text": " │ tests: "},
-      {"text": "3 failed", "fg": {"indexed": 1}},
+      {"text": "3 failed", "fg": "red"},
       {"text": " │ lint: "},
-      {"text": "clean", "fg": {"indexed": 2}},
+      {"text": "clean", "fg": "green"},
       {"text": " "}
     ]}
 
@@ -350,8 +350,8 @@ have a light or dark background. Don't rely on color
 alone to convey meaning — pair it with text labels
 or symbols:
 
-    Good:  {"text": "✗ FAIL", "fg": {"indexed": 1}}
-    Bad:   {"text": "●", "fg": {"indexed": 1}}
+    Good:  {"text": "✗ FAIL", "fg": "red"}
+    Bad:   {"text": "●", "fg": "red"}
 
 The word "FAIL" communicates even without color. A
 red dot is meaningless on a terminal where red is

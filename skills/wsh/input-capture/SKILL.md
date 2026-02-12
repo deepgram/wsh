@@ -101,14 +101,14 @@ yes-or-no question and wait for their answer.
 
 ### Example: Confirm a Dangerous Command
 
-    # Show the prompt (focusable for focus routing)
-    create overlay (focusable: true):
+    # Show the prompt
+    create overlay:
       "┌─ Confirm ──────────────────────┐"
       "│ Delete 47 files from /build ?  │"
       "│         [Y]es    [N]o          │"
       "└────────────────────────────────┘"
 
-    # Capture input and set focus
+    # Capture input
     capture input
 
     # Read keystroke via WebSocket
@@ -135,15 +135,15 @@ arrow keys and Enter.
 
 ### The Pattern
 
-    # Show the menu with one item highlighted (focusable for focus routing)
-    create overlay (focusable: true):
+    # Show the menu with one item highlighted
+    create overlay:
       "┌─ Select environment ──────┐"
       "│   development             │"
       "│ ▸ staging                 │"
       "│   production              │"
       "└───────────────────────────┘"
 
-    # Capture input and set focus to the menu overlay
+    # Capture input
     capture input
 
     # Handle navigation
