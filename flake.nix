@@ -24,6 +24,7 @@
             curl
             jq
             websocat
+            nodejs_22
           ];
         };
       }

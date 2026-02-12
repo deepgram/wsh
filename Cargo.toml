@@ -25,6 +25,8 @@ tokio-stream = { version = "0.1.18", features = ["sync"] }
 uuid = { version = "1.20.0", features = ["v4"] }
 parking_lot = "0.12"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+rust-embed = "8"
+mime_guess = "2"
 
 [dev-dependencies]
 tower = { version = "0.4", features = ["util"] }

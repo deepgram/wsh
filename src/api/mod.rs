@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod error;
 mod handlers;
+mod web;
 pub mod ws_methods;
 
 use axum::{
@@ -128,6 +129,7 @@ pub fn router(state: AppState, token: Option<String>) -> Router {
         .route("/openapi.yaml", get(openapi_spec))
         .route("/docs", get(docs_index))
         .merge(protected)
+        .fallback(web::web_asset)
 }
 
 #[cfg(test)]
@@ -285,7 +287,7 @@ mod tests {
         // This confirms the route exists
         assert_ne!(response.status(), StatusCode::NOT_FOUND);
 
-        // Test non-existent route returns 404
+        // Non-API routes are served by the web asset fallback (SPA)
         let response = app
             .oneshot(
                 Request::builder()
@@ -295,7 +297,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]
