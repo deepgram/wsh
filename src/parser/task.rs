@@ -63,15 +63,18 @@ pub async fn run(
                         }
 
                         // Emit line events for changed lines
+                        // changes.lines contains view-relative indices (screen row 0..rows-1)
+                        // Use vt.view() to get the correct visible line content
                         let total_lines = vt.lines().count();
+                        let view_lines: Vec<_> = vt.view().collect();
                         for line_idx in changed_lines {
-                            if let Some(line) = vt.lines().nth(line_idx) {
+                            if let Some(line) = view_lines.get(line_idx) {
                                 seq += 1;
                                 let _ = event_tx.send(Event::Line {
                                     seq,
                                     index: line_idx,
                                     total_lines,
-                                    line: format_line(line, true),
+                                    line: format_line(*line, true),
                                 });
                             }
                         }
