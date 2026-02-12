@@ -301,7 +301,7 @@ paths:
           $ref: "#/components/responses/Forbidden"
     patch:
       operationId: patchOverlay
-      summary: Move or reorder an overlay
+      summary: Patch overlay position, dimensions, or background
       tags: [overlay]
       requestBody:
         required: true
@@ -1463,6 +1463,7 @@ components:
         z: { type: integer }
         width: { type: integer, minimum: 0 }
         height: { type: integer, minimum: 0 }
+        background: { $ref: "#/components/schemas/BackgroundStyle" }
 
     UpdateSpansRequest:
       type: object

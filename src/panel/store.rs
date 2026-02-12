@@ -545,4 +545,43 @@ mod tests {
         let store = PanelStore::new();
         assert!(!store.region_write("nonexistent", vec![]));
     }
+
+    #[test]
+    fn test_list_by_mode_filters_correctly() {
+        let store = PanelStore::new();
+        store.create(Position::Bottom, 1, None, None, vec![], false, ScreenMode::Normal);
+        store.create(Position::Top, 1, None, None, vec![], false, ScreenMode::Normal);
+        store.create(Position::Bottom, 1, None, None, vec![], false, ScreenMode::Alt);
+
+        let normal = store.list_by_mode(ScreenMode::Normal);
+        let alt = store.list_by_mode(ScreenMode::Alt);
+        assert_eq!(normal.len(), 2);
+        assert_eq!(alt.len(), 1);
+    }
+
+    #[test]
+    fn test_delete_by_mode_removes_only_matching() {
+        let store = PanelStore::new();
+        store.create(Position::Bottom, 1, None, None, vec![], false, ScreenMode::Normal);
+        store.create(Position::Top, 1, None, None, vec![], false, ScreenMode::Alt);
+        store.create(Position::Bottom, 1, None, None, vec![], false, ScreenMode::Alt);
+
+        store.delete_by_mode(ScreenMode::Alt);
+        assert_eq!(store.list().len(), 1);
+        assert_eq!(store.list()[0].screen_mode, ScreenMode::Normal);
+    }
+
+    #[test]
+    fn test_create_with_background() {
+        use crate::overlay::types::{Color, NamedColor};
+
+        let store = PanelStore::new();
+        let bg = BackgroundStyle {
+            bg: Color::Named(NamedColor::Blue),
+        };
+        let id = store.create(Position::Bottom, 2, None, Some(bg), vec![], false, ScreenMode::Normal);
+        let panel = store.get(&id).unwrap();
+        assert!(panel.background.is_some());
+        assert_eq!(panel.background.unwrap().bg, Color::Named(NamedColor::Blue));
+    }
 }

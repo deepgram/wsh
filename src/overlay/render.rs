@@ -257,13 +257,16 @@ pub fn overlay_line_extents(overlay: &Overlay) -> Vec<(u16, u16, u16)> {
 }
 
 /// Generates ANSI sequences to erase a single overlay by overwriting with spaces.
+///
+/// Uses the overlay's explicit `width` and `height` dimensions to erase the full
+/// bounding rectangle, since backgrounds and region writes can extend beyond spans.
 pub fn erase_overlay(overlay: &Overlay) -> String {
     let mut result = String::new();
-    for (row, col, width) in overlay_line_extents(overlay) {
-        result.push_str(&cursor_position(row, col));
-        for _ in 0..width {
-            result.push(' ');
-        }
+    let w = overlay.width as usize;
+    let spaces: String = " ".repeat(w);
+    for row_offset in 0..overlay.height {
+        result.push_str(&cursor_position(overlay.y + row_offset, overlay.x));
+        result.push_str(&spaces);
     }
     result
 }
@@ -741,7 +744,7 @@ mod tests {
             x: 5,
             y: 3,
             z: 0,
-            width: 80,
+            width: 10,
             height: 1,
             background: None,
             spans: vec![OverlaySpan {
@@ -758,8 +761,8 @@ mod tests {
             screen_mode: ScreenMode::Normal,
         };
         let result = erase_overlay(&overlay);
-        // Should position cursor at (3,5) -> \x1b[4;6H then 5 spaces
-        assert_eq!(result, "\x1b[4;6H     ");
+        // Should erase full width=10 rectangle at (3,5) -> \x1b[4;6H then 10 spaces
+        assert_eq!(result, format!("\x1b[4;6H{}", " ".repeat(10)));
     }
 
     #[test]
@@ -769,7 +772,7 @@ mod tests {
             x: 0,
             y: 0,
             z: 0,
-            width: 80,
+            width: 20,
             height: 2,
             background: None,
             spans: vec![OverlaySpan {
@@ -786,9 +789,9 @@ mod tests {
             screen_mode: ScreenMode::Normal,
         };
         let result = erase_overlay(&overlay);
-        // Line 1: row 0, col 0, width 2 -> \x1b[1;1H + 2 spaces
-        // Line 2: row 1, col 0, width 3 -> \x1b[2;1H + 3 spaces
-        assert_eq!(result, "\x1b[1;1H  \x1b[2;1H   ");
+        let spaces = " ".repeat(20);
+        // Row 0 and row 1 both erased with full width=20
+        assert_eq!(result, format!("\x1b[1;1H{spaces}\x1b[2;1H{spaces}"));
     }
 
     #[test]

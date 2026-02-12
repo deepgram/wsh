@@ -211,7 +211,7 @@ pub struct UpdateOverlayParams {
     pub spans: Vec<OverlaySpan>,
 }
 
-/// Parameters for patching overlay position / z-order.
+/// Parameters for patching overlay position / z-order / background.
 #[derive(Debug, Deserialize)]
 pub struct PatchOverlayParams {
     pub id: String,
@@ -220,6 +220,8 @@ pub struct PatchOverlayParams {
     pub z: Option<i32>,
     pub width: Option<u16>,
     pub height: Option<u16>,
+    #[serde(default)]
+    pub background: Option<crate::overlay::BackgroundStyle>,
 }
 
 // ---------------------------------------------------------------------------
@@ -499,7 +501,7 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                     );
                 }
             };
-            if session.overlays.move_to(&params.id, params.x, params.y, params.z, params.width, params.height) {
+            if session.overlays.move_to(&params.id, params.x, params.y, params.z, params.width, params.height, params.background) {
                 if session.is_local {
                     flush_overlays_to_stdout(&[old], &session.overlays.list());
                 }

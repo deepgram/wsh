@@ -1423,6 +1423,8 @@ pub(super) struct PatchOverlayRequest {
     z: Option<i32>,
     width: Option<u16>,
     height: Option<u16>,
+    #[serde(default)]
+    background: Option<BackgroundStyle>,
 }
 
 #[derive(Deserialize)]
@@ -1503,7 +1505,7 @@ pub(super) async fn overlay_patch(
         .overlays
         .get(&id)
         .ok_or_else(|| ApiError::OverlayNotFound(id.clone()))?;
-    if session.overlays.move_to(&id, req.x, req.y, req.z, req.width, req.height) {
+    if session.overlays.move_to(&id, req.x, req.y, req.z, req.width, req.height, req.background) {
         if session.is_local {
             let all = session.overlays.list();
             flush_overlays_to_stdout(&[old], &all);

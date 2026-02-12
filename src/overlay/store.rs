@@ -91,7 +91,7 @@ impl OverlayStore {
         }
     }
 
-    /// Move an overlay to new coordinates
+    /// Patch an overlay's position, dimensions, or background
     pub fn move_to(
         &self,
         id: &str,
@@ -100,6 +100,7 @@ impl OverlayStore {
         z: Option<i32>,
         width: Option<u16>,
         height: Option<u16>,
+        background: Option<BackgroundStyle>,
     ) -> bool {
         let mut inner = self.inner.write().unwrap();
         if let Some(overlay) = inner.overlays.get_mut(id) {
@@ -117,6 +118,9 @@ impl OverlayStore {
             }
             if let Some(height) = height {
                 overlay.height = height;
+            }
+            if let Some(background) = background {
+                overlay.background = Some(background);
             }
             true
         } else {
@@ -457,5 +461,56 @@ mod tests {
     fn test_region_write_nonexistent_overlay() {
         let store = OverlayStore::new();
         assert!(!store.region_write("nonexistent", vec![]));
+    }
+
+    #[test]
+    fn test_list_by_mode_filters_correctly() {
+        let store = OverlayStore::new();
+        store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Normal);
+        store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Normal);
+        store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Alt);
+
+        let normal = store.list_by_mode(ScreenMode::Normal);
+        let alt = store.list_by_mode(ScreenMode::Alt);
+        assert_eq!(normal.len(), 2);
+        assert_eq!(alt.len(), 1);
+    }
+
+    #[test]
+    fn test_delete_by_mode_removes_only_matching() {
+        let store = OverlayStore::new();
+        store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Normal);
+        store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Alt);
+        store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Alt);
+
+        store.delete_by_mode(ScreenMode::Alt);
+        assert_eq!(store.list().len(), 1);
+        assert_eq!(store.list()[0].screen_mode, ScreenMode::Normal);
+    }
+
+    #[test]
+    fn test_create_with_background() {
+        let store = OverlayStore::new();
+        let bg = BackgroundStyle {
+            bg: Color::Named(NamedColor::Blue),
+        };
+        let id = store.create(0, 0, None, 40, 10, Some(bg), vec![], false, ScreenMode::Normal);
+        let overlay = store.get(&id).unwrap();
+        assert!(overlay.background.is_some());
+        assert_eq!(overlay.background.unwrap().bg, Color::Named(NamedColor::Blue));
+    }
+
+    #[test]
+    fn test_move_to_with_background() {
+        let store = OverlayStore::new();
+        let id = store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Normal);
+        assert!(store.get(&id).unwrap().background.is_none());
+
+        let bg = BackgroundStyle {
+            bg: Color::Named(NamedColor::Red),
+        };
+        assert!(store.move_to(&id, None, None, None, None, None, Some(bg)));
+        let overlay = store.get(&id).unwrap();
+        assert_eq!(overlay.background.unwrap().bg, Color::Named(NamedColor::Red));
     }
 }
