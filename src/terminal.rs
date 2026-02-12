@@ -1,4 +1,5 @@
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, size};
+use std::io::Write;
 use std::sync::{Arc, RwLock};
 use thiserror::Error;
 
@@ -6,6 +7,9 @@ use thiserror::Error;
 pub enum TerminalError {
     #[error("failed to enable raw mode: {0}")]
     EnableRawMode(#[source] std::io::Error),
+
+    #[error("failed to set up screen: {0}")]
+    Screen(#[source] std::io::Error),
 }
 
 /// RAII guard for terminal raw mode.
@@ -29,6 +33,57 @@ impl RawModeGuard {
 impl Drop for RawModeGuard {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
+    }
+}
+
+/// The screen mode to use when wsh starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScreenMode {
+    /// Clear the screen (default). Preserves native terminal scrollback.
+    Clear,
+    /// Enter the alternate screen buffer. Restores the previous screen on drop.
+    AltScreen,
+}
+
+/// RAII guard for terminal screen mode.
+///
+/// In `Clear` mode: clears the screen on creation, no-op on drop.
+/// In `AltScreen` mode: enters the alternate screen buffer on creation,
+/// restores the previous screen on drop (like vim, less, etc.).
+pub struct ScreenGuard {
+    mode: ScreenMode,
+}
+
+impl ScreenGuard {
+    pub fn new(mode: ScreenMode) -> Result<Self, TerminalError> {
+        let mut stdout = std::io::stdout();
+        match mode {
+            ScreenMode::Clear => {
+                // Clear screen and move cursor to top-left
+                stdout
+                    .write_all(b"\x1b[2J\x1b[H")
+                    .map_err(TerminalError::Screen)?;
+                stdout.flush().map_err(TerminalError::Screen)?;
+            }
+            ScreenMode::AltScreen => {
+                // Enter alternate screen buffer (smcup)
+                stdout
+                    .write_all(b"\x1b[?1049h")
+                    .map_err(TerminalError::Screen)?;
+                stdout.flush().map_err(TerminalError::Screen)?;
+            }
+        }
+        Ok(Self { mode })
+    }
+}
+
+impl Drop for ScreenGuard {
+    fn drop(&mut self) {
+        if self.mode == ScreenMode::AltScreen {
+            let mut stdout = std::io::stdout();
+            let _ = stdout.write_all(b"\x1b[?1049l");
+            let _ = stdout.flush();
+        }
     }
 }
 

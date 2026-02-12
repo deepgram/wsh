@@ -61,6 +61,11 @@ struct Cli {
     /// Name for the initial session
     #[arg(long)]
     name: Option<String>,
+
+    /// Use alternate screen buffer (restores previous screen on exit, but
+    /// disables native terminal scrollback while wsh is running)
+    #[arg(long)]
+    alt_screen: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -92,6 +97,11 @@ enum Commands {
         /// Path to the Unix domain socket
         #[arg(long)]
         socket: Option<PathBuf>,
+
+        /// Use alternate screen buffer (restores previous screen on exit, but
+        /// disables native terminal scrollback while wsh is running)
+        #[arg(long)]
+        alt_screen: bool,
     },
 
     /// List active sessions on the server
@@ -181,8 +191,8 @@ async fn main() -> Result<(), WshError> {
         Some(Commands::Server { bind, token, socket }) => {
             run_server(bind, token, socket).await
         }
-        Some(Commands::Attach { name, scrollback, socket }) => {
-            run_attach(name, scrollback, socket).await
+        Some(Commands::Attach { name, scrollback, socket, alt_screen }) => {
+            run_attach(name, scrollback, socket, alt_screen).await
         }
         Some(Commands::List { socket }) => {
             run_list(socket).await
@@ -334,6 +344,16 @@ async fn run_standalone(cli: Cli) -> Result<(), WshError> {
     // Enable raw mode so we receive all keystrokes (including Ctrl+C, etc.)
     let raw_guard = terminal::RawModeGuard::new()?;
 
+    // Clear the screen (or enter alternate screen) so the local view
+    // matches the API output — the first line of session output appears
+    // at the top of the terminal.
+    let screen_mode = if cli.alt_screen {
+        terminal::ScreenMode::AltScreen
+    } else {
+        terminal::ScreenMode::Clear
+    };
+    let screen_guard = terminal::ScreenGuard::new(screen_mode)?;
+
     let (rows, cols) = terminal::terminal_size().unwrap_or((24, 80));
     tracing::debug!(rows, cols, "terminal size");
 
@@ -466,6 +486,7 @@ async fn run_standalone(cli: Cli) -> Result<(), WshError> {
     }
 
     tracing::info!("wsh exiting");
+    drop(screen_guard);
     drop(raw_guard);
     std::process::exit(0)
 }
@@ -476,6 +497,7 @@ async fn run_attach(
     name: String,
     scrollback: String,
     socket: Option<PathBuf>,
+    alt_screen: bool,
 ) -> Result<(), WshError> {
     let socket_path = socket.unwrap_or_else(server::default_socket_path);
 
@@ -513,6 +535,15 @@ async fn run_attach(
     // Enter raw mode for the local terminal
     let raw_guard = terminal::RawModeGuard::new()?;
 
+    // Clear the screen (or enter alternate screen) so the local view
+    // starts clean before replaying scrollback.
+    let screen_mode = if alt_screen {
+        terminal::ScreenMode::AltScreen
+    } else {
+        terminal::ScreenMode::Clear
+    };
+    let screen_guard = terminal::ScreenGuard::new(screen_mode)?;
+
     // Replay scrollback and screen data before entering the streaming loop
     {
         use std::io::Write;
@@ -530,6 +561,7 @@ async fn run_attach(
     let result = c.run_streaming().await;
 
     // Restore terminal
+    drop(screen_guard);
     drop(raw_guard);
 
     if let Err(e) = result {
