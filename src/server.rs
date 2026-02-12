@@ -12,6 +12,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::UnixListener;
 use tracing;
 
+use crate::panel::layout::compute_layout;
 use crate::protocol::*;
 use crate::pty::SpawnCommand;
 use crate::session::{Session, SessionRegistry};
@@ -183,6 +184,9 @@ async fn handle_create_session<S: AsyncRead + AsyncWrite + Unpin>(
 
     tracing::info!(session = %name, "client created session");
 
+    // Send initial visual state before streaming
+    send_initial_visual_state(stream, &session).await?;
+
     // Enter streaming loop
     run_streaming(stream, &session).await
 }
@@ -286,6 +290,9 @@ async fn handle_attach_session<S: AsyncRead + AsyncWrite + Unpin>(
 
     tracing::info!(session = %msg.name, "client attached to session");
 
+    // Send initial visual state before streaming
+    send_initial_visual_state(stream, &session).await?;
+
     // Enter streaming loop
     run_streaming(stream, &session).await
 }
@@ -368,6 +375,41 @@ async fn handle_detach_session<S: AsyncRead + AsyncWrite + Unpin>(
     }
 }
 
+/// Send initial overlay and panel state to a newly connected client.
+///
+/// Called after sending CreateSessionResponse or AttachSessionResponse,
+/// before entering the streaming loop.
+async fn send_initial_visual_state<S: AsyncWrite + Unpin>(
+    stream: &mut S,
+    session: &Session,
+) -> io::Result<()> {
+    // Send current overlay state
+    let overlays = session.overlays.list();
+    if !overlays.is_empty() {
+        let msg = OverlaySyncMsg { overlays };
+        let frame = Frame::control(FrameType::OverlaySync, &msg)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        frame.write_to(stream).await?;
+    }
+
+    // Send current panel state
+    let panels = session.panels.list();
+    if !panels.is_empty() {
+        let (term_rows, term_cols) = session.terminal_size.get();
+        let layout = compute_layout(&panels, term_rows, term_cols);
+        let msg = PanelSyncMsg {
+            panels,
+            scroll_region_top: layout.scroll_region_top,
+            scroll_region_bottom: layout.scroll_region_bottom,
+        };
+        let frame = Frame::control(FrameType::PanelSync, &msg)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        frame.write_to(stream).await?;
+    }
+
+    Ok(())
+}
+
 /// Main streaming loop: proxy I/O between the client and the session.
 ///
 /// - Client → Server: StdinInput frames are forwarded to session.input_tx
@@ -392,6 +434,7 @@ async fn run_streaming<S: AsyncRead + AsyncWrite + Unpin>(
     let input_broadcaster = session.input_broadcaster.clone();
     let focus = session.focus.clone();
     let mut detach_rx = session.detach_signal.subscribe();
+    let mut visual_update_rx = session.visual_update_tx.subscribe();
 
     // Main loop: read from client and session output concurrently
     loop {
@@ -401,6 +444,39 @@ async fn run_streaming<S: AsyncRead + AsyncWrite + Unpin>(
                 let detach_frame = Frame::new(FrameType::Detach, Bytes::new());
                 let _ = detach_frame.write_to(&mut writer).await;
                 break;
+            }
+
+            // Visual state changes → send OverlaySync or PanelSync frame
+            result = visual_update_rx.recv() => {
+                match result {
+                    Ok(VisualUpdate::OverlaysChanged) => {
+                        let msg = OverlaySyncMsg {
+                            overlays: session.overlays.list(),
+                        };
+                        if let Ok(frame) = Frame::control(FrameType::OverlaySync, &msg) {
+                            if frame.write_to(&mut writer).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Ok(VisualUpdate::PanelsChanged) => {
+                        let panels = session.panels.list();
+                        let (term_rows, term_cols) = terminal_size.get();
+                        let layout = compute_layout(&panels, term_rows, term_cols);
+                        let msg = PanelSyncMsg {
+                            panels,
+                            scroll_region_top: layout.scroll_region_top,
+                            scroll_region_bottom: layout.scroll_region_bottom,
+                        };
+                        if let Ok(frame) = Frame::control(FrameType::PanelSync, &msg) {
+                            if frame.write_to(&mut writer).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                }
             }
 
             // Output from session → client

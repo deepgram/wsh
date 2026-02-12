@@ -84,34 +84,40 @@ compatibility.
 
 ## Quick Start
 
-### Standalone Mode
+### Getting Started
+
+Running `wsh` auto-spawns a server daemon if one isn't already running, then creates and attaches to a session. All API endpoints are available immediately.
 
 ```bash
-# Start wsh (localhost, no auth required)
+# Start wsh (auto-spawns server, creates session, attaches)
 wsh
 
+# In another terminal:
 # Check health
 curl http://localhost:8080/health
 # {"status":"ok"}
 
+# List sessions
+curl http://localhost:8080/sessions
+# [{"name":"default"}]
+
 # Get current screen contents
-curl http://localhost:8080/screen
-# {"epoch":1,"first_line_index":0,"total_lines":1,"lines":["$ "],"cursor":{"row":0,"col":2,"visible":true},"cols":80,"rows":24,"alternate_active":false}
+curl http://localhost:8080/sessions/default/screen
+# {"epoch":1,"first_line_index":0,"total_lines":1,"lines":["$ "],...}
 
 # Send input (type "ls\n")
-curl -X POST http://localhost:8080/input -d 'ls\n'
-
-# Get scrollback with pagination
-curl 'http://localhost:8080/scrollback?offset=0&limit=50'
+curl -X POST http://localhost:8080/sessions/default/input -d 'ls\n'
 
 # Connect to raw WebSocket (using websocat)
-websocat ws://localhost:8080/ws/raw
+websocat ws://localhost:8080/sessions/default/ws/raw
 ```
 
 ### Server Mode
 
+For persistent operation (e.g., hosting sessions for AI agents):
+
 ```bash
-# Start the server daemon
+# Start the server daemon (persistent by default)
 wsh server
 
 # Create a session via HTTP
@@ -136,9 +142,8 @@ wsh attach dev
 # Kill the session
 curl -X DELETE http://localhost:8080/sessions/dev
 
-# Switch server to persistent mode (won't exit when last session ends)
-curl -X POST http://localhost:8080/server/persist
-# {"persistent":true}
+# Use --ephemeral to auto-exit when last session ends
+wsh server --ephemeral
 ```
 
 ## Health Check

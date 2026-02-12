@@ -11,6 +11,8 @@ use bytes::Bytes;
 use tokio::io::{AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::UnixStream;
 
+use crate::overlay::{self, Overlay};
+use crate::panel::{self, Panel};
 use crate::protocol::*;
 
 /// A client connection to the wsh server daemon over a Unix socket.
@@ -251,6 +253,10 @@ async fn streaming_loop(
     let detach_timer = tokio::time::sleep(std::time::Duration::from_millis(500));
     tokio::pin!(detach_timer);
 
+    // Local caches of visual state for erase-before-render
+    let mut cached_overlays: Vec<Overlay> = Vec::new();
+    let mut cached_panels: Vec<Panel> = Vec::new();
+
     loop {
         tokio::select! {
             // Stdin data → StdinInput frame to server
@@ -293,7 +299,7 @@ async fn streaming_loop(
                 }
             }
 
-            // PtyOutput frames from server → stdout
+            // Frames from server → stdout
             result = Frame::read_from(&mut reader) => {
                 match result {
                     Ok(frame) => {
@@ -301,10 +307,68 @@ async fn streaming_loop(
                             FrameType::PtyOutput => {
                                 use std::io::Write;
                                 let mut stdout = std::io::stdout().lock();
-                                if stdout.write_all(&frame.payload).is_err() {
-                                    break;
+                                if !cached_overlays.is_empty() {
+                                    // Erase overlays, write PTY output, re-render overlays
+                                    let _ = stdout.write_all(overlay::begin_sync().as_bytes());
+                                    let _ = stdout.write_all(overlay::erase_all_overlays(&cached_overlays).as_bytes());
+                                    let _ = stdout.write_all(&frame.payload);
+                                    let _ = stdout.write_all(overlay::render_all_overlays(&cached_overlays).as_bytes());
+                                    let _ = stdout.write_all(overlay::end_sync().as_bytes());
+                                } else {
+                                    let _ = stdout.write_all(&frame.payload);
                                 }
                                 let _ = stdout.flush();
+                            }
+                            FrameType::OverlaySync => {
+                                if let Ok(msg) = frame.parse_json::<OverlaySyncMsg>() {
+                                    use std::io::Write;
+                                    let mut stdout = std::io::stdout().lock();
+                                    let _ = stdout.write_all(overlay::begin_sync().as_bytes());
+                                    let _ = stdout.write_all(overlay::save_cursor().as_bytes());
+                                    // Erase old overlays
+                                    let _ = stdout.write_all(overlay::erase_all_overlays(&cached_overlays).as_bytes());
+                                    // Render new overlays
+                                    let _ = stdout.write_all(overlay::render_all_overlays(&msg.overlays).as_bytes());
+                                    let _ = stdout.write_all(overlay::restore_cursor().as_bytes());
+                                    let _ = stdout.write_all(overlay::end_sync().as_bytes());
+                                    let _ = stdout.flush();
+                                    cached_overlays = msg.overlays;
+                                }
+                            }
+                            FrameType::PanelSync => {
+                                if let Ok(msg) = frame.parse_json::<PanelSyncMsg>() {
+                                    use std::io::Write;
+                                    let (term_rows, term_cols) = crate::terminal::terminal_size().unwrap_or((24, 80));
+                                    let mut stdout = std::io::stdout().lock();
+                                    let _ = stdout.write_all(overlay::begin_sync().as_bytes());
+
+                                    // Erase old panels using cached layout
+                                    if !cached_panels.is_empty() {
+                                        let old_layout = panel::compute_layout(&cached_panels, term_rows, term_cols);
+                                        let _ = stdout.write_all(panel::erase_all_panels(&old_layout, term_cols).as_bytes());
+                                    }
+
+                                    // Compute and render new layout
+                                    let new_layout = panel::compute_layout(&msg.panels, term_rows, term_cols);
+
+                                    // Set scroll region
+                                    if new_layout.top_panels.is_empty() && new_layout.bottom_panels.is_empty()
+                                        || new_layout.pty_rows == 0
+                                    {
+                                        let _ = stdout.write_all(panel::reset_scroll_region().as_bytes());
+                                    } else {
+                                        let _ = stdout.write_all(
+                                            panel::set_scroll_region(new_layout.scroll_region_top, new_layout.scroll_region_bottom).as_bytes(),
+                                        );
+                                    }
+
+                                    // Render new panels
+                                    let _ = stdout.write_all(panel::render_all_panels(&new_layout, term_cols).as_bytes());
+                                    let _ = stdout.write_all(overlay::end_sync().as_bytes());
+                                    let _ = stdout.flush();
+
+                                    cached_panels = msg.panels;
+                                }
                             }
                             FrameType::Error => {
                                 if let Ok(err) = frame.parse_json::<ErrorMsg>() {
@@ -339,6 +403,22 @@ async fn streaming_loop(
                 pending_detach = false;
             }
         }
+    }
+
+    // Clean up visual state before exiting
+    {
+        use std::io::Write;
+        let mut stdout = std::io::stdout().lock();
+        if !cached_overlays.is_empty() {
+            let _ = stdout.write_all(overlay::erase_all_overlays(&cached_overlays).as_bytes());
+        }
+        if !cached_panels.is_empty() {
+            let (term_rows, term_cols) = crate::terminal::terminal_size().unwrap_or((24, 80));
+            let layout = panel::compute_layout(&cached_panels, term_rows, term_cols);
+            let _ = stdout.write_all(panel::erase_all_panels(&layout, term_cols).as_bytes());
+            let _ = stdout.write_all(panel::reset_scroll_region().as_bytes());
+        }
+        let _ = stdout.flush();
     }
 
     // Ensure the writer half is cleanly shut down

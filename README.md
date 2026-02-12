@@ -16,24 +16,33 @@ See [docs/VISION.md](docs/VISION.md) for the full project vision.
 
 ## Quick Start
 
-### Standalone Mode
+### Getting Started
 
 ```bash
-nix develop -c sh -c "cargo run"
+# Start wsh (auto-spawns a server daemon if one isn't running)
+wsh
+
+# In another terminal, list sessions
+wsh list
+
+# Start a second session
+wsh --name dev
+
+# Attach to an existing session
+wsh attach dev
+
+# Kill a session
+wsh kill dev
 ```
 
-This starts wsh which:
-1. Puts your terminal in raw mode and clears the screen
-2. Spawns your shell in a PTY
-3. Starts an HTTP/WebSocket API server on `127.0.0.1:8080`
-4. Passes through all keyboard input and terminal output transparently
-
-Exit when the child process exits, or press Ctrl+C.
+Running `wsh` automatically starts a background server daemon (if one isn't already running) and creates a new session. Your terminal enters raw mode, and keyboard input and terminal output pass through transparently. Detach with `Ctrl+\` `Ctrl+\` (double-tap). The server exits automatically when the last session ends.
 
 ### Server Mode
 
+For persistent operation (e.g., hosting sessions for AI agents):
+
 ```bash
-# Start the headless daemon
+# Start the server daemon (persistent by default)
 wsh server
 
 # Create a session via the API
@@ -51,7 +60,7 @@ wsh list
 wsh kill dev
 ```
 
-The server exposes the same HTTP/WS API on `127.0.0.1:8080` and a Unix domain socket for client commands (`list`, `kill`, `attach`, `detach`). Sessions must be created via the API before attaching. In ephemeral mode (default), the server shuts down when its last session exits. Use `wsh persist` to upgrade a running server to persistent mode.
+The server exposes an HTTP/WS API on `127.0.0.1:8080` and a Unix domain socket for client commands (`list`, `kill`, `attach`, `detach`). Use `--ephemeral` to have the server exit when its last session ends. Use `wsh persist` to upgrade a running ephemeral server to persistent mode.
 
 ## The Agent Loop
 

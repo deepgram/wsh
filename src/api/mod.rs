@@ -179,8 +179,8 @@ mod tests {
             input_broadcaster: crate::input::InputBroadcaster::new(),
             activity: ActivityTracker::new(),
             focus: crate::input::FocusTracker::new(),
-            is_local: false,
             detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
+            visual_update_tx: tokio::sync::broadcast::channel::<crate::protocol::VisualUpdate>(16).0,
             screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(crate::overlay::ScreenMode::Normal)),
         };
         let registry = crate::session::SessionRegistry::new();

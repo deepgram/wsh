@@ -45,8 +45,8 @@ fn create_test_state() -> (api::AppState, mpsc::Receiver<Bytes>, ActivityTracker
         input_broadcaster: InputBroadcaster::new(),
         activity: activity.clone(),
         focus: FocusTracker::new(),
-        is_local: false,
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
+        visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
     };
     let registry = SessionRegistry::new();
@@ -711,8 +711,8 @@ fn create_multi_session_state() -> (api::AppState, ActivityTracker, ActivityTrac
             input_broadcaster: InputBroadcaster::new(),
             activity: activity.clone(),
             focus: FocusTracker::new(),
-            is_local: false,
             detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
+            visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
             screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
         };
         (session, activity)

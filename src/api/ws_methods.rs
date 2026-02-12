@@ -333,7 +333,6 @@ pub struct FocusParams {
 // ---------------------------------------------------------------------------
 
 use crate::session::Session;
-use super::handlers::flush_overlays_to_stdout;
 
 /// Parse params from a WsRequest, returning a WsResponse error on failure.
 #[allow(clippy::result_large_err)]
@@ -415,12 +414,9 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
             WsResponse::success(id, method, serde_json::to_value(&overlays).unwrap())
         }
         "clear_overlays" => {
-            let old = session.overlays.list();
             session.overlays.clear();
             session.focus.unfocus();
-            if session.is_local {
-                flush_overlays_to_stdout(&old, &[]);
-            }
+            let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
             WsResponse::success(id, method, serde_json::json!({}))
         }
         "create_overlay" => {
@@ -430,10 +426,7 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
             };
             let current_mode = *session.screen_mode.read();
             let overlay_id = session.overlays.create(params.x, params.y, params.z, params.width, params.height, params.background, params.spans, params.focusable, current_mode);
-            if session.is_local {
-                let all = session.overlays.list();
-                flush_overlays_to_stdout(&[], &all);
-            }
+            let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
             WsResponse::success(id, method, serde_json::json!({ "id": overlay_id }))
         }
         "get_overlay" => {
@@ -460,21 +453,8 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                 Ok(p) => p,
                 Err(e) => return e,
             };
-            let old = match session.overlays.get(&params.id) {
-                Some(o) => o,
-                None => {
-                    return WsResponse::error(
-                        id,
-                        method,
-                        "overlay_not_found",
-                        &format!("No overlay exists with id '{}'.", params.id),
-                    );
-                }
-            };
             if session.overlays.update(&params.id, params.spans) {
-                if session.is_local {
-                    flush_overlays_to_stdout(&[old], &session.overlays.list());
-                }
+                let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
                 WsResponse::success(id, method, serde_json::json!({}))
             } else {
                 WsResponse::error(
@@ -490,21 +470,8 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                 Ok(p) => p,
                 Err(e) => return e,
             };
-            let old = match session.overlays.get(&params.id) {
-                Some(o) => o,
-                None => {
-                    return WsResponse::error(
-                        id,
-                        method,
-                        "overlay_not_found",
-                        &format!("No overlay exists with id '{}'.", params.id),
-                    );
-                }
-            };
             if session.overlays.move_to(&params.id, params.x, params.y, params.z, params.width, params.height, params.background) {
-                if session.is_local {
-                    flush_overlays_to_stdout(&[old], &session.overlays.list());
-                }
+                let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
                 WsResponse::success(id, method, serde_json::json!({}))
             } else {
                 WsResponse::error(
@@ -520,22 +487,9 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                 Ok(p) => p,
                 Err(e) => return e,
             };
-            let old = match session.overlays.get(&params.id) {
-                Some(o) => o,
-                None => {
-                    return WsResponse::error(
-                        id,
-                        method,
-                        "overlay_not_found",
-                        &format!("No overlay exists with id '{}'.", params.id),
-                    );
-                }
-            };
             if session.overlays.delete(&params.id) {
                 session.focus.clear_if_focused(&params.id);
-                if session.is_local {
-                    flush_overlays_to_stdout(&[old], &session.overlays.list());
-                }
+                let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
                 WsResponse::success(id, method, serde_json::json!({}))
             } else {
                 WsResponse::error(
@@ -642,6 +596,7 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                 &session.parser,
             )
             .await;
+            let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::PanelsChanged);
             WsResponse::success(id, method, serde_json::json!({}))
         }
         "create_panel" => {
@@ -660,6 +615,7 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                 &session.parser,
             )
             .await;
+            let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::PanelsChanged);
             WsResponse::success(id, method, serde_json::json!({ "id": panel_id }))
         }
         "get_panel" => {
@@ -730,6 +686,7 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                     &session.terminal_size,
                 );
             }
+            let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::PanelsChanged);
             WsResponse::success(id, method, serde_json::json!({}))
         }
         "patch_panel" => {
@@ -781,6 +738,7 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                     &session.terminal_size,
                 );
             }
+            let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::PanelsChanged);
             WsResponse::success(id, method, serde_json::json!({}))
         }
         "delete_panel" => {
@@ -804,6 +762,7 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                 &session.parser,
             )
             .await;
+            let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::PanelsChanged);
             WsResponse::success(id, method, serde_json::json!({}))
         }
         "update_overlay_spans" => {
@@ -811,21 +770,8 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                 Ok(p) => p,
                 Err(e) => return e,
             };
-            let old = match session.overlays.get(&params.id) {
-                Some(o) => o,
-                None => {
-                    return WsResponse::error(
-                        id,
-                        method,
-                        "overlay_not_found",
-                        &format!("No overlay exists with id '{}'.", params.id),
-                    );
-                }
-            };
             if session.overlays.update_spans(&params.id, &params.spans) {
-                if session.is_local {
-                    flush_overlays_to_stdout(&[old], &session.overlays.list());
-                }
+                let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
                 WsResponse::success(id, method, serde_json::json!({}))
             } else {
                 WsResponse::error(
@@ -841,21 +787,8 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                 Ok(p) => p,
                 Err(e) => return e,
             };
-            let old = match session.overlays.get(&params.id) {
-                Some(o) => o,
-                None => {
-                    return WsResponse::error(
-                        id,
-                        method,
-                        "overlay_not_found",
-                        &format!("No overlay exists with id '{}'.", params.id),
-                    );
-                }
-            };
             if session.overlays.region_write(&params.id, params.writes) {
-                if session.is_local {
-                    flush_overlays_to_stdout(&[old], &session.overlays.list());
-                }
+                let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
                 WsResponse::success(id, method, serde_json::json!({}))
             } else {
                 WsResponse::error(
@@ -877,6 +810,7 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                     &params.id,
                     &session.terminal_size,
                 );
+                let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::PanelsChanged);
                 WsResponse::success(id, method, serde_json::json!({}))
             } else {
                 WsResponse::error(
@@ -898,6 +832,7 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                     &params.id,
                     &session.terminal_size,
                 );
+                let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::PanelsChanged);
                 WsResponse::success(id, method, serde_json::json!({}))
             } else {
                 WsResponse::error(
@@ -915,17 +850,14 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
             };
             match params.target_type {
                 BatchTargetType::Overlay => {
-                    let old = match session.overlays.get(&params.id) {
-                        Some(o) => o,
-                        None => {
-                            return WsResponse::error(
-                                id,
-                                method,
-                                "overlay_not_found",
-                                &format!("No overlay exists with id '{}'.", params.id),
-                            );
-                        }
-                    };
+                    if session.overlays.get(&params.id).is_none() {
+                        return WsResponse::error(
+                            id,
+                            method,
+                            "overlay_not_found",
+                            &format!("No overlay exists with id '{}'.", params.id),
+                        );
+                    }
                     if let Some(spans) = &params.spans {
                         if !session.overlays.update_spans(&params.id, spans) {
                             return WsResponse::error(
@@ -946,9 +878,7 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                             );
                         }
                     }
-                    if session.is_local {
-                        flush_overlays_to_stdout(&[old], &session.overlays.list());
-                    }
+                    let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
                     WsResponse::success(id, method, serde_json::json!({}))
                 }
                 BatchTargetType::Panel => {
@@ -985,6 +915,7 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                         &params.id,
                         &session.terminal_size,
                     );
+                    let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::PanelsChanged);
                     WsResponse::success(id, method, serde_json::json!({}))
                 }
             }
@@ -1030,6 +961,8 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                 &session.parser,
             )
             .await;
+            let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
+            let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::PanelsChanged);
             WsResponse::success(id, method, serde_json::json!({}))
         }
         _ => WsResponse::error(
@@ -1177,8 +1110,8 @@ mod tests {
             terminal_size: crate::terminal::TerminalSize::new(24, 80),
             activity: crate::activity::ActivityTracker::new(),
             focus: crate::input::FocusTracker::new(),
-            is_local: false,
             detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
+            visual_update_tx: tokio::sync::broadcast::channel::<crate::protocol::VisualUpdate>(16).0,
             screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(crate::overlay::ScreenMode::Normal)),
         };
         (session, input_rx)

@@ -47,8 +47,8 @@ pub fn create_test_session_with_size(name: &str, rows: u16, cols: u16) -> TestSe
         terminal_size: TerminalSize::new(rows, cols),
         activity: ActivityTracker::new(),
         focus: FocusTracker::new(),
-        is_local: false,
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
+        visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
     };
     TestSession {

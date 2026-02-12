@@ -30,21 +30,16 @@ independent input and output. Multi-session gives you this.
 - The tasks are strictly sequential
 - You only need to run one thing at a time
 
-## Server Mode
+## Prerequisites
 
-Multi-session requires wsh to be running in server mode:
+wsh always runs as a server daemon, so multi-session is
+always available. The sessions API endpoint is at
+`/sessions/`. You create sessions explicitly and interact
+with each via `/sessions/:name/` prefix.
 
-    wsh server --bind 127.0.0.1:8080
-
-In server mode, there is no implicit session — you create
-them explicitly. The API base URL is the same, but you
-interact with sessions through the `/sessions/` prefix.
-
-If wsh is running in standalone mode (single session), you
-cannot create additional sessions. Check which mode you're
-in by listing sessions — if it succeeds, you're in server
-mode. If it returns a 404, you're in standalone mode with
-a single session.
+If you're in an attached wsh session (started with `wsh`),
+there's already a `default` session. You can create
+additional sessions via the API alongside it.
 
 ## Creating Sessions
 

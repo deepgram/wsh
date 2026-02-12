@@ -10,6 +10,7 @@ use crate::input::{FocusTracker, InputBroadcaster, InputMode};
 use crate::overlay::{OverlayStore, ScreenMode};
 use crate::panel::PanelStore;
 use crate::parser::Parser;
+use crate::protocol::VisualUpdate;
 use crate::pty::{Pty, PtyError, SpawnCommand};
 use crate::shutdown::ShutdownCoordinator;
 use crate::terminal::TerminalSize;
@@ -34,15 +35,15 @@ pub struct Session {
     pub input_mode: InputMode,
     pub input_broadcaster: InputBroadcaster,
     pub activity: ActivityTracker,
-    /// Whether this session is attached to the local terminal (stdout).
-    /// Only the standalone-mode session should have this set to `true`.
-    /// Controls whether overlay/panel ANSI escape sequences are written to stdout.
-    pub is_local: bool,
     /// Tracks which overlay or panel currently has input focus.
     pub focus: FocusTracker,
     /// Signal to detach all streaming clients from this session.
     /// Subscribers receive `()` when `detach()` is called; the session stays alive.
     pub detach_signal: broadcast::Sender<()>,
+    /// Notification channel for overlay/panel visual state changes.
+    /// API handlers fire events here after mutations; the server streaming loop
+    /// picks them up and sends OverlaySync/PanelSync frames to socket clients.
+    pub visual_update_tx: broadcast::Sender<VisualUpdate>,
     /// Current screen mode (normal or alt). Used to tag overlays/panels and
     /// filter list results. Protected by a `parking_lot::RwLock` for cheap
     /// cloning across threads.
@@ -173,8 +174,8 @@ impl Session {
                 input_broadcaster,
                 activity,
                 focus,
-                is_local: false,
                 detach_signal: broadcast::channel::<()>(1).0,
+                visual_update_tx: broadcast::channel::<VisualUpdate>(16).0,
                 screen_mode: Arc::new(RwLock::new(ScreenMode::Normal)),
             },
             child_exit_rx,
@@ -381,8 +382,8 @@ mod tests {
             input_broadcaster: InputBroadcaster::new(),
             activity: ActivityTracker::new(),
             focus: FocusTracker::new(),
-            is_local: false,
             detach_signal: broadcast::channel::<()>(1).0,
+            visual_update_tx: broadcast::channel::<VisualUpdate>(16).0,
             screen_mode: Arc::new(RwLock::new(ScreenMode::Normal)),
         };
         (session, input_rx)
@@ -622,7 +623,6 @@ mod tests {
         .expect("Session::spawn should succeed");
 
         assert_eq!(session.name, "spawned");
-        assert!(!session.is_local);
 
         // Send input to make the shell exit
         session

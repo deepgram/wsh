@@ -15,10 +15,8 @@ use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
-use std::io::Write;
-
 use crate::input::Mode;
-use crate::overlay::{self, BackgroundStyle, Overlay, OverlaySpan, RegionWrite};
+use crate::overlay::{BackgroundStyle, Overlay, OverlaySpan, RegionWrite};
 use crate::panel::{self, Panel, Position};
 use crate::parser::{
     events::EventType,
@@ -494,17 +492,19 @@ async fn handle_ws_json(
             _ = shutdown_rx.changed() => {
                 if *shutdown_rx.borrow() {
                     tracing::debug!("WebSocket handler received shutdown signal");
-                    let close_frame = CloseFrame {
-                        code: axum::extract::ws::close_code::NORMAL,
-                        reason: "server shutting down".into(),
-                    };
-                    let _ = ws_tx.send(Message::Close(Some(close_frame))).await;
-                    let _ = ws_tx.flush().await;
                     break;
                 }
             }
         }
     }
+
+    // Send close frame on any exit path
+    let close_frame = CloseFrame {
+        code: axum::extract::ws::close_code::NORMAL,
+        reason: "session ended".into(),
+    };
+    let _ = ws_tx.send(Message::Close(Some(close_frame))).await;
+    let _ = ws_tx.flush().await;
 
     // Clean up quiescence subscription task
     if let Some(handle) = quiesce_sub_handle {
@@ -747,17 +747,19 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
             _ = shutdown_rx.changed() => {
                 if *shutdown_rx.borrow() {
                     tracing::debug!("Server WebSocket received shutdown signal");
-                    let close_frame = CloseFrame {
-                        code: axum::extract::ws::close_code::NORMAL,
-                        reason: "server shutting down".into(),
-                    };
-                    let _ = ws_tx.send(Message::Close(Some(close_frame))).await;
-                    let _ = ws_tx.flush().await;
                     break;
                 }
             }
         }
     }
+
+    // Send close frame on any exit path
+    let close_frame = CloseFrame {
+        code: axum::extract::ws::close_code::NORMAL,
+        reason: "session ended".into(),
+    };
+    let _ = ws_tx.send(Message::Close(Some(close_frame))).await;
+    let _ = ws_tx.flush().await;
 
     // Clean up all subscription tasks
     for (_, handle) in sub_handles {
@@ -1371,25 +1373,6 @@ pub(super) async fn scrollback(
     Ok(Json(response))
 }
 
-/// Write erase+render sequences for overlays to stdout immediately.
-///
-/// Erases `to_erase` overlays, then renders `to_render` overlays, all wrapped
-/// in synchronized output to avoid tearing.
-pub(super) fn flush_overlays_to_stdout(to_erase: &[Overlay], to_render: &[Overlay]) {
-    let stdout = std::io::stdout();
-    let mut lock = stdout.lock();
-    let _ = lock.write_all(overlay::begin_sync().as_bytes());
-    if !to_erase.is_empty() {
-        let erase = overlay::erase_all_overlays(to_erase);
-        let _ = lock.write_all(erase.as_bytes());
-    }
-    if !to_render.is_empty() {
-        let render = overlay::render_all_overlays(to_render);
-        let _ = lock.write_all(render.as_bytes());
-    }
-    let _ = lock.write_all(overlay::end_sync().as_bytes());
-    let _ = lock.flush();
-}
 
 // Overlay request/response types
 #[derive(Deserialize)]
@@ -1446,10 +1429,7 @@ pub(super) async fn overlay_create(
     let session = get_session(&state.sessions, &name)?;
     let current_mode = *session.screen_mode.read();
     let id = session.overlays.create(req.x, req.y, req.z, req.width, req.height, req.background, req.spans, req.focusable, current_mode);
-    if session.is_local {
-        let all = session.overlays.list();
-        flush_overlays_to_stdout(&[], &all);
-    }
+    let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
     Ok((StatusCode::CREATED, Json(CreateOverlayResponse { id })))
 }
 
@@ -1480,15 +1460,8 @@ pub(super) async fn overlay_update(
     Json(req): Json<UpdateOverlayRequest>,
 ) -> Result<StatusCode, ApiError> {
     let session = get_session(&state.sessions, &name)?;
-    let old = session
-        .overlays
-        .get(&id)
-        .ok_or_else(|| ApiError::OverlayNotFound(id.clone()))?;
     if session.overlays.update(&id, req.spans) {
-        if session.is_local {
-            let all = session.overlays.list();
-            flush_overlays_to_stdout(&[old], &all);
-        }
+        let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::OverlayNotFound(id))
@@ -1501,15 +1474,8 @@ pub(super) async fn overlay_patch(
     Json(req): Json<PatchOverlayRequest>,
 ) -> Result<StatusCode, ApiError> {
     let session = get_session(&state.sessions, &name)?;
-    let old = session
-        .overlays
-        .get(&id)
-        .ok_or_else(|| ApiError::OverlayNotFound(id.clone()))?;
     if session.overlays.move_to(&id, req.x, req.y, req.z, req.width, req.height, req.background) {
-        if session.is_local {
-            let all = session.overlays.list();
-            flush_overlays_to_stdout(&[old], &all);
-        }
+        let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::OverlayNotFound(id))
@@ -1521,16 +1487,9 @@ pub(super) async fn overlay_delete(
     Path((name, id)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
     let session = get_session(&state.sessions, &name)?;
-    let old = session
-        .overlays
-        .get(&id)
-        .ok_or_else(|| ApiError::OverlayNotFound(id.clone()))?;
     if session.overlays.delete(&id) {
         session.focus.clear_if_focused(&id);
-        if session.is_local {
-            let remaining = session.overlays.list();
-            flush_overlays_to_stdout(&[old], &remaining);
-        }
+        let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::OverlayNotFound(id))
@@ -1542,12 +1501,9 @@ pub(super) async fn overlay_clear(
     Path(name): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let session = get_session(&state.sessions, &name)?;
-    let old_list = session.overlays.list();
     session.overlays.clear();
     session.focus.unfocus();
-    if session.is_local {
-        flush_overlays_to_stdout(&old_list, &[]);
-    }
+    let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1557,15 +1513,8 @@ pub(super) async fn overlay_update_spans(
     Json(req): Json<UpdateSpansRequest>,
 ) -> Result<StatusCode, ApiError> {
     let session = get_session(&state.sessions, &name)?;
-    let old = session
-        .overlays
-        .get(&id)
-        .ok_or_else(|| ApiError::OverlayNotFound(id.clone()))?;
     if session.overlays.update_spans(&id, &req.spans) {
-        if session.is_local {
-            let all = session.overlays.list();
-            flush_overlays_to_stdout(&[old], &all);
-        }
+        let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::OverlayNotFound(id))
@@ -1578,15 +1527,8 @@ pub(super) async fn overlay_region_write(
     Json(req): Json<RegionWriteRequest>,
 ) -> Result<StatusCode, ApiError> {
     let session = get_session(&state.sessions, &name)?;
-    let old = session
-        .overlays
-        .get(&id)
-        .ok_or_else(|| ApiError::OverlayNotFound(id.clone()))?;
     if session.overlays.region_write(&id, req.writes) {
-        if session.is_local {
-            let all = session.overlays.list();
-            flush_overlays_to_stdout(&[old], &all);
-        }
+        let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::OverlayNotFound(id))
@@ -1645,6 +1587,7 @@ pub(super) async fn panel_create(
         .create(req.position, req.height, req.z, req.background, req.spans, req.focusable, current_mode);
     panel::reconfigure_layout(&session.panels, &session.terminal_size, &session.pty, &session.parser)
         .await;
+    let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::PanelsChanged);
     Ok((StatusCode::CREATED, Json(CreatePanelResponse { id })))
 }
 
@@ -1699,6 +1642,7 @@ pub(super) async fn panel_update(
         panel::flush_panel_content(&session.panels, &id, &session.terminal_size);
     }
 
+    let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::PanelsChanged);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1732,6 +1676,7 @@ pub(super) async fn panel_patch(
         panel::flush_panel_content(&session.panels, &id, &session.terminal_size);
     }
 
+    let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::PanelsChanged);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1746,6 +1691,7 @@ pub(super) async fn panel_delete(
     session.focus.clear_if_focused(&id);
     panel::reconfigure_layout(&session.panels, &session.terminal_size, &session.pty, &session.parser)
         .await;
+    let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::PanelsChanged);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1758,6 +1704,7 @@ pub(super) async fn panel_clear(
     session.focus.unfocus();
     panel::reconfigure_layout(&session.panels, &session.terminal_size, &session.pty, &session.parser)
         .await;
+    let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::PanelsChanged);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1769,6 +1716,7 @@ pub(super) async fn panel_update_spans(
     let session = get_session(&state.sessions, &name)?;
     if session.panels.update_spans(&id, &req.spans) {
         panel::flush_panel_content(&session.panels, &id, &session.terminal_size);
+        let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::PanelsChanged);
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::PanelNotFound(id))
@@ -1783,6 +1731,7 @@ pub(super) async fn panel_region_write(
     let session = get_session(&state.sessions, &name)?;
     if session.panels.region_write(&id, req.writes) {
         panel::flush_panel_content(&session.panels, &id, &session.terminal_size);
+        let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::PanelsChanged);
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::PanelNotFound(id))
@@ -2069,6 +2018,8 @@ pub(super) async fn exit_alt_screen(
         &session.parser,
     )
     .await;
+    let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
+    let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::PanelsChanged);
     Ok(StatusCode::NO_CONTENT)
 }
 

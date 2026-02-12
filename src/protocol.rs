@@ -31,6 +31,10 @@ pub enum FrameType {
     // Data frames (raw bytes payload)
     PtyOutput = 0x10,
     StdinInput = 0x11,
+
+    // Visual state sync frames (JSON payload, server → client)
+    OverlaySync = 0x12,
+    PanelSync = 0x13,
 }
 
 impl FrameType {
@@ -51,6 +55,8 @@ impl FrameType {
             0x0D => Some(Self::DetachSessionResponse),
             0x10 => Some(Self::PtyOutput),
             0x11 => Some(Self::StdinInput),
+            0x12 => Some(Self::OverlaySync),
+            0x13 => Some(Self::PanelSync),
             _ => None,
         }
     }
@@ -283,6 +289,32 @@ pub struct DetachSessionResponseMsg {
     pub name: String,
 }
 
+/// Server → Client: full overlay state sync.
+///
+/// Sent when any overlay changes, contains ALL current overlays.
+/// Full-state sync is simpler than delta updates and overlay counts are small.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OverlaySyncMsg {
+    pub overlays: Vec<crate::overlay::Overlay>,
+}
+
+/// Server → Client: full panel state sync.
+///
+/// Sent when any panel changes, contains ALL current panels plus layout info.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PanelSyncMsg {
+    pub panels: Vec<crate::panel::Panel>,
+    pub scroll_region_top: u16,
+    pub scroll_region_bottom: u16,
+}
+
+/// Visual state change notification (internal, not a wire type).
+#[derive(Debug, Clone)]
+pub enum VisualUpdate {
+    OverlaysChanged,
+    PanelsChanged,
+}
+
 /// Serde helper for base64-encoded byte vectors in JSON.
 mod base64_bytes {
     use base64::Engine;
@@ -323,6 +355,8 @@ mod tests {
             FrameType::DetachSessionResponse,
             FrameType::PtyOutput,
             FrameType::StdinInput,
+            FrameType::OverlaySync,
+            FrameType::PanelSync,
         ];
         for ft in types {
             let byte = ft as u8;
