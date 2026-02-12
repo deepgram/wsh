@@ -120,6 +120,7 @@ mod tests {
     fn span(text: &str) -> OverlaySpan {
         OverlaySpan {
             text: text.to_string(),
+            id: None,
             fg: None,
             bg: None,
             bold: false,

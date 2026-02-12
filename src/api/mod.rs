@@ -307,6 +307,8 @@ mod tests {
         let body = serde_json::json!({
             "x": 10,
             "y": 5,
+            "width": 80,
+            "height": 1,
             "spans": [
                 { "text": "Hello" }
             ]
@@ -345,8 +347,12 @@ mod tests {
                 1,
                 2,
                 None,
+                80,
+                1,
+                None,
                 vec![crate::overlay::OverlaySpan {
                     text: "Test".to_string(),
+                    id: None,
                     fg: None,
                     bg: None,
                     bold: false,
@@ -386,7 +392,7 @@ mod tests {
         // Create an overlay
         let id = {
             let session = state.sessions.get("test").unwrap();
-            session.overlays.create(0, 0, None, vec![])
+            session.overlays.create(0, 0, None, 80, 1, None, vec![])
         };
 
         let app = router(state, None);

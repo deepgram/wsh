@@ -25,6 +25,8 @@ async fn test_overlay_crud_flow() {
     let create_body = serde_json::json!({
         "x": 10,
         "y": 5,
+        "width": 80,
+        "height": 1,
         "spans": [
             {
                 "text": "Hello World",
@@ -170,6 +172,8 @@ async fn test_overlay_list_and_clear() {
     let create_body1 = serde_json::json!({
         "x": 0,
         "y": 0,
+        "width": 80,
+        "height": 1,
         "spans": [{ "text": "Overlay 1" }]
     });
 
@@ -190,6 +194,8 @@ async fn test_overlay_list_and_clear() {
     let create_body2 = serde_json::json!({
         "x": 10,
         "y": 10,
+        "width": 80,
+        "height": 1,
         "spans": [{ "text": "Overlay 2" }]
     });
 
@@ -272,6 +278,8 @@ async fn test_overlay_patch_position() {
         "x": 5,
         "y": 10,
         "z": 1,
+        "width": 80,
+        "height": 1,
         "spans": [{ "text": "Test" }]
     });
 

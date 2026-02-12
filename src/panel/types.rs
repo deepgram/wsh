@@ -57,6 +57,7 @@ mod tests {
             z: 5,
             spans: vec![OverlaySpan {
                 text: "status".to_string(),
+                id: None,
                 fg: None,
                 bg: None,
                 bold: true,

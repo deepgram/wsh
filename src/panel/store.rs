@@ -202,6 +202,7 @@ mod tests {
         let id = store.create(Position::Bottom, 1, None, vec![]);
         let new_spans = vec![OverlaySpan {
             text: "updated".to_string(),
+            id: None,
             fg: None,
             bg: None,
             bold: false,

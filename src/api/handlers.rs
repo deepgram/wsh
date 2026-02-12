@@ -18,7 +18,7 @@ use tokio::sync::broadcast;
 use std::io::Write;
 
 use crate::input::Mode;
-use crate::overlay::{self, Overlay, OverlaySpan};
+use crate::overlay::{self, BackgroundStyle, Overlay, OverlaySpan};
 use crate::panel::{self, Panel, Position};
 use crate::parser::{
     events::EventType,
@@ -1397,6 +1397,10 @@ pub(super) struct CreateOverlayRequest {
     x: u16,
     y: u16,
     z: Option<i32>,
+    width: u16,
+    height: u16,
+    #[serde(default)]
+    background: Option<BackgroundStyle>,
     spans: Vec<OverlaySpan>,
 }
 
@@ -1415,6 +1419,8 @@ pub(super) struct PatchOverlayRequest {
     x: Option<u16>,
     y: Option<u16>,
     z: Option<i32>,
+    width: Option<u16>,
+    height: Option<u16>,
 }
 
 // Overlay handlers
@@ -1424,7 +1430,7 @@ pub(super) async fn overlay_create(
     Json(req): Json<CreateOverlayRequest>,
 ) -> Result<(StatusCode, Json<CreateOverlayResponse>), ApiError> {
     let session = get_session(&state.sessions, &name)?;
-    let id = session.overlays.create(req.x, req.y, req.z, req.spans);
+    let id = session.overlays.create(req.x, req.y, req.z, req.width, req.height, req.background, req.spans);
     if session.is_local {
         let all = session.overlays.list();
         flush_overlays_to_stdout(&[], &all);
@@ -1483,7 +1489,7 @@ pub(super) async fn overlay_patch(
         .overlays
         .get(&id)
         .ok_or_else(|| ApiError::OverlayNotFound(id.clone()))?;
-    if session.overlays.move_to(&id, req.x, req.y, req.z) {
+    if session.overlays.move_to(&id, req.x, req.y, req.z, req.width, req.height) {
         if session.is_local {
             let all = session.overlays.list();
             flush_overlays_to_stdout(&[old], &all);

@@ -3,6 +3,12 @@ use serde::{Deserialize, Serialize};
 /// Unique identifier for an overlay
 pub type OverlayId = String;
 
+/// Background fill style for an overlay's bounding rectangle.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BackgroundStyle {
+    pub bg: Color,
+}
+
 /// An overlay displayed on top of terminal content
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Overlay {
@@ -10,6 +16,10 @@ pub struct Overlay {
     pub x: u16,
     pub y: u16,
     pub z: i32,
+    pub width: u16,
+    pub height: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<BackgroundStyle>,
     pub spans: Vec<OverlaySpan>,
 }
 
@@ -17,6 +27,8 @@ pub struct Overlay {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OverlaySpan {
     pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fg: Option<Color>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

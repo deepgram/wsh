@@ -139,6 +139,7 @@ pub fn render_overlay(overlay: &Overlay) -> String {
             if !line.is_empty() {
                 let line_span = OverlaySpan {
                     text: line.to_string(),
+                    id: None,
                     fg: span.fg.clone(),
                     bg: span.bg.clone(),
                     bold: span.bold,
@@ -256,6 +257,7 @@ mod tests {
     fn test_render_plain_text() {
         let spans = vec![OverlaySpan {
             text: "Hello".to_string(),
+            id: None,
             fg: None,
             bg: None,
             bold: false,
@@ -270,6 +272,7 @@ mod tests {
     fn test_render_colored_text() {
         let spans = vec![OverlaySpan {
             text: "Error".to_string(),
+            id: None,
             fg: Some(Color::Named(NamedColor::Red)),
             bg: None,
             bold: false,
@@ -286,6 +289,7 @@ mod tests {
     fn test_render_bold_text() {
         let spans = vec![OverlaySpan {
             text: "Important".to_string(),
+            id: None,
             fg: None,
             bg: None,
             bold: true,
@@ -315,6 +319,7 @@ mod tests {
     fn test_render_rgb_color() {
         let spans = vec![OverlaySpan {
             text: "Orange".to_string(),
+            id: None,
             fg: Some(Color::Rgb {
                 r: 255,
                 g: 128,
@@ -342,8 +347,12 @@ mod tests {
             x: 10,
             y: 5,
             z: 0,
+            width: 80,
+            height: 1,
+            background: None,
             spans: vec![OverlaySpan {
                 text: "Status".to_string(),
+                id: None,
                 fg: None,
                 bg: None,
                 bold: false,
@@ -364,6 +373,7 @@ mod tests {
     fn test_render_background_color() {
         let spans = vec![OverlaySpan {
             text: "Highlight".to_string(),
+            id: None,
             fg: None,
             bg: Some(Color::Named(NamedColor::Yellow)),
             bold: false,
@@ -382,6 +392,7 @@ mod tests {
     fn test_render_italic_text() {
         let spans = vec![OverlaySpan {
             text: "Emphasis".to_string(),
+            id: None,
             fg: None,
             bg: None,
             bold: false,
@@ -400,6 +411,7 @@ mod tests {
     fn test_render_underline_text() {
         let spans = vec![OverlaySpan {
             text: "Link".to_string(),
+            id: None,
             fg: None,
             bg: None,
             bold: false,
@@ -419,6 +431,7 @@ mod tests {
         let spans = vec![
             OverlaySpan {
                 text: "Normal ".to_string(),
+                id: None,
                 fg: None,
                 bg: None,
                 bold: false,
@@ -427,6 +440,7 @@ mod tests {
             },
             OverlaySpan {
                 text: "Bold".to_string(),
+                id: None,
                 fg: None,
                 bg: None,
                 bold: true,
@@ -447,8 +461,12 @@ mod tests {
             x: 0,
             y: 0,
             z: 0,
+            width: 80,
+            height: 1,
+            background: None,
             spans: vec![OverlaySpan {
                 text: "Test".to_string(),
+                id: None,
                 fg: None,
                 bg: None,
                 bold: false,
@@ -473,6 +491,7 @@ mod tests {
     fn test_render_rgb_background() {
         let spans = vec![OverlaySpan {
             text: "Custom".to_string(),
+            id: None,
             fg: None,
             bg: Some(Color::Rgb {
                 r: 100,
@@ -495,6 +514,7 @@ mod tests {
     fn test_render_combined_attributes() {
         let spans = vec![OverlaySpan {
             text: "Fancy".to_string(),
+            id: None,
             fg: Some(Color::Named(NamedColor::Green)),
             bg: Some(Color::Named(NamedColor::Black)),
             bold: true,
@@ -531,8 +551,12 @@ mod tests {
             x: 5,
             y: 3,
             z: 0,
+            width: 80,
+            height: 1,
+            background: None,
             spans: vec![OverlaySpan {
                 text: "hello".to_string(),
+                id: None,
                 fg: None,
                 bg: None,
                 bold: false,
@@ -551,8 +575,12 @@ mod tests {
             x: 0,
             y: 0,
             z: 0,
+            width: 80,
+            height: 3,
+            background: None,
             spans: vec![OverlaySpan {
                 text: "ab\ncde\nf".to_string(),
+                id: None,
                 fg: None,
                 bg: None,
                 bold: false,
@@ -571,9 +599,13 @@ mod tests {
             x: 2,
             y: 1,
             z: 0,
+            width: 80,
+            height: 1,
+            background: None,
             spans: vec![
                 OverlaySpan {
                     text: "ab".to_string(),
+                    id: None,
                     fg: None,
                     bg: None,
                     bold: false,
@@ -582,6 +614,7 @@ mod tests {
                 },
                 OverlaySpan {
                     text: "cd".to_string(),
+                    id: None,
                     fg: None,
                     bg: None,
                     bold: false,
@@ -602,9 +635,13 @@ mod tests {
             x: 0,
             y: 0,
             z: 0,
+            width: 80,
+            height: 2,
+            background: None,
             spans: vec![
                 OverlaySpan {
                     text: "ab\n".to_string(),
+                    id: None,
                     fg: None,
                     bg: None,
                     bold: false,
@@ -613,6 +650,7 @@ mod tests {
                 },
                 OverlaySpan {
                     text: "cd".to_string(),
+                    id: None,
                     fg: None,
                     bg: None,
                     bold: false,
@@ -634,8 +672,12 @@ mod tests {
             x: 5,
             y: 3,
             z: 0,
+            width: 80,
+            height: 1,
+            background: None,
             spans: vec![OverlaySpan {
                 text: "hello".to_string(),
+                id: None,
                 fg: None,
                 bg: None,
                 bold: false,
@@ -655,8 +697,12 @@ mod tests {
             x: 0,
             y: 0,
             z: 0,
+            width: 80,
+            height: 2,
+            background: None,
             spans: vec![OverlaySpan {
                 text: "ab\ncde".to_string(),
+                id: None,
                 fg: None,
                 bg: None,
                 bold: false,

@@ -195,6 +195,10 @@ pub struct CreateOverlayParams {
     pub x: u16,
     pub y: u16,
     pub z: Option<i32>,
+    pub width: u16,
+    pub height: u16,
+    #[serde(default)]
+    pub background: Option<crate::overlay::BackgroundStyle>,
     pub spans: Vec<OverlaySpan>,
 }
 
@@ -212,6 +216,8 @@ pub struct PatchOverlayParams {
     pub x: Option<u16>,
     pub y: Option<u16>,
     pub z: Option<i32>,
+    pub width: Option<u16>,
+    pub height: Option<u16>,
 }
 
 // ---------------------------------------------------------------------------
@@ -316,7 +322,7 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                 Ok(p) => p,
                 Err(e) => return e,
             };
-            let overlay_id = session.overlays.create(params.x, params.y, params.z, params.spans);
+            let overlay_id = session.overlays.create(params.x, params.y, params.z, params.width, params.height, params.background, params.spans);
             if session.is_local {
                 let all = session.overlays.list();
                 flush_overlays_to_stdout(&[], &all);
@@ -388,7 +394,7 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                     );
                 }
             };
-            if session.overlays.move_to(&params.id, params.x, params.y, params.z) {
+            if session.overlays.move_to(&params.id, params.x, params.y, params.z, params.width, params.height) {
                 if session.is_local {
                     flush_overlays_to_stdout(&[old], &session.overlays.list());
                 }
@@ -924,7 +930,7 @@ mod tests {
     #[tokio::test]
     async fn dispatch_clear_overlays() {
         let (session, _rx) = create_test_session();
-        session.overlays.create(0, 0, None, vec![]);
+        session.overlays.create(0, 0, None, 80, 1, None, vec![]);
         assert_eq!(session.overlays.list().len(), 1);
 
         let req = WsRequest {
@@ -1033,7 +1039,7 @@ mod tests {
             id: None,
             method: "create_overlay".to_string(),
             params: Some(serde_json::json!({
-                "x": 10, "y": 5,
+                "x": 10, "y": 5, "width": 80, "height": 1,
                 "spans": [{"text": "Hello"}]
             })),
         };
@@ -1046,9 +1052,9 @@ mod tests {
     #[tokio::test]
     async fn dispatch_get_overlay() {
         let (session, _rx) = create_test_session();
-        let id = session.overlays.create(5, 10, None, vec![crate::overlay::OverlaySpan {
+        let id = session.overlays.create(5, 10, None, 80, 1, None, vec![crate::overlay::OverlaySpan {
             text: "Test".to_string(),
-            fg: None, bg: None, bold: false, italic: false, underline: false,
+            id: None, fg: None, bg: None, bold: false, italic: false, underline: false,
         }]);
         let req = WsRequest {
             id: None,
@@ -1077,9 +1083,9 @@ mod tests {
     #[tokio::test]
     async fn dispatch_update_overlay() {
         let (session, _rx) = create_test_session();
-        let id = session.overlays.create(0, 0, None, vec![crate::overlay::OverlaySpan {
+        let id = session.overlays.create(0, 0, None, 80, 1, None, vec![crate::overlay::OverlaySpan {
             text: "Old".to_string(),
-            fg: None, bg: None, bold: false, italic: false, underline: false,
+            id: None, fg: None, bg: None, bold: false, italic: false, underline: false,
         }]);
         let req = WsRequest {
             id: None,
@@ -1096,7 +1102,7 @@ mod tests {
     #[tokio::test]
     async fn dispatch_patch_overlay() {
         let (session, _rx) = create_test_session();
-        let id = session.overlays.create(0, 0, None, vec![]);
+        let id = session.overlays.create(0, 0, None, 80, 1, None, vec![]);
         let req = WsRequest {
             id: None,
             method: "patch_overlay".to_string(),
@@ -1113,7 +1119,7 @@ mod tests {
     #[tokio::test]
     async fn dispatch_delete_overlay() {
         let (session, _rx) = create_test_session();
-        let id = session.overlays.create(0, 0, None, vec![]);
+        let id = session.overlays.create(0, 0, None, 80, 1, None, vec![]);
         let req = WsRequest {
             id: None,
             method: "delete_overlay".to_string(),
@@ -1183,7 +1189,7 @@ mod tests {
             None,
             vec![crate::overlay::OverlaySpan {
                 text: "Test".to_string(),
-                fg: None, bg: None, bold: false, italic: false, underline: false,
+                id: None, fg: None, bg: None, bold: false, italic: false, underline: false,
             }],
         );
         let req = WsRequest {
@@ -1359,7 +1365,7 @@ mod tests {
             None,
             vec![crate::overlay::OverlaySpan {
                 text: "A".to_string(),
-                fg: None, bg: None, bold: false, italic: false, underline: false,
+                id: None, fg: None, bg: None, bold: false, italic: false, underline: false,
             }],
         );
         let req = WsRequest {

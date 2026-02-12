@@ -209,6 +209,7 @@ mod tests {
     fn span(text: &str) -> OverlaySpan {
         OverlaySpan {
             text: text.to_string(),
+            id: None,
             fg: None,
             bg: None,
             bold: false,
@@ -300,6 +301,7 @@ mod tests {
             z: 0,
             spans: vec![OverlaySpan {
                 text: "error".to_string(),
+                id: None,
                 fg: Some(Color::Named(NamedColor::Red)),
                 bg: None,
                 bold: true,
