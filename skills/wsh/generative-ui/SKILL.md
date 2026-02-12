@@ -53,7 +53,7 @@ Start with the simplest layer that works:
   layouts, or a temporary full-screen UI? Layer 3.
 
 Most generative UI lives in layers 1 and 2. Layer 3
-is for when you need pixel-level control over what
+is for when you need precise control over what
 appears where, or when you want a fully immersive
 experience that cleans up after itself.
 

@@ -139,43 +139,48 @@ etc. Same capabilities, persistent connection.
 Floating text positioned on top of terminal content. They don't
 affect the terminal — they're a layer on top.
 
-    # Create an overlay at position (0, 0)
+    # Create an overlay at position (0, 0) with explicit size
     curl -s -X POST http://localhost:8080/overlay \
       -H "Content-Type: application/json" \
-      -d '{"x": 0, "y": 0, "spans": [{"text": "Hello!", "bold": true}]}'
+      -d '{"x": 0, "y": 0, "width": 20, "height": 1,
+           "spans": [{"text": "Hello!", "bold": true}]}'
 
     # Returns {"id": "uuid"} — use this to update or delete it
     curl -s -X DELETE http://localhost:8080/overlay/{id}
     curl -s -X DELETE http://localhost:8080/overlay          # clear all
 
-**Opaque overlays:** Add `width`, `height`, and `background` to create
-a solid rectangle instead of floating text:
+**Opaque overlays:** Add `background` to fill the rectangle with a
+solid color, making it a window-like element:
 
     curl -s -X POST http://localhost:8080/overlay \
       -H "Content-Type: application/json" \
       -d '{"x": 10, "y": 5, "width": 40, "height": 10,
-           "background": {"indexed": 0},
+           "background": {"bg": "black"},
            "spans": [{"text": "Window content"}]}'
+
+Background accepts named colors (`"bg": "blue"`) or RGB
+(`"bg": {"r": 30, "g": 30, "b": 30}`).
 
 **Named spans:** Give spans an `id` for targeted updates:
 
     curl -s -X POST http://localhost:8080/overlay \
       -H "Content-Type: application/json" \
-      -d '{"x": 0, "y": 0, "spans": [
+      -d '{"x": 0, "y": 0, "width": 30, "height": 1,
+           "spans": [
             {"id": "label", "text": "Status: ", "bold": true},
-            {"id": "value", "text": "running", "fg": {"indexed": 2}}
+            {"id": "value", "text": "running", "fg": "green"}
           ]}'
 
-    # Update a single span by id
-    curl -s -X PUT http://localhost:8080/overlay/{id}/spans/{span_id} \
+    # Update named spans by id (POST with array of span updates)
+    curl -s -X POST http://localhost:8080/overlay/{id}/spans \
       -H "Content-Type: application/json" \
-      -d '{"text": "stopped", "fg": {"indexed": 1}}'
+      -d '{"spans": [{"id": "value", "text": "stopped", "fg": "red"}]}'
 
 **Region writes:** Place styled text at specific (row, col) offsets:
 
     curl -s -X POST http://localhost:8080/overlay/{id}/write \
       -H "Content-Type: application/json" \
-      -d '{"row": 2, "col": 5, "spans": [{"text": "Hello", "bold": true}]}'
+      -d '{"writes": [{"row": 2, "col": 5, "text": "Hello", "bold": true}]}'
 
 **Focusable:** Add `focusable: true` to allow focus routing during
 input capture (see Input Capture below).
@@ -199,21 +204,21 @@ dedicated space.
     curl -s -X POST http://localhost:8080/panel \
       -H "Content-Type: application/json" \
       -d '{"position": "bottom", "height": 2,
-           "background": {"indexed": 0},
+           "background": {"bg": "blue"},
            "spans": [{"text": "Status: ok"}]}'
 
 **Named spans:** Same as overlays — give spans an `id` for targeted
-updates:
+updates via POST with an array of span updates:
 
-    curl -s -X PUT http://localhost:8080/panel/{id}/spans/{span_id} \
+    curl -s -X POST http://localhost:8080/panel/{id}/spans \
       -H "Content-Type: application/json" \
-      -d '{"text": "3 errors", "fg": {"indexed": 1}}'
+      -d '{"spans": [{"id": "status", "text": "3 errors", "fg": "red"}]}'
 
 **Region writes:** Place text at specific (row, col) offsets:
 
     curl -s -X POST http://localhost:8080/panel/{id}/write \
       -H "Content-Type: application/json" \
-      -d '{"row": 0, "col": 10, "spans": [{"text": "updated", "bold": true}]}'
+      -d '{"writes": [{"row": 0, "col": 10, "text": "updated", "bold": true}]}'
 
 **Focusable:** Add `focusable: true` to allow focus routing during
 input capture.
