@@ -126,6 +126,33 @@ impl OverlayStore {
         true
     }
 
+    /// Update specific spans by their `id` field.
+    ///
+    /// For each span in `updates`, find the span with matching `id` in the overlay
+    /// and replace its text, colors, and attributes. Returns false if overlay not found.
+    pub fn update_spans(&self, overlay_id: &str, updates: &[OverlaySpan]) -> bool {
+        let mut inner = self.inner.write().unwrap();
+        if let Some(overlay) = inner.overlays.get_mut(overlay_id) {
+            for update in updates {
+                if let Some(ref update_id) = update.id {
+                    for span in &mut overlay.spans {
+                        if span.id.as_deref() == Some(update_id) {
+                            span.text = update.text.clone();
+                            span.fg = update.fg.clone();
+                            span.bg = update.bg.clone();
+                            span.bold = update.bold;
+                            span.italic = update.italic;
+                            span.underline = update.underline;
+                        }
+                    }
+                }
+            }
+            true
+        } else {
+            false
+        }
+    }
+
     /// Delete an overlay by ID, returns true if it existed
     pub fn delete(&self, id: &str) -> bool {
         let mut inner = self.inner.write().unwrap();
@@ -148,6 +175,7 @@ impl Default for OverlayStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::overlay::types::{Color, NamedColor};
 
     #[test]
     fn test_create_overlay() {
@@ -205,5 +233,99 @@ mod tests {
         let o1 = store.get(&id1).unwrap();
         let o2 = store.get(&id2).unwrap();
         assert!(o2.z > o1.z);
+    }
+
+    #[test]
+    fn test_update_spans_by_id() {
+        let store = OverlayStore::new();
+        let spans = vec![
+            OverlaySpan {
+                id: Some("label".to_string()),
+                text: "Progress: ".to_string(),
+                fg: None,
+                bg: None,
+                bold: true,
+                italic: false,
+                underline: false,
+            },
+            OverlaySpan {
+                id: Some("value".to_string()),
+                text: "52%".to_string(),
+                fg: None,
+                bg: None,
+                bold: false,
+                italic: false,
+                underline: false,
+            },
+        ];
+        let oid = store.create(0, 0, None, 80, 1, None, spans);
+
+        // Update only the "value" span
+        let updates = vec![OverlaySpan {
+            id: Some("value".to_string()),
+            text: "78%".to_string(),
+            fg: Some(Color::Named(NamedColor::Green)),
+            bg: None,
+            bold: true,
+            italic: false,
+            underline: false,
+        }];
+        assert!(store.update_spans(&oid, &updates));
+
+        let overlay = store.get(&oid).unwrap();
+        // "label" span should be unchanged
+        assert_eq!(overlay.spans[0].text, "Progress: ");
+        assert!(overlay.spans[0].bold);
+        assert_eq!(overlay.spans[0].fg, None);
+        // "value" span should be updated
+        assert_eq!(overlay.spans[1].text, "78%");
+        assert_eq!(overlay.spans[1].fg, Some(Color::Named(NamedColor::Green)));
+        assert!(overlay.spans[1].bold);
+    }
+
+    #[test]
+    fn test_update_spans_nonexistent_overlay() {
+        let store = OverlayStore::new();
+        let updates = vec![OverlaySpan {
+            id: Some("value".to_string()),
+            text: "new".to_string(),
+            fg: None,
+            bg: None,
+            bold: false,
+            italic: false,
+            underline: false,
+        }];
+        assert!(!store.update_spans("nonexistent", &updates));
+    }
+
+    #[test]
+    fn test_update_spans_no_matching_span_id() {
+        let store = OverlayStore::new();
+        let spans = vec![OverlaySpan {
+            id: Some("label".to_string()),
+            text: "Hello".to_string(),
+            fg: None,
+            bg: None,
+            bold: false,
+            italic: false,
+            underline: false,
+        }];
+        let oid = store.create(0, 0, None, 80, 1, None, spans);
+
+        // Update with a span ID that doesn't match anything
+        let updates = vec![OverlaySpan {
+            id: Some("nonexistent_span".to_string()),
+            text: "Goodbye".to_string(),
+            fg: None,
+            bg: None,
+            bold: false,
+            italic: false,
+            underline: false,
+        }];
+        assert!(store.update_spans(&oid, &updates));
+
+        // Original span should be unchanged
+        let overlay = store.get(&oid).unwrap();
+        assert_eq!(overlay.spans[0].text, "Hello");
     }
 }
