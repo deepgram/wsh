@@ -32,6 +32,16 @@ impl RawModeGuard {
 
 impl Drop for RawModeGuard {
     fn drop(&mut self) {
+        // Ignore SIGQUIT before restoring cooked mode. In raw mode the kernel
+        // doesn't generate SIGQUIT for Ctrl+\, but during the brief window
+        // while crossterm restores cooked mode the signal disposition is
+        // re-enabled and any pending Ctrl+\ will deliver a core-dumping
+        // SIGQUIT. Since this guard is only dropped as the process exits,
+        // no subsequent code needs SIGQUIT.
+        #[cfg(unix)]
+        unsafe {
+            libc::signal(libc::SIGQUIT, libc::SIG_IGN);
+        }
         let _ = disable_raw_mode();
     }
 }
@@ -79,10 +89,19 @@ impl ScreenGuard {
 
 impl Drop for ScreenGuard {
     fn drop(&mut self) {
-        if self.mode == ScreenMode::AltScreen {
-            let mut stdout = std::io::stdout();
-            let _ = stdout.write_all(b"\x1b[?1049l");
-            let _ = stdout.flush();
+        let mut stdout = std::io::stdout();
+        match self.mode {
+            ScreenMode::Clear => {
+                // Reset SGR, show cursor, disable bracketed paste, move to a
+                // fresh line. This matches tmux/screen detach behavior and
+                // prevents leftover styling or garbage on the next prompt.
+                let _ = stdout.write_all(b"\x1b[0m\x1b[?25h\x1b[?2004l\r\n");
+                let _ = stdout.flush();
+            }
+            ScreenMode::AltScreen => {
+                let _ = stdout.write_all(b"\x1b[?1049l");
+                let _ = stdout.flush();
+            }
         }
     }
 }

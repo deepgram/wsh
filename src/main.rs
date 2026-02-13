@@ -690,6 +690,7 @@ async fn run_standalone(cli: Cli) -> Result<(), WshError> {
         return Err(WshError::Io(e));
     }
 
+    eprintln!("[detached from session '{}']", resp.name);
     tracing::info!("wsh exiting");
     Ok(())
 }
@@ -772,6 +773,7 @@ async fn run_attach(
         return Err(WshError::Io(e));
     }
 
+    eprintln!("[detached from session '{}']", resp.name);
     Ok(())
 }
 

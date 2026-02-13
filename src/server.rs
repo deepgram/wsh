@@ -223,7 +223,9 @@ async fn handle_attach_session<S: AsyncRead + AsyncWrite + Unpin>(
         tracing::warn!(?e, "failed to resize parser on attach");
     }
 
-    // Build scrollback/screen data for replay
+    // Build scrollback/screen data for replay (using Styled format to
+    // preserve colors and attributes for the reconnecting client).
+    use crate::parser::ansi::line_to_ansi;
     use crate::parser::state::{Format, Query, QueryResponse};
     let scrollback_data = match msg.scrollback {
         ScrollbackRequest::None => Vec::new(),
@@ -233,17 +235,15 @@ async fn handle_attach_session<S: AsyncRead + AsyncWrite + Unpin>(
                 _ => usize::MAX,
             };
             match session.parser.query(Query::Scrollback {
-                format: Format::Plain,
+                format: Format::Styled,
                 offset: 0,
                 limit,
             }).await {
                 Ok(QueryResponse::Scrollback(sb)) => {
                     let mut buf = String::new();
                     for line in &sb.lines {
-                        if let crate::parser::state::FormattedLine::Plain(text) = line {
-                            buf.push_str(text);
-                            buf.push_str("\r\n");
-                        }
+                        buf.push_str(&line_to_ansi(line));
+                        buf.push_str("\r\n");
                     }
                     buf.into_bytes()
                 }
@@ -253,18 +253,16 @@ async fn handle_attach_session<S: AsyncRead + AsyncWrite + Unpin>(
     };
 
     let screen_data = match session.parser.query(Query::Screen {
-        format: Format::Plain,
+        format: Format::Styled,
     }).await {
         Ok(QueryResponse::Screen(screen)) => {
             let mut buf = String::new();
             // Clear screen and home cursor before replaying
             buf.push_str("\x1b[H\x1b[2J");
             for (i, line) in screen.lines.iter().enumerate() {
-                if let crate::parser::state::FormattedLine::Plain(text) = line {
-                    buf.push_str(text);
-                    if i + 1 < screen.lines.len() {
-                        buf.push_str("\r\n");
-                    }
+                buf.push_str(&line_to_ansi(line));
+                if i + 1 < screen.lines.len() {
+                    buf.push_str("\r\n");
                 }
             }
             // Restore cursor position
@@ -401,8 +399,13 @@ async fn send_initial_visual_state<S: AsyncWrite + Unpin>(
     stream: &mut S,
     session: &Session,
 ) -> io::Result<()> {
+    // Filter overlays and panels by the current screen mode so clients
+    // don't receive visuals intended for a different mode (e.g. normal-mode
+    // overlays shouldn't appear while vim has the alternate screen active).
+    let mode = *session.screen_mode.read();
+
     // Send current overlay state
-    let overlays = session.overlays.list();
+    let overlays = session.overlays.list_by_mode(mode);
     if !overlays.is_empty() {
         let msg = OverlaySyncMsg { overlays };
         let frame = Frame::control(FrameType::OverlaySync, &msg)
@@ -411,7 +414,7 @@ async fn send_initial_visual_state<S: AsyncWrite + Unpin>(
     }
 
     // Send current panel state
-    let panels = session.panels.list();
+    let panels = session.panels.list_by_mode(mode);
     if !panels.is_empty() {
         let (term_rows, term_cols) = session.terminal_size.get();
         let layout = compute_layout(&panels, term_rows, term_cols);
@@ -469,8 +472,9 @@ async fn run_streaming<S: AsyncRead + AsyncWrite + Unpin>(
             result = visual_update_rx.recv() => {
                 match result {
                     Ok(VisualUpdate::OverlaysChanged) => {
+                        let mode = *session.screen_mode.read();
                         let msg = OverlaySyncMsg {
-                            overlays: session.overlays.list(),
+                            overlays: session.overlays.list_by_mode(mode),
                         };
                         if let Ok(frame) = Frame::control(FrameType::OverlaySync, &msg) {
                             if frame.write_to(&mut writer).await.is_err() {
@@ -479,7 +483,8 @@ async fn run_streaming<S: AsyncRead + AsyncWrite + Unpin>(
                         }
                     }
                     Ok(VisualUpdate::PanelsChanged) => {
-                        let panels = session.panels.list();
+                        let mode = *session.screen_mode.read();
+                        let panels = session.panels.list_by_mode(mode);
                         let (term_rows, term_cols) = terminal_size.get();
                         let layout = compute_layout(&panels, term_rows, term_cols);
                         let msg = PanelSyncMsg {

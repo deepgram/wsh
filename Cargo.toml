@@ -28,6 +28,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 rmcp = { version = "0.15", features = ["server", "macros", "transport-io", "transport-streamable-http-server"] }
 schemars = "1.0"
 tokio-util = { version = "0.7", features = ["rt"] }
+libc = "0.2"
 
 [dev-dependencies]
 tower = { version = "0.4", features = ["util"] }

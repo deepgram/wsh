@@ -200,30 +200,64 @@ impl Session {
             }
         });
 
-        Ok((
-            Session {
-                name,
-                pid,
-                command: command_display,
-                client_count: Arc::new(AtomicUsize::new(0)),
-                input_tx,
-                output_rx: broker.sender(),
-                shutdown,
-                parser,
-                overlays,
-                panels,
-                pty,
-                terminal_size,
-                input_mode,
-                input_broadcaster,
-                activity,
-                focus,
-                detach_signal: broadcast::channel::<()>(1).0,
-                visual_update_tx: broadcast::channel::<VisualUpdate>(16).0,
-                screen_mode: Arc::new(RwLock::new(ScreenMode::Normal)),
-            },
-            child_exit_rx,
-        ))
+        let session = Session {
+            name,
+            pid,
+            command: command_display,
+            client_count: Arc::new(AtomicUsize::new(0)),
+            input_tx,
+            output_rx: broker.sender(),
+            shutdown,
+            parser,
+            overlays,
+            panels,
+            pty,
+            terminal_size,
+            input_mode,
+            input_broadcaster,
+            activity,
+            focus,
+            detach_signal: broadcast::channel::<()>(1).0,
+            visual_update_tx: broadcast::channel::<VisualUpdate>(16).0,
+            screen_mode: Arc::new(RwLock::new(ScreenMode::Normal)),
+        };
+
+        // Watch for alternate screen mode changes from the parser and
+        // update session.screen_mode accordingly. This ensures overlays
+        // and panels are automatically filtered by screen mode.
+        {
+            let screen_mode = session.screen_mode.clone();
+            let visual_update_tx = session.visual_update_tx.clone();
+            let parser = session.parser.clone();
+            tokio::spawn(async move {
+                use tokio_stream::StreamExt;
+                let mut events = std::pin::pin!(parser.subscribe());
+                while let Some(event) = events.next().await {
+                    if let crate::parser::events::Event::Mode { alternate_active, .. } = event {
+                        let new_mode = if alternate_active {
+                            ScreenMode::Alt
+                        } else {
+                            ScreenMode::Normal
+                        };
+                        let changed = {
+                            let mut mode = screen_mode.write();
+                            if *mode != new_mode {
+                                *mode = new_mode;
+                                true
+                            } else {
+                                false
+                            }
+                        };
+                        if changed {
+                            let _ = visual_update_tx.send(VisualUpdate::OverlaysChanged);
+                            let _ = visual_update_tx.send(VisualUpdate::PanelsChanged);
+                        }
+                    }
+                }
+            });
+        }
+
+        Ok((session, child_exit_rx))
     }
 }
 
