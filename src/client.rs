@@ -191,13 +191,42 @@ impl Client {
         // Channel for stdin data from the blocking reader
         let (stdin_tx, mut stdin_rx) = tokio::sync::mpsc::channel::<Bytes>(64);
 
-        // Spawn stdin reader in a blocking thread
-        tokio::task::spawn_blocking(move || {
+        // Cancellation flag for the stdin reader. Without this, the
+        // blocking reader outlives the streaming loop and can consume
+        // keystrokes typed between terminal restoration and process exit.
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cancel_reader = cancel.clone();
+
+        // Spawn stdin reader in a blocking thread.
+        // Uses poll() with a timeout so we can check the cancellation
+        // flag periodically rather than blocking indefinitely on read().
+        let stdin_handle = tokio::task::spawn_blocking(move || {
             use std::io::Read;
-            let mut stdin = std::io::stdin();
+            use std::os::unix::io::AsRawFd;
+            use std::sync::atomic::Ordering;
+
+            let stdin = std::io::stdin();
+            let stdin_fd = stdin.as_raw_fd();
             let mut buf = [0u8; 4096];
             loop {
-                match stdin.read(&mut buf) {
+                if cancel_reader.load(Ordering::Relaxed) {
+                    break;
+                }
+
+                // Poll stdin with a 100ms timeout so we can recheck cancel
+                let ready = unsafe {
+                    let mut pfd = libc::pollfd {
+                        fd: stdin_fd,
+                        events: libc::POLLIN,
+                        revents: 0,
+                    };
+                    libc::poll(&mut pfd, 1, 100)
+                };
+                if ready <= 0 {
+                    continue;
+                }
+
+                match stdin.lock().read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
                         let data = Bytes::copy_from_slice(&buf[..n]);
@@ -228,7 +257,16 @@ impl Client {
             }
         });
 
-        streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx).await
+        let result = streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx).await;
+
+        // Signal the stdin reader to stop and wait for it to exit.
+        // This prevents the orphaned reader from consuming keystrokes
+        // typed between terminal restoration and process exit.
+        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        drop(stdin_rx);
+        let _ = stdin_handle.await;
+
+        result
     }
 
 }
