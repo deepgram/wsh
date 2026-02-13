@@ -151,6 +151,21 @@ enum Commands {
         #[arg(long, env = "WSH_TOKEN")]
         token: Option<String>,
     },
+
+    /// Start an MCP server over stdio (for AI hosts like Claude Desktop)
+    Mcp {
+        /// Address to bind the HTTP/WebSocket API server (for auto-spawn)
+        #[arg(long, default_value = "127.0.0.1:8080")]
+        bind: SocketAddr,
+
+        /// Path to the Unix domain socket
+        #[arg(long)]
+        socket: Option<PathBuf>,
+
+        /// Authentication token
+        #[arg(long, env = "WSH_TOKEN")]
+        token: Option<String>,
+    },
 }
 
 #[derive(Error, Debug)]
@@ -195,7 +210,13 @@ fn resolve_token(bind: &SocketAddr, user_token: &Option<String>) -> Option<Strin
 async fn main() -> Result<(), WshError> {
     let cli = Cli::parse();
 
-    init_tracing();
+    // MCP mode: tracing must use stderr since stdout is for MCP protocol
+    let is_mcp = matches!(cli.command, Some(Commands::Mcp { .. }));
+    if is_mcp {
+        init_tracing_stderr();
+    } else {
+        init_tracing();
+    }
 
     match cli.command {
         Some(Commands::Server { bind, token, socket, ephemeral }) => {
@@ -216,6 +237,9 @@ async fn main() -> Result<(), WshError> {
         Some(Commands::Persist { value, bind, token }) => {
             run_persist(value, bind, token).await
         }
+        Some(Commands::Mcp { bind, socket, token }) => {
+            run_mcp(bind, socket, token).await
+        }
         None => {
             run_standalone(cli).await
         }
@@ -228,6 +252,19 @@ fn init_tracing() {
             std::env::var("RUST_LOG").unwrap_or_else(|_| "wsh=info,tower_http=info".into()),
         ))
         .with(tracing_subscriber::fmt::layer())
+        .init();
+}
+
+/// Initialize tracing with stderr output.
+///
+/// MCP mode uses stdout for the JSON-RPC protocol, so all tracing MUST go
+/// to stderr to avoid corrupting the protocol stream.
+fn init_tracing_stderr() {
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::new(
+            std::env::var("RUST_LOG").unwrap_or_else(|_| "wsh=info".into()),
+        ))
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
         .init();
 }
 
@@ -352,6 +389,74 @@ async fn run_server(
     }
 
     tracing::info!("wsh server exiting");
+    Ok(())
+}
+
+// ── MCP stdio mode ─────────────────────────────────────────────────
+
+/// Run the MCP stdio bridge: start an in-process server and serve MCP
+/// JSON-RPC over stdin/stdout for AI hosts like Claude Desktop.
+async fn run_mcp(
+    bind: SocketAddr,
+    socket: Option<PathBuf>,
+    token: Option<String>,
+) -> Result<(), WshError> {
+    use rmcp::transport::io::stdio;
+    use rmcp::ServiceExt as _;
+
+    tracing::info!("wsh mcp stdio bridge starting");
+
+    // Start server infrastructure in-process
+    let sessions = SessionRegistry::new();
+    let shutdown = ShutdownCoordinator::new();
+    let server_config = std::sync::Arc::new(api::ServerConfig::new(false));
+    let state = api::AppState {
+        sessions: sessions.clone(),
+        shutdown: shutdown.clone(),
+        server_config,
+    };
+
+    let token = resolve_token(&bind, &token);
+    let app = api::router(state.clone(), token);
+
+    // Start HTTP server in background (for any HTTP/WS clients that want to connect)
+    let http_handle = tokio::spawn(async move {
+        let listener = tokio::net::TcpListener::bind(bind).await.unwrap();
+        tracing::info!(addr = %bind, "HTTP/WS server listening");
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    // Start Unix socket server in background
+    let socket_path = socket.unwrap_or_else(server::default_socket_path);
+    let socket_sessions = sessions.clone();
+    let socket_handle = tokio::spawn(async move {
+        if let Err(e) = server::serve(socket_sessions, &socket_path).await {
+            tracing::error!(?e, "Unix socket server error");
+        }
+    });
+
+    // Serve MCP over stdio using the shared AppState
+    let mcp = wsh::mcp::WshMcpServer::new(state);
+    let service = mcp.serve(stdio()).await.map_err(|e| {
+        WshError::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("MCP serve error: {e}"),
+        ))
+    })?;
+
+    // Wait until the MCP host closes the connection
+    service.waiting().await.map_err(|e| {
+        WshError::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("MCP wait error: {e}"),
+        ))
+    })?;
+
+    // Clean up
+    http_handle.abort();
+    socket_handle.abort();
+
+    tracing::info!("wsh mcp stdio bridge exiting");
     Ok(())
 }
 
