@@ -497,3 +497,218 @@ async fn test_mcp_read_sessions_resource() {
         "Expected empty array (no sessions created)"
     );
 }
+
+// ── Test 9: MCP list prompts ────────────────────────────────────
+
+#[tokio::test]
+async fn test_mcp_list_prompts() {
+    let app = create_test_app();
+    let addr = start_test_server(app).await;
+    let client = reqwest::Client::new();
+
+    // Initialize to get a session ID
+    let (_, session_id) = send_initialize_and_get_session(&client, addr).await;
+
+    // Send initialized notification
+    let _ = client
+        .post(format!("http://{addr}/mcp"))
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .header("Mcp-Session-Id", &session_id)
+        .body(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
+        .send()
+        .await
+        .unwrap();
+
+    // List prompts
+    let body = send_mcp_request_with_session(
+        &client,
+        addr,
+        r#"{"jsonrpc":"2.0","id":2,"method":"prompts/list"}"#,
+        &session_id,
+    )
+    .await;
+
+    let json = extract_jsonrpc_from_sse(&body);
+
+    assert_eq!(json["jsonrpc"], "2.0");
+    assert_eq!(json["id"], 2);
+
+    let prompts = json["result"]["prompts"]
+        .as_array()
+        .expect("Expected prompts array in list prompts response");
+
+    // Should have exactly 9 prompts (one per skill)
+    assert_eq!(
+        prompts.len(),
+        9,
+        "Expected 9 prompts, got {}",
+        prompts.len()
+    );
+
+    // Verify expected prompt names exist
+    let prompt_names: Vec<&str> = prompts
+        .iter()
+        .filter_map(|p| p["name"].as_str())
+        .collect();
+
+    assert!(prompt_names.contains(&"wsh:core"), "Missing wsh:core prompt");
+    assert!(
+        prompt_names.contains(&"wsh:drive-process"),
+        "Missing wsh:drive-process prompt"
+    );
+    assert!(prompt_names.contains(&"wsh:tui"), "Missing wsh:tui prompt");
+    assert!(
+        prompt_names.contains(&"wsh:multi-session"),
+        "Missing wsh:multi-session prompt"
+    );
+    assert!(
+        prompt_names.contains(&"wsh:agent-orchestration"),
+        "Missing wsh:agent-orchestration prompt"
+    );
+    assert!(
+        prompt_names.contains(&"wsh:monitor"),
+        "Missing wsh:monitor prompt"
+    );
+    assert!(
+        prompt_names.contains(&"wsh:visual-feedback"),
+        "Missing wsh:visual-feedback prompt"
+    );
+    assert!(
+        prompt_names.contains(&"wsh:input-capture"),
+        "Missing wsh:input-capture prompt"
+    );
+    assert!(
+        prompt_names.contains(&"wsh:generative-ui"),
+        "Missing wsh:generative-ui prompt"
+    );
+
+    // Verify all prompts have descriptions
+    for prompt in prompts {
+        assert!(
+            prompt["description"].is_string(),
+            "Prompt {} should have a description",
+            prompt["name"]
+        );
+    }
+}
+
+// ── Test 10: MCP get prompt ─────────────────────────────────────
+
+#[tokio::test]
+async fn test_mcp_get_prompt() {
+    let app = create_test_app();
+    let addr = start_test_server(app).await;
+    let client = reqwest::Client::new();
+
+    // Initialize to get a session ID
+    let (_, session_id) = send_initialize_and_get_session(&client, addr).await;
+
+    // Send initialized notification
+    let _ = client
+        .post(format!("http://{addr}/mcp"))
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .header("Mcp-Session-Id", &session_id)
+        .body(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
+        .send()
+        .await
+        .unwrap();
+
+    // Get the wsh:core prompt
+    let body = send_mcp_request_with_session(
+        &client,
+        addr,
+        r#"{"jsonrpc":"2.0","id":2,"method":"prompts/get","params":{"name":"wsh:core"}}"#,
+        &session_id,
+    )
+    .await;
+
+    let json = extract_jsonrpc_from_sse(&body);
+
+    assert_eq!(json["jsonrpc"], "2.0");
+    assert_eq!(json["id"], 2);
+
+    let result = &json["result"];
+    assert!(
+        result["description"].is_string(),
+        "Expected description in get_prompt result"
+    );
+
+    let messages = result["messages"]
+        .as_array()
+        .expect("Expected messages array in get_prompt result");
+
+    assert_eq!(messages.len(), 1, "Expected exactly one message");
+
+    let message = &messages[0];
+    assert_eq!(
+        message["role"].as_str(),
+        Some("user"),
+        "Message role should be 'user'"
+    );
+
+    let content_text = message["content"]["text"]
+        .as_str()
+        .expect("Expected text content in message");
+
+    // Verify this is the MCP-adapted core skill
+    assert!(
+        content_text.contains("wsh:core-mcp"),
+        "Core prompt content should contain 'wsh:core-mcp'"
+    );
+    assert!(
+        content_text.contains("wsh_run_command"),
+        "Core prompt content should reference wsh_run_command tool"
+    );
+}
+
+// ── Test 11: MCP get prompt with unknown name ───────────────────
+
+#[tokio::test]
+async fn test_mcp_get_prompt_unknown_name() {
+    let app = create_test_app();
+    let addr = start_test_server(app).await;
+    let client = reqwest::Client::new();
+
+    // Initialize to get a session ID
+    let (_, session_id) = send_initialize_and_get_session(&client, addr).await;
+
+    // Send initialized notification
+    let _ = client
+        .post(format!("http://{addr}/mcp"))
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .header("Mcp-Session-Id", &session_id)
+        .body(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
+        .send()
+        .await
+        .unwrap();
+
+    // Get a prompt that doesn't exist
+    let body = send_mcp_request_with_session(
+        &client,
+        addr,
+        r#"{"jsonrpc":"2.0","id":2,"method":"prompts/get","params":{"name":"nonexistent"}}"#,
+        &session_id,
+    )
+    .await;
+
+    let json = extract_jsonrpc_from_sse(&body);
+
+    assert_eq!(json["jsonrpc"], "2.0");
+    assert_eq!(json["id"], 2);
+
+    // Should return a JSON-RPC error
+    assert!(
+        json["error"].is_object(),
+        "Expected error object for unknown prompt name"
+    );
+    assert!(
+        json["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("unknown prompt"),
+        "Error message should mention 'unknown prompt'"
+    );
+}
