@@ -2,6 +2,9 @@ pub mod tools;
 pub mod resources;
 pub mod prompts;
 
+use std::time::Duration;
+
+use bytes::Bytes;
 use rmcp::{
     handler::server::router::tool::ToolRouter,
     model::*,
@@ -10,10 +13,15 @@ use rmcp::{
 };
 
 use crate::api::AppState;
+use crate::parser::state::Query;
 use crate::pty::SpawnCommand;
 use crate::session::{RegistryError, Session};
 
-use tools::{CreateSessionParams, ListSessionsParams, ManageSessionParams, ManageAction};
+use tools::{
+    CreateSessionParams, ListSessionsParams, ManageSessionParams, ManageAction,
+    SendInputParams, Encoding, GetScreenParams, GetScrollbackParams,
+    AwaitQuiesceParams, RunCommandParams,
+};
 
 #[derive(Clone)]
 pub struct WshMcpServer {
@@ -207,6 +215,197 @@ impl WshMcpServer {
                     "session": params.session,
                 });
                 Ok(CallToolResult::success(vec![Content::text(
+                    serde_json::to_string(&result).unwrap_or_default(),
+                )]))
+            }
+        }
+    }
+
+    // ── Terminal I/O tools ───────────────────────────────────────
+
+    /// Send input (keystrokes, text, or binary data) to a terminal session.
+    #[tool(description = "Send input to a terminal session. Supports UTF-8 text (default) or base64-encoded binary data. The input is delivered to the PTY exactly as provided — no newline is appended automatically.")]
+    async fn wsh_send_input(
+        &self,
+        Parameters(params): Parameters<SendInputParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let session = self.get_session(&params.session)?;
+
+        let data = match params.encoding {
+            Encoding::Utf8 => Bytes::from(params.input.into_bytes()),
+            Encoding::Base64 => {
+                use base64::Engine;
+                let decoded = base64::engine::general_purpose::STANDARD
+                    .decode(&params.input)
+                    .map_err(|e| {
+                        ErrorData::invalid_params(
+                            format!("invalid base64 input: {e}"),
+                            None,
+                        )
+                    })?;
+                Bytes::from(decoded)
+            }
+        };
+
+        let len = data.len();
+        session.input_tx.send(data).await.map_err(|e| {
+            ErrorData::internal_error(
+                format!("failed to send input: {e}"),
+                None,
+            )
+        })?;
+        session.activity.touch();
+
+        let result = serde_json::json!({
+            "status": "sent",
+            "bytes": len,
+        });
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string(&result).unwrap_or_default(),
+        )]))
+    }
+
+    /// Get the current visible screen contents of a terminal session.
+    #[tool(description = "Get the current visible screen contents of a terminal session. Returns the screen grid with text, colors, cursor position, and terminal dimensions.")]
+    async fn wsh_get_screen(
+        &self,
+        Parameters(params): Parameters<GetScreenParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let session = self.get_session(&params.session)?;
+        let format = params.format.into_parser_format();
+
+        let response = session
+            .parser
+            .query(Query::Screen { format })
+            .await
+            .map_err(|e| {
+                ErrorData::internal_error(format!("parser error: {e}"), None)
+            })?;
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string(&response).unwrap_or_default(),
+        )]))
+    }
+
+    /// Get scrollback buffer contents from a terminal session.
+    #[tool(description = "Get scrollback buffer contents from a terminal session. Returns historical output with pagination support (offset and limit). Useful for reading output that has scrolled off the visible screen.")]
+    async fn wsh_get_scrollback(
+        &self,
+        Parameters(params): Parameters<GetScrollbackParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let session = self.get_session(&params.session)?;
+        let format = params.format.into_parser_format();
+
+        let response = session
+            .parser
+            .query(Query::Scrollback {
+                format,
+                offset: params.offset,
+                limit: params.limit,
+            })
+            .await
+            .map_err(|e| {
+                ErrorData::internal_error(format!("parser error: {e}"), None)
+            })?;
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string(&response).unwrap_or_default(),
+        )]))
+    }
+
+    /// Wait for a terminal session to become quiescent (idle).
+    #[tool(description = "Wait for a terminal session to become quiescent (no output for timeout_ms). Returns the activity generation number on success. Returns an error result if max_wait_ms is exceeded before quiescence is reached.")]
+    async fn wsh_await_quiesce(
+        &self,
+        Parameters(params): Parameters<AwaitQuiesceParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let session = self.get_session(&params.session)?;
+
+        let timeout = Duration::from_millis(params.timeout_ms);
+        let max_wait = Duration::from_millis(params.max_wait_ms);
+
+        match tokio::time::timeout(
+            max_wait,
+            session.activity.wait_for_quiescence(timeout, None),
+        )
+        .await
+        {
+            Ok(generation) => {
+                let result = serde_json::json!({
+                    "status": "quiescent",
+                    "generation": generation,
+                });
+                Ok(CallToolResult::success(vec![Content::text(
+                    serde_json::to_string(&result).unwrap_or_default(),
+                )]))
+            }
+            Err(_) => {
+                let result = serde_json::json!({
+                    "error": "quiesce timeout exceeded max_wait_ms",
+                    "timeout_ms": params.timeout_ms,
+                    "max_wait_ms": params.max_wait_ms,
+                });
+                Ok(CallToolResult::error(vec![Content::text(
+                    serde_json::to_string(&result).unwrap_or_default(),
+                )]))
+            }
+        }
+    }
+
+    /// Send input and wait for the terminal to become idle, then return the screen.
+    #[tool(description = "Send input to a terminal session, wait for quiescence, then return the screen contents. This is the primary 'run a command' primitive: send input, wait for output to settle, read the result. If quiescence is not reached within max_wait_ms, the screen is still returned but marked as an error.")]
+    async fn wsh_run_command(
+        &self,
+        Parameters(params): Parameters<RunCommandParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let session = self.get_session(&params.session)?;
+
+        // 1. Send input
+        let data = Bytes::from(params.input.into_bytes());
+        session.input_tx.send(data).await.map_err(|e| {
+            ErrorData::internal_error(
+                format!("failed to send input: {e}"),
+                None,
+            )
+        })?;
+        session.activity.touch();
+
+        // 2. Await quiescence
+        let timeout = Duration::from_millis(params.timeout_ms);
+        let max_wait = Duration::from_millis(params.max_wait_ms);
+
+        let quiesce_result = tokio::time::timeout(
+            max_wait,
+            session.activity.wait_for_quiescence(timeout, None),
+        )
+        .await;
+
+        // 3. Get screen regardless of quiescence outcome
+        let format = params.format.into_parser_format();
+        let screen = session
+            .parser
+            .query(Query::Screen { format })
+            .await
+            .map_err(|e| {
+                ErrorData::internal_error(format!("parser error: {e}"), None)
+            })?;
+
+        match quiesce_result {
+            Ok(generation) => {
+                let result = serde_json::json!({
+                    "screen": screen,
+                    "generation": generation,
+                });
+                Ok(CallToolResult::success(vec![Content::text(
+                    serde_json::to_string(&result).unwrap_or_default(),
+                )]))
+            }
+            Err(_) => {
+                let result = serde_json::json!({
+                    "error": "quiesce timeout exceeded max_wait_ms",
+                    "screen": screen,
+                });
+                Ok(CallToolResult::error(vec![Content::text(
                     serde_json::to_string(&result).unwrap_or_default(),
                 )]))
             }
