@@ -548,12 +548,6 @@ fn format_registry_event(
                 "params": { "name": name }
             })
         }
-        crate::session::SessionEvent::Exited { name } => {
-            serde_json::json!({
-                "event": "session_exited",
-                "params": { "name": name }
-            })
-        }
         crate::session::SessionEvent::Renamed { old_name, new_name } => {
             if let Some(handle) = sub_handles.remove(old_name.as_str()) {
                 sub_handles.insert(new_name.clone(), handle);
@@ -842,7 +836,7 @@ async fn handle_server_ws_request(
 
             match state.sessions.insert(params.name, session) {
                 Ok(assigned_name) => {
-                    // Monitor child exit so we emit SessionEvent::Exited.
+                    // Monitor child exit so the session is auto-removed.
                     state.sessions.monitor_child_exit(assigned_name.clone(), child_exit_rx);
                     return Some(super::ws_methods::WsResponse::success(
                         id,
@@ -1909,7 +1903,7 @@ pub(super) async fn session_create(
             RegistryError::NotFound(n) => ApiError::SessionNotFound(n),
         })?;
 
-    // Monitor child exit so we emit SessionEvent::Exited when the process dies.
+    // Monitor child exit so the session is auto-removed when the process dies.
     state.sessions.monitor_child_exit(assigned_name.clone(), child_exit_rx);
 
     Ok((

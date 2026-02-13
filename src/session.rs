@@ -187,7 +187,6 @@ impl Session {
 #[derive(Debug, Clone)]
 pub enum SessionEvent {
     Created { name: String },
-    Exited { name: String },
     Renamed { old_name: String, new_name: String },
     Destroyed { name: String },
 }
@@ -335,22 +334,23 @@ impl SessionRegistry {
         self.events_tx.subscribe()
     }
 
-    /// Monitor a session's child process exit and emit `SessionEvent::Exited`.
+    /// Monitor a session's child process exit and remove it from the registry.
     ///
     /// Spawns a background task that waits on `child_exit_rx`. When the child
-    /// exits, the `Exited` event is broadcast to all subscribers. This should
-    /// be called for API-created sessions where the caller would otherwise
-    /// discard the exit receiver.
+    /// exits, the session is removed from the registry (emitting a
+    /// `SessionEvent::Destroyed` event). This should be called for
+    /// API-created sessions where the caller would otherwise discard the
+    /// exit receiver.
     pub fn monitor_child_exit(
         &self,
         name: String,
         child_exit_rx: tokio::sync::oneshot::Receiver<()>,
     ) {
-        let events_tx = self.events_tx.clone();
+        let registry = self.clone();
         tokio::spawn(async move {
             let _ = child_exit_rx.await;
             tracing::info!(session = %name, "session child process exited");
-            let _ = events_tx.send(SessionEvent::Exited { name });
+            registry.remove(&name);
         });
     }
 }

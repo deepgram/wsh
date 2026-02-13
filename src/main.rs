@@ -334,7 +334,6 @@ async fn run_server(
                     let is_removal = matches!(
                         event,
                         wsh::session::SessionEvent::Destroyed { .. }
-                            | wsh::session::SessionEvent::Exited { .. }
                     );
                     if is_removal
                         && !config_for_monitor.is_persistent()

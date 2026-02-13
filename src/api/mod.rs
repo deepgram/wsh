@@ -1119,7 +1119,6 @@ mod tests {
                     let is_removal = matches!(
                         event,
                         crate::session::SessionEvent::Destroyed { .. }
-                            | crate::session::SessionEvent::Exited { .. }
                     );
                     if is_removal && !config.is_persistent() && sessions.len() == 0 {
                         return true;
@@ -1136,8 +1135,11 @@ mod tests {
         let config = Arc::new(ServerConfig::new(false)); // ephemeral
         let registry = crate::session::SessionRegistry::new();
 
-        // Start the monitor
+        // Start the monitor and yield so it subscribes to events before
+        // we create any sessions.  (In production the monitor starts at
+        // server boot, well before any sessions exist.)
         let monitor = tokio::spawn(run_ephemeral_monitor(config.clone(), registry.clone()));
+        tokio::task::yield_now().await;
 
         // Create a session via the registry
         let app = router(
@@ -1191,8 +1193,9 @@ mod tests {
         let config = Arc::new(ServerConfig::new(true)); // persistent
         let registry = crate::session::SessionRegistry::new();
 
-        // Start the monitor
+        // Start the monitor and yield so it subscribes before events fire
         let monitor = tokio::spawn(run_ephemeral_monitor(config.clone(), registry.clone()));
+        tokio::task::yield_now().await;
 
         // Create and remove a session
         let app = router(
@@ -1244,8 +1247,9 @@ mod tests {
         let config = Arc::new(ServerConfig::new(false)); // ephemeral
         let registry = crate::session::SessionRegistry::new();
 
-        // Start the monitor
+        // Start the monitor and yield so it subscribes before events fire
         let monitor = tokio::spawn(run_ephemeral_monitor(config.clone(), registry.clone()));
+        tokio::task::yield_now().await;
 
         let app = router(
             AppState {
