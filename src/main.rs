@@ -241,7 +241,7 @@ async fn main() -> Result<(), WshError> {
             run_mcp(bind, socket, token).await
         }
         None => {
-            run_standalone(cli).await
+            run_default(cli).await
         }
     }
 }
@@ -555,7 +555,7 @@ async fn run_mcp(
     Ok(())
 }
 
-// ── Standalone mode ────────────────────────────────────────────────
+// ── Default mode (no subcommand) ───────────────────────────────────
 
 /// Spawn a wsh server daemon as a background process.
 ///
@@ -618,8 +618,8 @@ async fn wait_for_socket(socket_path: &std::path::Path) -> Result<(), WshError> 
     }
 }
 
-/// Run the standalone mode: connect to (or spawn) a server, then attach.
-async fn run_standalone(cli: Cli) -> Result<(), WshError> {
+/// Run the default mode (no subcommand): connect to (or spawn) a server, then attach.
+async fn run_default(cli: Cli) -> Result<(), WshError> {
     tracing::info!("wsh starting");
 
     let socket_path = server::default_socket_path();

@@ -125,7 +125,7 @@ Once installed, the skills are available automatically. Claude Code will load th
 
 ## CLI Reference
 
-### Top-Level Flags (Standalone Mode)
+### Top-Level Flags
 
 | Flag | Env Var | Default | Description |
 |------|---------|---------|-------------|
@@ -179,7 +179,7 @@ Once installed, the skills are available automatically. Claude Code will load th
 
 ## API Overview
 
-All session-specific endpoints are nested under `/sessions/:name/`. In standalone mode, the default session name is `default`.
+All session-specific endpoints are nested under `/sessions/:name/`. When running `wsh` with no subcommand, the default session name is `default`.
 
 ### Session Management
 
@@ -388,7 +388,7 @@ See [docs/api/authentication.md](docs/api/authentication.md) for details.
 
 ```
 src/
-├── main.rs              # Entry point, CLI args, standalone/server orchestration
+├── main.rs              # Entry point, CLI args, client/server orchestration
 ├── lib.rs               # Library exports
 ├── activity.rs          # Activity tracking for quiescence detection
 ├── broker.rs            # Broadcast channel for output fanout
