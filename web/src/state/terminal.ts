@@ -39,6 +39,12 @@ export function setFullScreen(session: string, screen: ScreenState): void {
   screens.value = next;
 }
 
+export function removeScreen(session: string): void {
+  const next = new Map(screens.value);
+  next.delete(session);
+  screens.value = next;
+}
+
 export function updateLine(
   session: string,
   index: number,

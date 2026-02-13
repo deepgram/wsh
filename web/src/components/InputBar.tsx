@@ -1,10 +1,11 @@
-import { useRef } from "preact/hooks";
-import { activeSession, connectionState } from "../state/sessions";
+import { useRef, useEffect } from "preact/hooks";
+import { focusedSession, connectionState, viewMode } from "../state/sessions";
 import { getScreen } from "../state/terminal";
 import type { WshClient } from "../api/ws";
 import type { FormattedLine } from "../api/types";
 
 interface InputBarProps {
+  session: string;
   client: WshClient;
 }
 
@@ -92,17 +93,30 @@ function lineToPlainText(line: FormattedLine): string {
   return line.map((span) => span.text).join("");
 }
 
-export function InputBar({ client }: InputBarProps) {
+export function InputBar({ session, client }: InputBarProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const prevValueRef = useRef("");
   const pendingRef = useRef<{ promptLen: number } | null>(null);
   const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const session = activeSession.value;
   const connected = connectionState.value === "connected";
 
+  // Auto-focus on desktop when this session becomes focused
+  const isFocused = session === focusedSession.value;
+  useEffect(() => {
+    if (
+      isFocused &&
+      viewMode.value === "focused" &&
+      window.matchMedia("(pointer: fine)").matches
+    ) {
+      inputRef.current?.focus();
+    }
+  }, [isFocused]);
+
   const send = (data: string) => {
-    if (!session || !connected) return;
-    client.sendInput(session, data);
+    if (!connected) return;
+    client.sendInput(session, data).catch((e) => {
+      console.error(`Failed to send input to session "${session}":`, e);
+    });
   };
 
   const clearInput = () => {
@@ -118,10 +132,7 @@ export function InputBar({ client }: InputBarProps) {
     pendingRef.current = null;
     if (!pending) return;
 
-    const sess = activeSession.value;
-    if (!sess) { clearInput(); return; }
-
-    const screen = getScreen(sess);
+    const screen = getScreen(session);
     const { row: cursorRow, col: cursorCol } = screen.cursor;
 
     if (cursorRow >= 0 && cursorRow < screen.lines.length && pending.promptLen >= 0) {
@@ -140,9 +151,7 @@ export function InputBar({ client }: InputBarProps) {
   };
 
   const scheduleSyncFromTerminal = () => {
-    const sess = activeSession.value;
-    if (!sess) return;
-    const screen = getScreen(sess);
+    const screen = getScreen(session);
     const inputLen = inputRef.current?.value.length ?? 0;
     pendingRef.current = { promptLen: screen.cursor.col - inputLen };
     if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
@@ -198,7 +207,7 @@ export function InputBar({ client }: InputBarProps) {
         ref={inputRef}
         type="text"
         placeholder={connected ? "Type here..." : "Disconnected"}
-        disabled={!connected || !session}
+        disabled={!connected}
         onKeyDown={handleKeyDown}
         onInput={handleInput}
         autocomplete="off"

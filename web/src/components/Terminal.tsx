@@ -1,5 +1,4 @@
 import { useRef, useEffect } from "preact/hooks";
-import { activeSession } from "../state/sessions";
 import { getScreen } from "../state/terminal";
 import { screens } from "../state/terminal";
 import type { FormattedLine, Span, Color } from "../api/types";
@@ -84,9 +83,12 @@ function renderLine(line: FormattedLine, lineIdx: number): preact.JSX.Element {
   );
 }
 
-export function Terminal() {
+interface TerminalProps {
+  session: string;
+}
+
+export function Terminal({ session }: TerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const session = activeSession.value;
 
   // Subscribe to screens signal to trigger re-renders
   const _screens = screens.value;
@@ -95,15 +97,11 @@ export function Terminal() {
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-    const screen = session ? getScreen(session) : null;
-    if (screen && !screen.alternateActive) {
+    const screen = getScreen(session);
+    if (!screen.alternateActive) {
       el.scrollTop = el.scrollHeight;
     }
   });
-
-  if (!session) {
-    return <div class="loading">No active session</div>;
-  }
 
   const screen = getScreen(session);
   const containerClass = screen.alternateActive

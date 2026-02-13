@@ -19,6 +19,9 @@ export class WshClient {
 
   onStateChange?: (state: "connecting" | "connected" | "disconnected") => void;
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  onLifecycleEvent?: (event: any) => void;
+
   connect(url: string): void {
     this.url = url;
     this.doConnect();
@@ -46,7 +49,11 @@ export class WshClient {
     };
 
     ws.onmessage = (ev) => {
-      this.handleMessage(ev.data as string);
+      try {
+        this.handleMessage(ev.data as string);
+      } catch (e) {
+        console.error("Error handling WebSocket message:", e);
+      }
     };
 
     ws.onclose = () => {
@@ -102,9 +109,41 @@ export class WshClient {
 
     // Otherwise it's an event — route to callbacks
     if ("event" in msg) {
-      for (const [, callbacks] of this.eventCallbacks) {
-        for (const cb of callbacks) {
-          cb(msg);
+      const eventName = msg.event as string;
+
+      // Lifecycle events (session_created, session_destroyed, etc.)
+      if (eventName.startsWith("session_")) {
+        try {
+          this.onLifecycleEvent?.(msg);
+        } catch (e) {
+          console.error("Error in lifecycle event handler:", e);
+        }
+        return;
+      }
+
+      // Per-session events carry a "session" field from the server
+      const session = msg.session as string | undefined;
+      if (session) {
+        const callbacks = this.eventCallbacks.get(session);
+        if (callbacks) {
+          for (const cb of callbacks) {
+            try {
+              cb(msg);
+            } catch (e) {
+              console.error(`Error in event callback for session "${session}":`, e);
+            }
+          }
+        }
+      } else {
+        // No session field — broadcast to all (backward compat)
+        for (const [, callbacks] of this.eventCallbacks) {
+          for (const cb of callbacks) {
+            try {
+              cb(msg);
+            } catch (e) {
+              console.error("Error in event callback:", e);
+            }
+          }
         }
       }
     }
@@ -126,6 +165,11 @@ export class WshClient {
 
       this.ws.send(JSON.stringify(req));
     });
+  }
+
+  /** Remove all local event subscriptions (used on reconnect). */
+  clearAllSubscriptions(): void {
+    this.eventCallbacks.clear();
   }
 
   // --- Convenience methods ---
