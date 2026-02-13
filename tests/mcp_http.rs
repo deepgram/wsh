@@ -1490,7 +1490,176 @@ async fn test_mcp_tool_nonexistent_session_error() {
     );
 }
 
-// ── Test 21: Manage session rename ───────────────────────────────
+// ── Test 21: HTTP API and MCP coexist on the same server ─────────
+
+#[tokio::test]
+async fn test_http_and_mcp_coexist() {
+    let registry = SessionRegistry::new();
+    let state = AppState {
+        sessions: registry,
+        shutdown: ShutdownCoordinator::new(),
+        server_config: std::sync::Arc::new(ServerConfig::new(false)),
+    };
+    let app = router(state, None);
+    let addr = start_test_server(app).await;
+    let client = reqwest::Client::new();
+
+    // ── Step 1: Create a session via the HTTP API ───────────────
+    let resp = client
+        .post(format!("http://{addr}/sessions"))
+        .json(&serde_json::json!({"name": "coexist-test"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        201,
+        "HTTP create session should return 201 Created"
+    );
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["name"], "coexist-test");
+
+    // ── Step 2: List sessions via the HTTP API ──────────────────
+    let resp = client
+        .get(format!("http://{addr}/sessions"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let sessions: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert_eq!(sessions.len(), 1, "Should have exactly one session via HTTP");
+    assert_eq!(sessions[0]["name"], "coexist-test");
+
+    // ── Step 3: MCP initialize on the same server ───────────────
+    let (json, _session_id) = send_initialize_and_get_session(&client, addr).await;
+    assert_eq!(json["jsonrpc"], "2.0");
+    assert_eq!(json["id"], 1);
+    assert!(json["result"]["serverInfo"]["name"].is_string());
+
+    // ── Step 4: Set up full MCP session for tool calls ──────────
+    let mcp_session = setup_mcp_session(&client, addr).await;
+
+    // ── Step 5: List sessions via MCP tool — should see the HTTP-created session
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_list_sessions",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(json["result"]["isError"], false);
+    let list: Vec<serde_json::Value> =
+        serde_json::from_str(extract_tool_text(&json)).unwrap();
+    assert!(
+        list.iter().any(|s| s["name"] == "coexist-test"),
+        "MCP should see session created via HTTP API, got: {:?}",
+        list
+    );
+
+    // ── Step 6: Create a second session via MCP ─────────────────
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_create_session",
+        serde_json::json!({"name": "mcp-created"}),
+    )
+    .await;
+    assert_eq!(json["result"]["isError"], false);
+    let result = parse_tool_result(&json);
+    assert_eq!(result["name"], "mcp-created");
+
+    // ── Step 7: Verify HTTP API sees the MCP-created session ────
+    let resp = client
+        .get(format!("http://{addr}/sessions"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let sessions: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert_eq!(
+        sessions.len(),
+        2,
+        "HTTP should see both sessions (HTTP-created + MCP-created)"
+    );
+    let names: Vec<&str> = sessions
+        .iter()
+        .filter_map(|s| s["name"].as_str())
+        .collect();
+    assert!(
+        names.contains(&"coexist-test"),
+        "HTTP list should contain 'coexist-test'"
+    );
+    assert!(
+        names.contains(&"mcp-created"),
+        "HTTP list should contain 'mcp-created'"
+    );
+
+    // ── Step 8: Access the HTTP-created session via HTTP endpoint ─
+    let resp = client
+        .get(format!("http://{addr}/sessions/coexist-test"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["name"], "coexist-test");
+
+    // ── Step 9: Access the MCP-created session via HTTP endpoint ─
+    let resp = client
+        .get(format!("http://{addr}/sessions/mcp-created"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["name"], "mcp-created");
+
+    // ── Step 10: Clean up — delete both sessions via HTTP ────────
+    let resp = client
+        .delete(format!("http://{addr}/sessions/coexist-test"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 204, "HTTP delete of coexist-test should succeed");
+
+    let resp = client
+        .delete(format!("http://{addr}/sessions/mcp-created"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 204, "HTTP delete of mcp-created should succeed");
+
+    // ── Step 11: Verify both APIs see empty state ────────────────
+    let resp = client
+        .get(format!("http://{addr}/sessions"))
+        .send()
+        .await
+        .unwrap();
+    let sessions: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert!(
+        sessions.is_empty(),
+        "HTTP should see no sessions after cleanup"
+    );
+
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_list_sessions",
+        serde_json::json!({}),
+    )
+    .await;
+    let list: Vec<serde_json::Value> =
+        serde_json::from_str(extract_tool_text(&json)).unwrap();
+    assert!(
+        list.is_empty(),
+        "MCP should see no sessions after cleanup"
+    );
+}
+
+// ── Test 22: Manage session rename ───────────────────────────────
 
 #[tokio::test]
 async fn test_mcp_tool_manage_session_rename() {
