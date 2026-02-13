@@ -58,6 +58,18 @@ pub(crate) fn get_session(
 }
 
 pub fn router(state: AppState, token: Option<String>) -> Router {
+    use rmcp::transport::streamable_http_server::{
+        StreamableHttpService, StreamableHttpServerConfig,
+        session::local::LocalSessionManager,
+    };
+    use std::sync::Arc as StdArc;
+
+    let mcp_state = state.clone();
+    let mcp_service = StreamableHttpService::new(
+        move || Ok(crate::mcp::WshMcpServer::new(mcp_state.clone())),
+        StdArc::new(LocalSessionManager::default()),
+        StreamableHttpServerConfig::default(),
+    );
     let session_routes = Router::new()
         .route("/input", post(input))
         .route("/input/mode", get(input_mode_get))
@@ -137,6 +149,7 @@ pub fn router(state: AppState, token: Option<String>) -> Router {
         .route("/health", get(health))
         .route("/openapi.yaml", get(openapi_spec))
         .route("/docs", get(docs_index))
+        .nest_service("/mcp", mcp_service)
         .merge(protected)
 }
 
