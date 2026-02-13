@@ -7,23 +7,133 @@
 //!
 //! Protocol: rmcp's stdio transport uses newline-delimited JSON.
 //! Each message is a single JSON object on one line, terminated by `\n`.
+//!
+//! Test architecture: each test starts a `wsh server --ephemeral` daemon on a
+//! random port, then starts `wsh mcp --bind <addr> --socket <path>` pointing at
+//! that server.  Both processes share a unique Unix socket path so the MCP bridge
+//! connects to the pre-started server rather than spawning its own.
 
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Command, Stdio};
+use std::net::SocketAddr;
+use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
-/// Spawn `wsh mcp --bind 127.0.0.1:0` as a child process with piped stdin/stdout.
-fn spawn_mcp() -> std::process::Child {
-    Command::new(env!("CARGO_BIN_EXE_wsh"))
+// ---------------------------------------------------------------------------
+// Test harness
+// ---------------------------------------------------------------------------
+
+/// Holds the server + MCP bridge processes and cleans up on drop.
+struct McpTestHarness {
+    server: Child,
+    mcp: Child,
+    #[allow(dead_code)]
+    addr: SocketAddr,
+    socket_path: PathBuf,
+}
+
+impl Drop for McpTestHarness {
+    fn drop(&mut self) {
+        let _ = self.mcp.kill();
+        let _ = self.mcp.wait();
+        let _ = self.server.kill();
+        let _ = self.server.wait();
+        let _ = std::fs::remove_file(&self.socket_path);
+    }
+}
+
+/// Spin up a `wsh server --ephemeral` + `wsh mcp` pair with matching socket
+/// paths and bind address.  `test_name` is used to make the socket path unique
+/// so tests can run in parallel.
+fn setup_mcp_test(test_name: &str) -> McpTestHarness {
+    // 1. Pick a free port.
+    let listener =
+        std::net::TcpListener::bind("127.0.0.1:0").expect("failed to bind ephemeral port");
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+
+    // 2. Unique socket path.
+    let socket_path = std::env::temp_dir().join(format!(
+        "wsh-test-{}-{}.sock",
+        std::process::id(),
+        test_name,
+    ));
+    // Remove stale socket from a previous run.
+    let _ = std::fs::remove_file(&socket_path);
+
+    // 3. Start the server daemon.
+    let server = Command::new(env!("CARGO_BIN_EXE_wsh"))
+        .arg("server")
+        .arg("--ephemeral")
+        .arg("--bind")
+        .arg(addr.to_string())
+        .arg("--socket")
+        .arg(&socket_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn wsh server");
+
+    // 4. Wait for the server socket to appear and become connectable.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if std::time::Instant::now() > deadline {
+            panic!(
+                "timed out waiting for wsh server socket at {}",
+                socket_path.display()
+            );
+        }
+        if socket_path.exists() {
+            if std::os::unix::net::UnixStream::connect(&socket_path).is_ok() {
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    // 5. Also confirm HTTP is up (the MCP bridge needs /mcp).
+    let http_deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if std::time::Instant::now() > http_deadline {
+            panic!(
+                "timed out waiting for wsh server HTTP at {}",
+                addr
+            );
+        }
+        if std::net::TcpStream::connect(addr).is_ok() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    // 6. Start the MCP bridge pointing at the existing server.
+    let mcp = Command::new(env!("CARGO_BIN_EXE_wsh"))
         .arg("mcp")
         .arg("--bind")
-        .arg("127.0.0.1:0")
+        .arg(addr.to_string())
+        .arg("--socket")
+        .arg(&socket_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("failed to spawn wsh mcp")
+        .expect("failed to spawn wsh mcp");
+
+    // Give the bridge a moment to connect to the server.
+    std::thread::sleep(Duration::from_millis(300));
+
+    McpTestHarness {
+        server,
+        mcp,
+        addr,
+        socket_path,
+    }
 }
+
+// ---------------------------------------------------------------------------
+// JSON-RPC helpers (unchanged)
+// ---------------------------------------------------------------------------
 
 /// Send a JSON-RPC message over stdin using newline-delimited JSON framing.
 fn send_jsonrpc(stdin: &mut impl Write, msg: &serde_json::Value) {
@@ -91,9 +201,9 @@ fn send_initialized_notification(stdin: &mut impl Write) {
 
 #[test]
 fn test_mcp_stdio_initialize() {
-    let mut child = spawn_mcp();
-    let mut stdin = child.stdin.take().unwrap();
-    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    let mut harness = setup_mcp_test("initialize");
+    let mut stdin = harness.mcp.stdin.take().unwrap();
+    let mut reader = BufReader::new(harness.mcp.stdout.take().unwrap());
 
     // Use a thread with a timeout to avoid hanging
     let handle = std::thread::spawn(move || {
@@ -149,16 +259,14 @@ fn test_mcp_stdio_initialize() {
             break;
         }
         if start.elapsed() > timeout {
-            let _ = child.kill();
+            drop(harness);
             panic!("test timed out after {:?}", timeout);
         }
         std::thread::sleep(Duration::from_millis(100));
     }
 
     let result = handle.join();
-    let _ = child.kill();
-    let _ = child.wait();
-
+    drop(harness);
     result.expect("test thread panicked");
 }
 
@@ -166,9 +274,9 @@ fn test_mcp_stdio_initialize() {
 
 #[test]
 fn test_mcp_stdio_full_tool_exercise() {
-    let mut child = spawn_mcp();
-    let mut stdin = child.stdin.take().unwrap();
-    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    let mut harness = setup_mcp_test("full_tool");
+    let mut stdin = harness.mcp.stdin.take().unwrap();
+    let mut reader = BufReader::new(harness.mcp.stdout.take().unwrap());
 
     let handle = std::thread::spawn(move || {
         // 1. Initialize
@@ -314,16 +422,14 @@ fn test_mcp_stdio_full_tool_exercise() {
             break;
         }
         if start.elapsed() > timeout {
-            let _ = child.kill();
+            drop(harness);
             panic!("test timed out after {:?}", timeout);
         }
         std::thread::sleep(Duration::from_millis(100));
     }
 
     let result = handle.join();
-    let _ = child.kill();
-    let _ = child.wait();
-
+    drop(harness);
     result.expect("test thread panicked");
 }
 
@@ -331,9 +437,9 @@ fn test_mcp_stdio_full_tool_exercise() {
 
 #[test]
 fn test_mcp_stdio_clean_shutdown() {
-    let mut child = spawn_mcp();
-    let mut stdin = child.stdin.take().unwrap();
-    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    let mut harness = setup_mcp_test("clean_shutdown");
+    let mut stdin = harness.mcp.stdin.take().unwrap();
+    let mut reader = BufReader::new(harness.mcp.stdout.take().unwrap());
 
     // Complete the full initialization handshake, then close stdin
     let handle = std::thread::spawn(move || {
@@ -360,18 +466,18 @@ fn test_mcp_stdio_clean_shutdown() {
             break;
         }
         if start.elapsed() > timeout {
-            let _ = child.kill();
+            drop(harness);
             panic!("initialization timed out");
         }
         std::thread::sleep(Duration::from_millis(100));
     }
     handle.join().expect("test thread panicked");
 
-    // Wait for the child process to exit with a timeout
+    // Wait for the MCP bridge process to exit with a timeout
     let exit_timeout = Duration::from_secs(10);
     let exit_start = std::time::Instant::now();
     loop {
-        match child.try_wait() {
+        match harness.mcp.try_wait() {
             Ok(Some(status)) => {
                 assert!(
                     status.success(),
@@ -382,7 +488,7 @@ fn test_mcp_stdio_clean_shutdown() {
             }
             Ok(None) => {
                 if exit_start.elapsed() > exit_timeout {
-                    let _ = child.kill();
+                    drop(harness);
                     panic!(
                         "wsh mcp did not exit within {:?} after stdin was closed",
                         exit_timeout
