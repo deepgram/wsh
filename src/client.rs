@@ -327,7 +327,8 @@ impl Client {
             }
         });
 
-        let result = streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx).await;
+        let mut stdout = std::io::stdout();
+        let result = streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx, &mut stdout).await;
 
         // Close the cancel pipe write end — poll() in the reader wakes
         // instantly with POLLHUP and the reader exits. Then we join it
@@ -346,12 +347,14 @@ impl Client {
 ///
 /// Reads stdin data from `stdin_rx`, reads frames from the server via `reader`,
 /// writes frames to the server via `writer`, and handles resize signals from
-/// `sigwinch_rx`.
+/// `sigwinch_rx`. Terminal output (PTY data, overlays, panels) is written to
+/// `output`, which is `stdout` in production and a buffer in tests.
 async fn streaming_loop(
     mut reader: ReadHalf<UnixStream>,
     mut writer: WriteHalf<UnixStream>,
     stdin_rx: &mut tokio::sync::mpsc::Receiver<Bytes>,
     sigwinch_rx: &mut tokio::sync::mpsc::Receiver<(u16, u16)>,
+    output: &mut impl std::io::Write,
 ) -> io::Result<()> {
     // Ctrl+\ double-tap detection for detach.
     // Each Ctrl+\ is forwarded to the server immediately (the server toggles
@@ -408,48 +411,43 @@ async fn streaming_loop(
                 }
             }
 
-            // Frames from server → stdout
+            // Frames from server → output
             result = Frame::read_from(&mut reader) => {
                 match result {
                     Ok(frame) => {
                         match frame.frame_type {
                             FrameType::PtyOutput => {
-                                use std::io::Write;
-                                let mut stdout = std::io::stdout().lock();
                                 if !cached_overlays.is_empty() {
                                     // Erase overlays, write PTY output, re-render overlays
-                                    let _ = stdout.write_all(overlay::begin_sync().as_bytes());
-                                    let _ = stdout.write_all(overlay::erase_all_overlays(&cached_overlays).as_bytes());
-                                    let _ = stdout.write_all(&frame.payload);
-                                    let _ = stdout.write_all(overlay::render_all_overlays(&cached_overlays).as_bytes());
-                                    let _ = stdout.write_all(overlay::end_sync().as_bytes());
+                                    let _ = output.write_all(overlay::begin_sync().as_bytes());
+                                    let _ = output.write_all(overlay::erase_all_overlays(&cached_overlays).as_bytes());
+                                    let _ = output.write_all(&frame.payload);
+                                    let _ = output.write_all(overlay::render_all_overlays(&cached_overlays).as_bytes());
+                                    let _ = output.write_all(overlay::end_sync().as_bytes());
                                 } else {
-                                    let _ = stdout.write_all(&frame.payload);
+                                    let _ = output.write_all(&frame.payload);
                                 }
-                                let _ = stdout.flush();
+                                let _ = output.flush();
                             }
                             FrameType::OverlaySync => {
                                 if let Ok(msg) = frame.parse_json::<OverlaySyncMsg>() {
-                                    use std::io::Write;
-                                    let mut stdout = std::io::stdout().lock();
-                                    let _ = stdout.write_all(overlay::begin_sync().as_bytes());
-                                    let _ = stdout.write_all(overlay::save_cursor().as_bytes());
+                                    let _ = output.write_all(overlay::begin_sync().as_bytes());
+                                    let _ = output.write_all(overlay::save_cursor().as_bytes());
                                     // Erase old overlays
-                                    let _ = stdout.write_all(overlay::erase_all_overlays(&cached_overlays).as_bytes());
+                                    let _ = output.write_all(overlay::erase_all_overlays(&cached_overlays).as_bytes());
                                     // Render new overlays
-                                    let _ = stdout.write_all(overlay::render_all_overlays(&msg.overlays).as_bytes());
-                                    let _ = stdout.write_all(overlay::restore_cursor().as_bytes());
-                                    let _ = stdout.write_all(overlay::end_sync().as_bytes());
-                                    let _ = stdout.flush();
+                                    let _ = output.write_all(overlay::render_all_overlays(&msg.overlays).as_bytes());
+                                    let _ = output.write_all(overlay::restore_cursor().as_bytes());
+                                    let _ = output.write_all(overlay::end_sync().as_bytes());
+                                    let _ = output.flush();
                                     cached_overlays = msg.overlays;
                                 }
                             }
                             FrameType::PanelSync => {
                                 if let Ok(msg) = frame.parse_json::<PanelSyncMsg>() {
                                     let (term_rows, term_cols) = crate::terminal::terminal_size().unwrap_or((24, 80));
-                                    let mut stdout = std::io::stdout().lock();
                                     let _ = render_panel_sync(
-                                        &mut stdout,
+                                        output,
                                         &msg.panels,
                                         &cached_panels,
                                         term_rows,
@@ -495,18 +493,16 @@ async fn streaming_loop(
 
     // Clean up visual state before exiting
     {
-        use std::io::Write;
-        let mut stdout = std::io::stdout().lock();
         if !cached_overlays.is_empty() {
-            let _ = stdout.write_all(overlay::erase_all_overlays(&cached_overlays).as_bytes());
+            let _ = output.write_all(overlay::erase_all_overlays(&cached_overlays).as_bytes());
         }
         if !cached_panels.is_empty() {
             let (term_rows, term_cols) = crate::terminal::terminal_size().unwrap_or((24, 80));
             let layout = panel::compute_layout(&cached_panels, term_rows, term_cols);
-            let _ = stdout.write_all(panel::erase_all_panels(&layout, term_cols).as_bytes());
-            let _ = stdout.write_all(panel::reset_scroll_region().as_bytes());
+            let _ = output.write_all(panel::erase_all_panels(&layout, term_cols).as_bytes());
+            let _ = output.write_all(panel::reset_scroll_region().as_bytes());
         }
-        let _ = stdout.flush();
+        let _ = output.flush();
     }
 
     // Ensure the writer half is cleanly shut down
@@ -752,7 +748,7 @@ mod tests {
 
         // Spawn the streaming loop
         let loop_handle = tokio::spawn(async move {
-            streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx).await
+            streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx, &mut std::io::sink()).await
         });
 
         // Send data through stdin channel
@@ -797,7 +793,7 @@ mod tests {
 
         // Spawn the streaming loop
         let loop_handle = tokio::spawn(async move {
-            streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx).await
+            streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx, &mut std::io::sink()).await
         });
 
         // Send a PtyOutput frame from the "server"
@@ -823,7 +819,7 @@ mod tests {
         let (sigwinch_tx, mut sigwinch_rx) = tokio::sync::mpsc::channel::<(u16, u16)>(4);
 
         let loop_handle = tokio::spawn(async move {
-            streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx).await
+            streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx, &mut std::io::sink()).await
         });
 
         // Send a resize signal
@@ -892,7 +888,7 @@ mod tests {
         let (_sigwinch_tx, mut sigwinch_rx) = tokio::sync::mpsc::channel::<(u16, u16)>(4);
 
         let loop_handle = tokio::spawn(async move {
-            streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx).await
+            streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx, &mut std::io::sink()).await
         });
 
         // Send Ctrl+\ twice in quick succession
@@ -941,7 +937,7 @@ mod tests {
         let (_sigwinch_tx, mut sigwinch_rx) = tokio::sync::mpsc::channel::<(u16, u16)>(4);
 
         let loop_handle = tokio::spawn(async move {
-            streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx).await
+            streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx, &mut std::io::sink()).await
         });
 
         // Send a single Ctrl+\ — should be forwarded immediately (no delay)
@@ -980,7 +976,7 @@ mod tests {
         let (_sigwinch_tx, mut sigwinch_rx) = tokio::sync::mpsc::channel::<(u16, u16)>(4);
 
         let loop_handle = tokio::spawn(async move {
-            streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx).await
+            streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx, &mut std::io::sink()).await
         });
 
         // Send Ctrl+\ followed by 'a'
@@ -1028,7 +1024,7 @@ mod tests {
         let (_sigwinch_tx, mut sigwinch_rx) = tokio::sync::mpsc::channel::<(u16, u16)>(4);
 
         let loop_handle = tokio::spawn(async move {
-            streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx).await
+            streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx, &mut std::io::sink()).await
         });
 
         // Send Ctrl+\ then immediately close stdin
@@ -1148,6 +1144,71 @@ mod tests {
         assert!(
             output.contains("\x1b[s\x1b[2;23r\x1b[u"),
             "panels→panels must update scroll region with save/restore; got: {:?}",
+            output,
+        );
+    }
+
+    /// Integration test: send a PanelSync frame with empty panels through the
+    /// socket and verify the streaming loop does NOT emit DECSTBM (`\x1b[r`).
+    ///
+    /// This is the exact scenario that caused cursor corruption after alternate
+    /// screen exit: the server sends a PanelSync with empty panels (triggered by
+    /// screen_mode change), and the client must not emit `\x1b[r` since it moves
+    /// the cursor to (1,1).
+    #[tokio::test]
+    async fn test_streaming_loop_empty_panel_sync_no_decstbm() {
+        use std::sync::{Arc, Mutex};
+
+        /// A `Write` impl that appends to a shared buffer.
+        #[derive(Clone)]
+        struct SharedBuf(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for SharedBuf {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let (client_stream, mut server_stream) = TokioUnixStream::pair().unwrap();
+
+        let (reader, writer) = tokio::io::split(client_stream);
+        let (_stdin_tx, mut stdin_rx) = tokio::sync::mpsc::channel::<Bytes>(64);
+        let (_sigwinch_tx, mut sigwinch_rx) = tokio::sync::mpsc::channel::<(u16, u16)>(4);
+
+        let output_buf = SharedBuf(Arc::new(Mutex::new(Vec::new())));
+        let output_buf_clone = output_buf.clone();
+
+        let loop_handle = tokio::spawn(async move {
+            let mut out = output_buf_clone;
+            streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx, &mut out).await
+        });
+
+        // Send a PanelSync frame with empty panels (simulates server visual
+        // update after alternate screen exit with no active panels)
+        let panel_sync_msg = PanelSyncMsg {
+            panels: vec![],
+            scroll_region_top: 1,
+            scroll_region_bottom: 24,
+        };
+        let frame = Frame::control(FrameType::PanelSync, &panel_sync_msg).unwrap();
+        frame.write_to(&mut server_stream).await.unwrap();
+
+        // Give the loop time to process the frame
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Close the server connection to end the loop
+        drop(server_stream);
+        let _ = loop_handle.await;
+
+        let bytes = output_buf.0.lock().unwrap();
+        let output = String::from_utf8_lossy(&bytes);
+
+        assert!(
+            !output.contains("\x1b[r"),
+            "empty PanelSync must not emit DECSTBM (\\x1b[r); got: {:?}",
             output,
         );
     }
