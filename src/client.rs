@@ -191,41 +191,49 @@ impl Client {
         // Channel for stdin data from the blocking reader
         let (stdin_tx, mut stdin_rx) = tokio::sync::mpsc::channel::<Bytes>(64);
 
-        // Cancellation flag for the stdin reader. Without this, the
-        // blocking reader outlives the streaming loop and can consume
-        // keystrokes typed between terminal restoration and process exit.
-        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let cancel_reader = cancel.clone();
+        // Self-pipe for stdin reader cancellation. poll() blocks on both
+        // stdin and the read end of this pipe. To cancel, we drop the write
+        // end — poll() wakes instantly with POLLHUP. No timeout needed.
+        let (cancel_rd, cancel_wr) = {
+            let mut fds = [0i32; 2];
+            if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            unsafe {
+                use std::os::unix::io::FromRawFd;
+                (
+                    std::os::unix::io::OwnedFd::from_raw_fd(fds[0]),
+                    std::os::unix::io::OwnedFd::from_raw_fd(fds[1]),
+                )
+            }
+        };
+        let cancel_rd_raw = std::os::unix::io::AsRawFd::as_raw_fd(&cancel_rd);
 
         // Spawn stdin reader in a blocking thread.
-        // Uses poll() with a timeout so we can check the cancellation
-        // flag periodically rather than blocking indefinitely on read().
         let stdin_handle = tokio::task::spawn_blocking(move || {
             use std::io::Read;
             use std::os::unix::io::AsRawFd;
-            use std::sync::atomic::Ordering;
 
+            let _cancel_rd = cancel_rd; // keep alive; closed on exit
             let stdin = std::io::stdin();
             let stdin_fd = stdin.as_raw_fd();
             let mut buf = [0u8; 4096];
             loop {
-                if cancel_reader.load(Ordering::Relaxed) {
+                let mut pfds = [
+                    libc::pollfd { fd: stdin_fd, events: libc::POLLIN, revents: 0 },
+                    libc::pollfd { fd: cancel_rd_raw, events: libc::POLLIN, revents: 0 },
+                ];
+                let ret = unsafe { libc::poll(pfds.as_mut_ptr(), 2, -1) };
+                if ret < 0 {
                     break;
                 }
-
-                // Poll stdin with a 100ms timeout so we can recheck cancel
-                let ready = unsafe {
-                    let mut pfd = libc::pollfd {
-                        fd: stdin_fd,
-                        events: libc::POLLIN,
-                        revents: 0,
-                    };
-                    libc::poll(&mut pfd, 1, 100)
-                };
-                if ready <= 0 {
+                // Cancel pipe closed → exit
+                if pfds[1].revents != 0 {
+                    break;
+                }
+                if pfds[0].revents & libc::POLLIN == 0 {
                     continue;
                 }
-
                 match stdin.lock().read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
@@ -259,10 +267,11 @@ impl Client {
 
         let result = streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx).await;
 
-        // Signal the stdin reader to stop and wait for it to exit.
-        // This prevents the orphaned reader from consuming keystrokes
-        // typed between terminal restoration and process exit.
-        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        // Close the cancel pipe write end — poll() in the reader wakes
+        // instantly with POLLHUP and the reader exits. Then we join it
+        // to ensure it's fully stopped before the caller restores the
+        // terminal.
+        drop(cancel_wr);
         drop(stdin_rx);
         let _ = stdin_handle.await;
 
