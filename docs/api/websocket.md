@@ -863,7 +863,7 @@ List all active sessions.
 **Result:**
 
 ```json
-{"id": 1, "method": "list_sessions", "result": [{"name": "dev"}, {"name": "build"}]}
+{"id": 1, "method": "list_sessions", "result": [{"name": "dev", "pid": 12345, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 1}, {"name": "build", "pid": 12346, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 0}]}
 ```
 
 #### `create_session`
@@ -888,7 +888,7 @@ Create a new session.
 **Result:**
 
 ```json
-{"id": 2, "method": "create_session", "result": {"name": "dev"}}
+{"id": 2, "method": "create_session", "result": {"name": "dev", "pid": 12345, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 0}}
 ```
 
 #### `kill_session`

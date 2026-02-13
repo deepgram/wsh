@@ -100,7 +100,7 @@ curl http://localhost:8080/health
 
 # List sessions
 curl http://localhost:8080/sessions
-# [{"name":"default"}]
+# [{"name":"default","pid":12345,"command":"/bin/bash","rows":24,"cols":80,"clients":1}]
 
 # Get current screen contents
 curl http://localhost:8080/sessions/default/screen
@@ -125,11 +125,11 @@ wsh server
 curl -X POST http://localhost:8080/sessions \
   -H 'Content-Type: application/json' \
   -d '{"name": "dev"}'
-# {"name":"dev"}
+# {"name":"dev","pid":12345,"command":"/bin/bash","rows":24,"cols":80,"clients":0}
 
 # List sessions
 curl http://localhost:8080/sessions
-# [{"name":"dev"}]
+# [{"name":"dev","pid":12345,"command":"/bin/bash","rows":24,"cols":80,"clients":0}]
 
 # Get the session's screen
 curl http://localhost:8080/sessions/dev/screen
@@ -481,6 +481,7 @@ wsh provides several subcommands for interacting with a running server:
 | `wsh list` | List active sessions |
 | `wsh kill <name>` | Destroy a session |
 | `wsh detach <name>` | Detach all clients from a session |
+| `wsh mcp` | MCP stdio bridge (connects to server) |
 | `wsh persist [on\|off]` | Query or set server persistence mode |
 
 #### `wsh server`
@@ -523,7 +524,8 @@ date.
 wsh list [--socket <path>]
 ```
 
-Lists active sessions on the server via the Unix socket.
+Lists active sessions on the server via the Unix socket. Output is a table
+showing NAME, PID, COMMAND, SIZE (rows x cols), and CLIENTS for each session.
 
 #### `wsh kill`
 
@@ -566,7 +568,10 @@ Returns an array of all active sessions.
 **Response:** `200 OK`
 
 ```json
-[{"name": "dev"}, {"name": "build"}]
+[
+  {"name": "dev", "pid": 12345, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 1},
+  {"name": "build", "pid": 12346, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 0}
+]
 ```
 
 **Example:**
@@ -607,7 +612,7 @@ Content-Type: application/json
 **Response:** `201 Created`
 
 ```json
-{"name": "dev"}
+{"name": "dev", "pid": 12345, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 0}
 ```
 
 **Errors:**
@@ -634,7 +639,7 @@ GET /sessions/:name
 **Response:** `200 OK`
 
 ```json
-{"name": "dev"}
+{"name": "dev", "pid": 12345, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 1}
 ```
 
 **Errors:**
@@ -665,7 +670,7 @@ Content-Type: application/json
 **Response:** `200 OK`
 
 ```json
-{"name": "new-name"}
+{"name": "new-name", "pid": 12345, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 1}
 ```
 
 **Errors:**

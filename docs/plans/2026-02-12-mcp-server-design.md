@@ -42,10 +42,10 @@ Two entry points, same internals:
   on the same port at `/mcp`. Uses SSE for server-to-client streaming. Shares
   the same `AppState`.
 - **stdio bridge** (`wsh mcp`) — a thin subprocess that speaks MCP over
-  stdin/stdout. Connects to a running `wsh server` (auto-spawning an ephemeral
-  one if needed, reusing existing spawn logic from standalone `wsh`). Translates
-  MCP JSON-RPC to internal calls over the Unix socket or localhost HTTP. Exits
-  when the MCP host closes stdin.
+  stdin/stdout. Connects to a running `wsh server` via its `/mcp` Streamable
+  HTTP endpoint (auto-spawning an ephemeral server if needed, reusing existing
+  spawn logic from standalone `wsh`). Bridges stdin/stdout JSON-RPC to the
+  server's HTTP transport. Exits when the MCP host closes stdin.
 
 MCP is inherently multiplexed — one connection, session specified per-request.
 This matches the server-level `/ws/json` pattern where each request includes a
@@ -89,7 +89,7 @@ Params:
   cwd?: string           — working directory
   env?: object           — additional environment variables
 
-Returns: { session, pid, rows, cols }
+Returns: { name, pid, rows, cols }
 ```
 
 **`wsh_list_sessions`** — List all active sessions, or get details for a
@@ -99,7 +99,7 @@ specific one.
 Params:
   session?: string       — if provided, return details for this session only
 
-Returns: [{ name, pid, command, rows, cols, running }] or single object
+Returns: [{ name, pid, command, rows, cols, clients }] or single object
 ```
 
 **`wsh_manage_session`** — Perform a lifecycle action on an existing session:
@@ -111,7 +111,7 @@ Params:
   action: "kill" | "rename" | "detach"
   new_name?: string      — required when action is "rename"
 
-Returns: { success: true }
+Returns: { status: "killed" | "renamed" | "detached", ... }
 ```
 
 ### Terminal I/O (5 tools)
@@ -125,7 +125,7 @@ Params:
   input: string          — the text or keystrokes to send
   encoding?: "utf8" | "base64"  — default: "utf8"
 
-Returns: { success: true }
+Returns: { status: "sent", bytes: N }
 ```
 
 **`wsh_get_screen`** — Read the current screen contents of a session.
@@ -159,7 +159,7 @@ Params:
   timeout_ms?: number    — silence threshold, default: 2000
   max_wait_ms?: number   — overall deadline, default: 30000
 
-Returns: { generation }
+Returns: { status: "quiescent", generation }
 ```
 
 **`wsh_run_command`** — High-level: send input, wait for the terminal to go
@@ -195,6 +195,7 @@ Params:
   background?: string    — background color
   spans?: array          — styled text spans
   list?: boolean         — if true, return all overlays (ignores other params)
+  focusable?: boolean    — whether the overlay can receive input focus
 
 Returns: { id, ... } or [{ id, ... }] when list=true
 ```
@@ -207,7 +208,7 @@ Params:
   session: string
   id?: string            — omit to clear all
 
-Returns: { success: true }
+Returns: { status: "removed" | "cleared" }
 ```
 
 **`wsh_panel`** — Create a new anchored panel, update an existing one by ID,
@@ -224,6 +225,7 @@ Params:
   background?: string
   spans?: array
   list?: boolean         — if true, return all panels
+  focusable?: boolean    — whether the panel can receive input focus
 
 Returns: { id, ... } or [{ id, ... }] when list=true
 ```
@@ -235,7 +237,7 @@ Params:
   session: string
   id?: string            — omit to clear all
 
-Returns: { success: true }
+Returns: { status: "removed" | "cleared" }
 ```
 
 ### Input & Screen Control (2 tools)
@@ -274,7 +276,7 @@ access pattern.
 
 | URI | Description | Returns |
 |-----|-------------|---------|
-| `wsh://sessions` | List of all active sessions | `[{ name, pid, command, rows, cols, running }]` |
+| `wsh://sessions` | List of all active sessions | `[{ name, pid, command, rows, cols, clients }]` |
 | `wsh://sessions/{name}/screen` | Current screen contents | `{ lines, cursor, rows, cols, mode }` |
 | `wsh://sessions/{name}/scrollback` | Scrollback buffer (last 100 lines) | `{ lines, total }` |
 
