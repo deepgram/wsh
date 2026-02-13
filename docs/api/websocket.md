@@ -970,19 +970,13 @@ The server-level WebSocket automatically broadcasts session lifecycle events:
 {"event": "session_created", "params": {"name": "dev"}}
 ```
 
-**Session exited** (PTY process terminated):
-
-```json
-{"event": "session_exited", "params": {"name": "dev"}}
-```
-
 **Session renamed:**
 
 ```json
 {"event": "session_renamed", "params": {"old_name": "dev", "new_name": "prod"}}
 ```
 
-**Session destroyed** (killed via API):
+**Session destroyed** (killed via API, or PTY process exited):
 
 ```json
 {"event": "session_destroyed", "params": {"name": "dev"}}
