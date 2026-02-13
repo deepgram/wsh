@@ -3,12 +3,10 @@
 wsh exposes terminal I/O via HTTP and WebSocket. This document covers every
 endpoint, request format, and response shape you need to build against the API.
 
-wsh operates in two modes:
-
-- **Standalone mode** (default): A single session with local terminal I/O and
-  an HTTP/WS API server. Run `wsh` with no subcommand.
-- **Server mode**: A headless daemon managing multiple sessions via HTTP/WS and
-  a Unix domain socket. Run `wsh server`.
+`wsh` always operates in a client/server architecture. Running `wsh` with no
+subcommand auto-spawns an ephemeral server daemon if one isn't already running,
+creates a session, and attaches to it as a thin terminal client. Running
+`wsh server` starts the daemon explicitly (persistent by default).
 
 **Base URL:** `http://localhost:8080` (default)
 
@@ -16,9 +14,7 @@ wsh operates in two modes:
 
 ### Session Endpoints (nested under `/sessions/:name`)
 
-In server mode, per-session endpoints are nested under `/sessions/:name`. In
-standalone mode, the single session is accessible at the top level for backward
-compatibility.
+Per-session endpoints are nested under `/sessions/:name`.
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -465,10 +461,9 @@ curl 'http://localhost:8080/quiesce?timeout_ms=500&last_session=build&last_gener
 
 ## Server Mode
 
-Server mode (`wsh server`) runs a headless daemon that manages multiple terminal
-sessions. Sessions are created on demand via the HTTP API or Unix socket
-protocol. Unlike standalone mode, no PTY is spawned automatically and no local
-terminal I/O is performed.
+`wsh server` runs a headless daemon that manages multiple terminal sessions.
+Sessions are created on demand via the HTTP API or Unix socket protocol. No PTY
+is spawned automatically and no local terminal I/O is performed.
 
 ### CLI Subcommands
 

@@ -123,12 +123,9 @@ This loop is simple but powerful. It works for any program, any interface, any s
 
 **Multiple Sessions, Parallel Work**
 
-`wsh` operates in two modes:
+`wsh` always uses a client/server architecture. Running `wsh` with no subcommand auto-spawns an ephemeral server if needed, creates a session, and attaches -- giving you immediate, transparent access. Running `wsh server` starts the daemon explicitly for persistent, multi-session operation.
 
-- **Standalone mode**: One `wsh` process, one session, attached to your terminal. Simple. Immediate.
-- **Server mode**: A headless daemon managing multiple named sessions. Agents can create sessions on demand, run work in parallel, and tear them down when done.
-
-Server mode is where the co-processor vision comes alive. An agent can spin up a dozen sessions, run different tasks in each, monitor progress across all of them, and report results -- while the human continues working in their own terminal undisturbed.
+An agent can spin up a dozen sessions, run different tasks in each, monitor progress across all of them, and report results -- while the human continues working in their own terminal undisturbed.
 
 ---
 

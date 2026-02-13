@@ -37,11 +37,10 @@ tags:
     description: Documentation and spec endpoints
 
 paths:
-  # Note: In server mode, all per-session endpoints (input, screen, scrollback,
-  # ws/raw, ws/json, overlay, panel, quiesce, input/mode, input/capture,
-  # input/release) are also available under /sessions/{name}/ prefix.
+  # Note: All per-session endpoints (input, screen, scrollback, ws/raw,
+  # ws/json, overlay, panel, quiesce, input/mode, input/capture,
+  # input/release) are available under /sessions/{name}/ prefix.
   # For example: /sessions/dev/input, /sessions/dev/screen, etc.
-  # The top-level paths below act on the "default" session in standalone mode.
 
   /health:
     get:

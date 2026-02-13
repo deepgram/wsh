@@ -19,8 +19,8 @@ use crate::terminal::TerminalSize;
 /// A single terminal session with all associated state.
 ///
 /// Each `Session` owns the PTY, parser, I/O channels, and auxiliary stores
-/// for one terminal session. In standalone mode there is exactly one session;
-/// in server mode the `SessionRegistry` manages many.
+/// for one terminal session. The `SessionRegistry` manages all sessions
+/// on the server.
 #[derive(Clone)]
 pub struct Session {
     /// Human-readable session name (displayed in UI, used in URLs).
