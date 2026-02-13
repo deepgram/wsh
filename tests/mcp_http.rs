@@ -712,3 +712,856 @@ async fn test_mcp_get_prompt_unknown_name() {
         "Error message should mention 'unknown prompt'"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────
+// MCP Tool Call Integration Test Helpers
+// ─────────────────────────────────────────────────────────────────
+
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Global counter to generate unique request IDs across tests.
+static REQUEST_ID_COUNTER: AtomicU64 = AtomicU64::new(100);
+
+fn next_request_id() -> u64 {
+    REQUEST_ID_COUNTER.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Set up an MCP session ready for tool calls (initialize + notifications/initialized).
+async fn setup_mcp_session(client: &reqwest::Client, addr: SocketAddr) -> String {
+    let (_, session_id) = send_initialize_and_get_session(client, addr).await;
+
+    // Send initialized notification
+    let _ = client
+        .post(format!("http://{addr}/mcp"))
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .header("Mcp-Session-Id", &session_id)
+        .body(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
+        .send()
+        .await
+        .unwrap();
+
+    session_id
+}
+
+/// Helper to call an MCP tool and extract the result.
+async fn call_tool(
+    client: &reqwest::Client,
+    addr: SocketAddr,
+    session_id: &str,
+    tool_name: &str,
+    arguments: serde_json::Value,
+) -> serde_json::Value {
+    let request_id = next_request_id();
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": "tools/call",
+        "params": {
+            "name": tool_name,
+            "arguments": arguments,
+        }
+    });
+
+    let response_body = send_mcp_request_with_session(
+        client,
+        addr,
+        &serde_json::to_string(&body).unwrap(),
+        session_id,
+    )
+    .await;
+
+    extract_jsonrpc_from_sse(&response_body)
+}
+
+/// Extract the text content from a tool call result.
+fn extract_tool_text(json: &serde_json::Value) -> &str {
+    json["result"]["content"][0]["text"]
+        .as_str()
+        .expect("Expected text content in tool result")
+}
+
+/// Parse the text content from a tool call result as JSON.
+fn parse_tool_result(json: &serde_json::Value) -> serde_json::Value {
+    let text = extract_tool_text(json);
+    serde_json::from_str(text).expect("Expected valid JSON in tool result text")
+}
+
+/// Helper to kill a session during cleanup (best-effort).
+async fn cleanup_session(
+    client: &reqwest::Client,
+    addr: SocketAddr,
+    session_id: &str,
+    session_name: &str,
+) {
+    let _ = call_tool(
+        client,
+        addr,
+        session_id,
+        "wsh_manage_session",
+        serde_json::json!({
+            "session": session_name,
+            "action": "kill",
+        }),
+    )
+    .await;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// MCP Tool Call Integration Tests
+// ─────────────────────────────────────────────────────────────────
+
+// ── Test 12: Session lifecycle (create + list + manage/kill) ──────
+
+#[tokio::test]
+async fn test_mcp_tool_session_lifecycle() {
+    let app = create_test_app();
+    let addr = start_test_server(app).await;
+    let client = reqwest::Client::new();
+    let mcp_session = setup_mcp_session(&client, addr).await;
+
+    let sess_name = "mcp-lifecycle-test";
+
+    // 1. Create a session
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_create_session",
+        serde_json::json!({"name": sess_name}),
+    )
+    .await;
+    assert_eq!(json["result"]["isError"], false);
+    let result = parse_tool_result(&json);
+    assert_eq!(result["name"], sess_name);
+    assert!(result["rows"].is_number());
+    assert!(result["cols"].is_number());
+
+    // 2. List all sessions — should include our session
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_list_sessions",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(json["result"]["isError"], false);
+    let list: Vec<serde_json::Value> =
+        serde_json::from_str(extract_tool_text(&json)).unwrap();
+    assert!(
+        list.iter().any(|s| s["name"] == sess_name),
+        "Session list should contain {}",
+        sess_name
+    );
+
+    // 3. Get detail for specific session
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_list_sessions",
+        serde_json::json!({"session": sess_name}),
+    )
+    .await;
+    assert_eq!(json["result"]["isError"], false);
+    let detail = parse_tool_result(&json);
+    assert_eq!(detail["name"], sess_name);
+    assert!(detail["rows"].is_number());
+    assert!(detail["cols"].is_number());
+
+    // 4. Kill the session
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_manage_session",
+        serde_json::json!({
+            "session": sess_name,
+            "action": "kill",
+        }),
+    )
+    .await;
+    assert_eq!(json["result"]["isError"], false);
+    let result = parse_tool_result(&json);
+    assert_eq!(result["status"], "killed");
+
+    // 5. List sessions — should be empty
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_list_sessions",
+        serde_json::json!({}),
+    )
+    .await;
+    let list: Vec<serde_json::Value> =
+        serde_json::from_str(extract_tool_text(&json)).unwrap();
+    assert!(
+        list.is_empty(),
+        "Session list should be empty after kill"
+    );
+}
+
+// ── Test 13: Duplicate session name → error ──────────────────────
+
+#[tokio::test]
+async fn test_mcp_tool_create_duplicate_session() {
+    let app = create_test_app();
+    let addr = start_test_server(app).await;
+    let client = reqwest::Client::new();
+    let mcp_session = setup_mcp_session(&client, addr).await;
+
+    let sess_name = "mcp-dup-test";
+
+    // Create first session
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_create_session",
+        serde_json::json!({"name": sess_name}),
+    )
+    .await;
+    assert_eq!(json["result"]["isError"], false);
+
+    // Create second session with same name — should fail
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_create_session",
+        serde_json::json!({"name": sess_name}),
+    )
+    .await;
+
+    // Should be a protocol-level error (invalid_params) since RegistryError::NameExists
+    assert!(
+        json["error"].is_object(),
+        "Expected JSON-RPC error for duplicate session name, got: {}",
+        json
+    );
+    let err_msg = json["error"]["message"].as_str().unwrap_or("");
+    assert!(
+        err_msg.contains("already exists"),
+        "Error message should mention 'already exists', got: {}",
+        err_msg
+    );
+
+    // Cleanup
+    cleanup_session(&client, addr, &mcp_session, sess_name).await;
+}
+
+// ── Test 14: wsh_run_command (core agent loop) ───────────────────
+
+#[tokio::test]
+async fn test_mcp_tool_run_command() {
+    let app = create_test_app();
+    let addr = start_test_server(app).await;
+    let client = reqwest::Client::new();
+    let mcp_session = setup_mcp_session(&client, addr).await;
+
+    let sess_name = "mcp-runcmd-test";
+
+    // Create session
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_create_session",
+        serde_json::json!({"name": sess_name}),
+    )
+    .await;
+    assert_eq!(json["result"]["isError"], false);
+
+    // Give the shell a moment to start
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Run a command
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_run_command",
+        serde_json::json!({
+            "session": sess_name,
+            "input": "echo hello_wsh_test\n",
+            "timeout_ms": 2000,
+            "max_wait_ms": 15000,
+            "format": "plain",
+        }),
+    )
+    .await;
+
+    // The response should have result.content (success or error)
+    let text = extract_tool_text(&json);
+    let result: serde_json::Value = serde_json::from_str(text).unwrap();
+
+    // Should have a screen field regardless of quiescence outcome
+    assert!(
+        result.get("screen").is_some(),
+        "run_command response should contain 'screen' field, got: {}",
+        result
+    );
+
+    // Cleanup
+    cleanup_session(&client, addr, &mcp_session, sess_name).await;
+}
+
+// ── Test 15: wsh_send_input + wsh_get_screen ─────────────────────
+
+#[tokio::test]
+async fn test_mcp_tool_send_input_and_get_screen() {
+    let app = create_test_app();
+    let addr = start_test_server(app).await;
+    let client = reqwest::Client::new();
+    let mcp_session = setup_mcp_session(&client, addr).await;
+
+    let sess_name = "mcp-input-screen-test";
+
+    // Create session
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_create_session",
+        serde_json::json!({"name": sess_name}),
+    )
+    .await;
+    assert_eq!(json["result"]["isError"], false);
+
+    // Send input
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_send_input",
+        serde_json::json!({
+            "session": sess_name,
+            "input": "echo test_marker_123\n",
+        }),
+    )
+    .await;
+    assert_eq!(json["result"]["isError"], false);
+    let result = parse_tool_result(&json);
+    assert_eq!(result["status"], "sent");
+    assert!(result["bytes"].is_number());
+    assert!(
+        result["bytes"].as_u64().unwrap() > 0,
+        "Should have sent at least 1 byte"
+    );
+
+    // Wait a bit for output to appear
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Get screen
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_get_screen",
+        serde_json::json!({
+            "session": sess_name,
+            "format": "plain",
+        }),
+    )
+    .await;
+    assert_eq!(json["result"]["isError"], false);
+    let text = extract_tool_text(&json);
+    // The response should be valid JSON (screen data)
+    let screen: serde_json::Value = serde_json::from_str(text)
+        .expect("Screen response should be valid JSON");
+    // Screen should have some structural data (rows, cols, cursor, etc.)
+    assert!(
+        screen.is_object(),
+        "Screen response should be a JSON object"
+    );
+
+    // Cleanup
+    cleanup_session(&client, addr, &mcp_session, sess_name).await;
+}
+
+// ── Test 16: Overlay lifecycle (list → create → list → remove → list) ──
+
+#[tokio::test]
+async fn test_mcp_tool_overlay_lifecycle() {
+    let app = create_test_app();
+    let addr = start_test_server(app).await;
+    let client = reqwest::Client::new();
+    let mcp_session = setup_mcp_session(&client, addr).await;
+
+    let sess_name = "mcp-overlay-test";
+
+    // Create session
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_create_session",
+        serde_json::json!({"name": sess_name}),
+    )
+    .await;
+    assert_eq!(json["result"]["isError"], false);
+
+    // 1. List overlays — should be empty
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_overlay",
+        serde_json::json!({
+            "session": sess_name,
+            "list": true,
+        }),
+    )
+    .await;
+    assert_eq!(json["result"]["isError"], false);
+    let result = parse_tool_result(&json);
+    let overlays = result["overlays"]
+        .as_array()
+        .expect("overlays should be an array");
+    assert!(overlays.is_empty(), "Initially no overlays");
+
+    // 2. Create an overlay
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_overlay",
+        serde_json::json!({
+            "session": sess_name,
+            "x": 0,
+            "y": 0,
+            "width": 20,
+            "height": 3,
+            "spans": [{"text": "hello overlay"}],
+        }),
+    )
+    .await;
+    assert_eq!(json["result"]["isError"], false);
+    let result = parse_tool_result(&json);
+    assert_eq!(result["status"], "created");
+    let overlay_id = result["id"]
+        .as_str()
+        .expect("overlay create should return id");
+
+    // 3. List overlays — should have 1
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_overlay",
+        serde_json::json!({
+            "session": sess_name,
+            "list": true,
+        }),
+    )
+    .await;
+    let result = parse_tool_result(&json);
+    let overlays = result["overlays"].as_array().unwrap();
+    assert_eq!(overlays.len(), 1, "Should have 1 overlay after create");
+
+    // 4. Remove the overlay by ID
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_remove_overlay",
+        serde_json::json!({
+            "session": sess_name,
+            "id": overlay_id,
+        }),
+    )
+    .await;
+    assert_eq!(json["result"]["isError"], false);
+    let result = parse_tool_result(&json);
+    assert_eq!(result["status"], "removed");
+
+    // 5. List overlays — should be empty again
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_overlay",
+        serde_json::json!({
+            "session": sess_name,
+            "list": true,
+        }),
+    )
+    .await;
+    let result = parse_tool_result(&json);
+    let overlays = result["overlays"].as_array().unwrap();
+    assert!(overlays.is_empty(), "Overlays should be empty after remove");
+
+    // Cleanup
+    cleanup_session(&client, addr, &mcp_session, sess_name).await;
+}
+
+// ── Test 17: Panel lifecycle (list → create → list → remove → list) ──
+
+#[tokio::test]
+async fn test_mcp_tool_panel_lifecycle() {
+    let app = create_test_app();
+    let addr = start_test_server(app).await;
+    let client = reqwest::Client::new();
+    let mcp_session = setup_mcp_session(&client, addr).await;
+
+    let sess_name = "mcp-panel-test";
+
+    // Create session
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_create_session",
+        serde_json::json!({"name": sess_name}),
+    )
+    .await;
+    assert_eq!(json["result"]["isError"], false);
+
+    // 1. List panels — should be empty
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_panel",
+        serde_json::json!({
+            "session": sess_name,
+            "list": true,
+        }),
+    )
+    .await;
+    assert_eq!(json["result"]["isError"], false);
+    let result = parse_tool_result(&json);
+    let panels = result["panels"]
+        .as_array()
+        .expect("panels should be an array");
+    assert!(panels.is_empty(), "Initially no panels");
+
+    // 2. Create a panel
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_panel",
+        serde_json::json!({
+            "session": sess_name,
+            "position": "bottom",
+            "height": 2,
+            "spans": [{"text": "status panel"}],
+        }),
+    )
+    .await;
+    assert_eq!(json["result"]["isError"], false);
+    let result = parse_tool_result(&json);
+    assert_eq!(result["status"], "created");
+    assert!(
+        result["id"].is_string(),
+        "panel create should return an id"
+    );
+
+    // 3. List panels — should have 1
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_panel",
+        serde_json::json!({
+            "session": sess_name,
+            "list": true,
+        }),
+    )
+    .await;
+    let result = parse_tool_result(&json);
+    let panels = result["panels"].as_array().unwrap();
+    assert_eq!(panels.len(), 1, "Should have 1 panel after create");
+
+    // 4. Remove all panels (no id = clear all)
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_remove_panel",
+        serde_json::json!({
+            "session": sess_name,
+        }),
+    )
+    .await;
+    assert_eq!(json["result"]["isError"], false);
+    let result = parse_tool_result(&json);
+    assert_eq!(result["status"], "cleared");
+
+    // 5. List panels — should be empty again
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_panel",
+        serde_json::json!({
+            "session": sess_name,
+            "list": true,
+        }),
+    )
+    .await;
+    let result = parse_tool_result(&json);
+    let panels = result["panels"].as_array().unwrap();
+    assert!(panels.is_empty(), "Panels should be empty after clear");
+
+    // Cleanup
+    cleanup_session(&client, addr, &mcp_session, sess_name).await;
+}
+
+// ── Test 18: Input mode (query → capture → release) ─────────────
+
+#[tokio::test]
+async fn test_mcp_tool_input_mode() {
+    let app = create_test_app();
+    let addr = start_test_server(app).await;
+    let client = reqwest::Client::new();
+    let mcp_session = setup_mcp_session(&client, addr).await;
+
+    let sess_name = "mcp-inputmode-test";
+
+    // Create session
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_create_session",
+        serde_json::json!({"name": sess_name}),
+    )
+    .await;
+    assert_eq!(json["result"]["isError"], false);
+
+    // 1. Query current mode — should be passthrough
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_input_mode",
+        serde_json::json!({"session": sess_name}),
+    )
+    .await;
+    assert_eq!(json["result"]["isError"], false);
+    let result = parse_tool_result(&json);
+    assert_eq!(result["mode"], "passthrough");
+    assert!(
+        result["focused_element"].is_null(),
+        "focused_element should be null initially"
+    );
+
+    // 2. Switch to capture mode
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_input_mode",
+        serde_json::json!({
+            "session": sess_name,
+            "mode": "capture",
+        }),
+    )
+    .await;
+    assert_eq!(json["result"]["isError"], false);
+    let result = parse_tool_result(&json);
+    assert_eq!(result["mode"], "capture");
+
+    // 3. Release back to passthrough
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_input_mode",
+        serde_json::json!({
+            "session": sess_name,
+            "mode": "release",
+        }),
+    )
+    .await;
+    assert_eq!(json["result"]["isError"], false);
+    let result = parse_tool_result(&json);
+    assert_eq!(result["mode"], "passthrough");
+
+    // Cleanup
+    cleanup_session(&client, addr, &mcp_session, sess_name).await;
+}
+
+// ── Test 19: Screen mode (query → enter_alt → exit_alt) ─────────
+
+#[tokio::test]
+async fn test_mcp_tool_screen_mode() {
+    let app = create_test_app();
+    let addr = start_test_server(app).await;
+    let client = reqwest::Client::new();
+    let mcp_session = setup_mcp_session(&client, addr).await;
+
+    let sess_name = "mcp-screenmode-test";
+
+    // Create session
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_create_session",
+        serde_json::json!({"name": sess_name}),
+    )
+    .await;
+    assert_eq!(json["result"]["isError"], false);
+
+    // 1. Query current mode — should be normal
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_screen_mode",
+        serde_json::json!({"session": sess_name}),
+    )
+    .await;
+    assert_eq!(json["result"]["isError"], false);
+    let result = parse_tool_result(&json);
+    assert_eq!(result["mode"], "normal");
+
+    // 2. Enter alternate screen mode
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_screen_mode",
+        serde_json::json!({
+            "session": sess_name,
+            "action": "enter_alt",
+        }),
+    )
+    .await;
+    assert_eq!(json["result"]["isError"], false);
+    let result = parse_tool_result(&json);
+    assert_eq!(result["mode"], "alt");
+
+    // 3. Exit alternate screen mode
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_screen_mode",
+        serde_json::json!({
+            "session": sess_name,
+            "action": "exit_alt",
+        }),
+    )
+    .await;
+    assert_eq!(json["result"]["isError"], false);
+    let result = parse_tool_result(&json);
+    assert_eq!(result["mode"], "normal");
+
+    // Cleanup
+    cleanup_session(&client, addr, &mcp_session, sess_name).await;
+}
+
+// ── Test 20: Tool call for nonexistent session → error ───────────
+
+#[tokio::test]
+async fn test_mcp_tool_nonexistent_session_error() {
+    let app = create_test_app();
+    let addr = start_test_server(app).await;
+    let client = reqwest::Client::new();
+    let mcp_session = setup_mcp_session(&client, addr).await;
+
+    // Call get_screen for a nonexistent session
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_get_screen",
+        serde_json::json!({"session": "nonexistent-session"}),
+    )
+    .await;
+
+    // Should be a protocol-level error (invalid_params)
+    assert!(
+        json["error"].is_object(),
+        "Expected JSON-RPC error for nonexistent session, got: {}",
+        json
+    );
+    let err_msg = json["error"]["message"].as_str().unwrap_or("");
+    assert!(
+        err_msg.contains("session not found"),
+        "Error message should mention 'session not found', got: {}",
+        err_msg
+    );
+}
+
+// ── Test 21: Manage session rename ───────────────────────────────
+
+#[tokio::test]
+async fn test_mcp_tool_manage_session_rename() {
+    let app = create_test_app();
+    let addr = start_test_server(app).await;
+    let client = reqwest::Client::new();
+    let mcp_session = setup_mcp_session(&client, addr).await;
+
+    let old_name = "mcp-rename-old";
+    let new_name = "mcp-rename-new";
+
+    // Create session with old name
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_create_session",
+        serde_json::json!({"name": old_name}),
+    )
+    .await;
+    assert_eq!(json["result"]["isError"], false);
+
+    // Rename the session
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_manage_session",
+        serde_json::json!({
+            "session": old_name,
+            "action": "rename",
+            "new_name": new_name,
+        }),
+    )
+    .await;
+    assert_eq!(json["result"]["isError"], false);
+    let result = parse_tool_result(&json);
+    assert_eq!(result["status"], "renamed");
+    assert_eq!(result["old_name"], old_name);
+    assert_eq!(result["new_name"], new_name);
+
+    // Verify list shows new name, not old
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_list_sessions",
+        serde_json::json!({}),
+    )
+    .await;
+    let list: Vec<serde_json::Value> =
+        serde_json::from_str(extract_tool_text(&json)).unwrap();
+
+    let names: Vec<&str> = list
+        .iter()
+        .filter_map(|s| s["name"].as_str())
+        .collect();
+
+    assert!(
+        names.contains(&new_name),
+        "Session list should contain new name '{}', got: {:?}",
+        new_name,
+        names
+    );
+    assert!(
+        !names.contains(&old_name),
+        "Session list should NOT contain old name '{}', got: {:?}",
+        old_name,
+        names
+    );
+
+    // Cleanup
+    cleanup_session(&client, addr, &mcp_session, new_name).await;
+}
