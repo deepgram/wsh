@@ -25,6 +25,9 @@ tokio-stream = { version = "0.1.18", features = ["sync"] }
 uuid = { version = "1.20.0", features = ["v4"] }
 parking_lot = "0.12"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+rmcp = { version = "0.15", features = ["server", "macros", "transport-io", "transport-streamable-http-server"] }
+schemars = "1.0"
+tokio-util = { version = "0.7", features = ["rt"] }
 
 [dev-dependencies]
 tower = { version = "0.4", features = ["util"] }

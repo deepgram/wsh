@@ -3,6 +3,7 @@ pub mod api;
 pub mod broker;
 pub mod client;
 pub mod input;
+pub mod mcp;
 pub mod overlay;
 pub mod panel;
 pub mod parser;
