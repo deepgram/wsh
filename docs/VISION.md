@@ -295,11 +295,10 @@ The critical columns are the first two. No existing tool provides a structured, 
 
 **Now: The API Platform**
 
-The core is built: PTY management, terminal state machine, HTTP/WebSocket API, session management, overlays, panels, input capture, quiescence detection. AI agents can drive interactive terminal sessions today.
+The core is built: PTY management, terminal state machine, HTTP/WebSocket API, session management, overlays, panels, input capture, quiescence detection. MCP integration exposes `wsh` as a first-class MCP server -- 14 tools, 3 resources, 9 prompts -- via Streamable HTTP and stdio transports. AI agents can drive interactive terminal sessions today through HTTP, WebSocket, or MCP.
 
 **Next: Richer Agent Capabilities**
 
-- **MCP integration**: Expose `wsh` as an MCP server so AI assistants can discover and use terminal sessions natively
 - **Structured events**: Semantic notifications -- "command completed," "prompt detected," "approval requested" -- layered on top of raw terminal output
 - **Agent middleware**: Allow agents to observe, filter, transform, and respond to terminal activity through composable hooks
 

@@ -29,6 +29,10 @@ appears on their screen, output they generate appears in your
 API calls. All endpoints are scoped to a session via
 `/sessions/:name/` prefix (e.g., `/sessions/default/input`).
 
+> **MCP also available:** wsh is also accessible as an MCP server (14 tools,
+> 3 resources, 9 prompts) via Streamable HTTP at `/mcp` or the `wsh mcp` stdio
+> bridge. See the `wsh:core-mcp` prompt for MCP-specific guidance.
+
 ## The Fundamental Loop
 
 Almost everything you do with wsh follows this pattern:
