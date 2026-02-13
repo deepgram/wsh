@@ -325,3 +325,175 @@ async fn test_mcp_rejects_missing_accept() {
         "Should reject missing text/event-stream in Accept header"
     );
 }
+
+// ── Test 6: MCP list resources ──────────────────────────────────
+
+#[tokio::test]
+async fn test_mcp_list_resources() {
+    let app = create_test_app();
+    let addr = start_test_server(app).await;
+    let client = reqwest::Client::new();
+
+    // Initialize to get a session ID
+    let (_, session_id) = send_initialize_and_get_session(&client, addr).await;
+
+    // Send initialized notification
+    let _ = client
+        .post(format!("http://{addr}/mcp"))
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .header("Mcp-Session-Id", &session_id)
+        .body(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
+        .send()
+        .await
+        .unwrap();
+
+    // List resources
+    let body = send_mcp_request_with_session(
+        &client,
+        addr,
+        r#"{"jsonrpc":"2.0","id":2,"method":"resources/list"}"#,
+        &session_id,
+    )
+    .await;
+
+    let json = extract_jsonrpc_from_sse(&body);
+
+    assert_eq!(json["jsonrpc"], "2.0");
+    assert_eq!(json["id"], 2);
+
+    let resources = json["result"]["resources"]
+        .as_array()
+        .expect("Expected resources array in list resources response");
+
+    // Should have at least the wsh://sessions resource
+    assert!(
+        !resources.is_empty(),
+        "Expected at least one resource"
+    );
+
+    // Verify the sessions resource exists
+    let has_sessions = resources
+        .iter()
+        .any(|r| r["uri"].as_str() == Some("wsh://sessions"));
+    assert!(has_sessions, "Missing wsh://sessions resource");
+}
+
+// ── Test 7: MCP list resource templates ─────────────────────────
+
+#[tokio::test]
+async fn test_mcp_list_resource_templates() {
+    let app = create_test_app();
+    let addr = start_test_server(app).await;
+    let client = reqwest::Client::new();
+
+    // Initialize to get a session ID
+    let (_, session_id) = send_initialize_and_get_session(&client, addr).await;
+
+    // Send initialized notification
+    let _ = client
+        .post(format!("http://{addr}/mcp"))
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .header("Mcp-Session-Id", &session_id)
+        .body(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
+        .send()
+        .await
+        .unwrap();
+
+    // List resource templates
+    let body = send_mcp_request_with_session(
+        &client,
+        addr,
+        r#"{"jsonrpc":"2.0","id":2,"method":"resources/templates/list"}"#,
+        &session_id,
+    )
+    .await;
+
+    let json = extract_jsonrpc_from_sse(&body);
+
+    assert_eq!(json["jsonrpc"], "2.0");
+    assert_eq!(json["id"], 2);
+
+    let templates = json["result"]["resourceTemplates"]
+        .as_array()
+        .expect("Expected resourceTemplates array");
+
+    // Should have exactly 2 templates (screen and scrollback)
+    assert_eq!(
+        templates.len(),
+        2,
+        "Expected 2 resource templates, got {}",
+        templates.len()
+    );
+
+    let uri_templates: Vec<&str> = templates
+        .iter()
+        .filter_map(|t| t["uriTemplate"].as_str())
+        .collect();
+
+    assert!(
+        uri_templates.contains(&"wsh://sessions/{name}/screen"),
+        "Missing screen template"
+    );
+    assert!(
+        uri_templates.contains(&"wsh://sessions/{name}/scrollback"),
+        "Missing scrollback template"
+    );
+}
+
+// ── Test 8: MCP read sessions resource ──────────────────────────
+
+#[tokio::test]
+async fn test_mcp_read_sessions_resource() {
+    let app = create_test_app();
+    let addr = start_test_server(app).await;
+    let client = reqwest::Client::new();
+
+    // Initialize to get a session ID
+    let (_, session_id) = send_initialize_and_get_session(&client, addr).await;
+
+    // Send initialized notification
+    let _ = client
+        .post(format!("http://{addr}/mcp"))
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .header("Mcp-Session-Id", &session_id)
+        .body(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
+        .send()
+        .await
+        .unwrap();
+
+    // Read the sessions resource
+    let body = send_mcp_request_with_session(
+        &client,
+        addr,
+        r#"{"jsonrpc":"2.0","id":2,"method":"resources/read","params":{"uri":"wsh://sessions"}}"#,
+        &session_id,
+    )
+    .await;
+
+    let json = extract_jsonrpc_from_sse(&body);
+
+    assert_eq!(json["jsonrpc"], "2.0");
+    assert_eq!(json["id"], 2);
+
+    let contents = json["result"]["contents"]
+        .as_array()
+        .expect("Expected contents array in read resource response");
+
+    assert_eq!(contents.len(), 1, "Expected exactly one content entry");
+
+    // The text content should be a JSON array (empty, since no sessions created)
+    let text = contents[0]["text"]
+        .as_str()
+        .expect("Expected text field in content");
+    let parsed: serde_json::Value =
+        serde_json::from_str(text).expect("Content should be valid JSON");
+    assert!(parsed.is_array(), "Expected JSON array");
+    assert_eq!(
+        parsed.as_array().unwrap().len(),
+        0,
+        "Expected empty array (no sessions created)"
+    );
+}

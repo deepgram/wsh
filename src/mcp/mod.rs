@@ -2,6 +2,7 @@ pub mod tools;
 pub mod resources;
 pub mod prompts;
 
+use std::future::Future;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -10,6 +11,8 @@ use rmcp::{
     model::*,
     tool, tool_router, tool_handler,
     handler::server::wrapper::Parameters,
+    service::RequestContext,
+    RoleServer,
     ServerHandler,
 };
 
@@ -78,6 +81,30 @@ impl ServerHandler for WshMcpServer {
                     .to_string(),
             ),
         }
+    }
+
+    fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<ListResourcesResult, ErrorData>> + Send + '_ {
+        async { resources::list_resources(&self.state).await }
+    }
+
+    fn list_resource_templates(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<ListResourceTemplatesResult, ErrorData>> + Send + '_ {
+        async { resources::list_resource_templates().await }
+    }
+
+    fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<ReadResourceResult, ErrorData>> + Send + '_ {
+        async move { resources::read_resource(&self.state, request).await }
     }
 }
 
