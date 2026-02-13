@@ -117,7 +117,7 @@ pub fn router(state: AppState, token: Option<String>) -> Router {
         )
         .route("/sessions/:name/detach", post(session_detach))
         .route("/quiesce", get(quiesce_any))
-        .route("/server/persist", post(server_persist))
+        .route("/server/persist", get(server_persist_get).put(server_persist_set))
         .route("/ws/json", get(ws_json_server));
 
     let protected = Router::new()
@@ -985,7 +985,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_server_persist_sets_persistent_mode() {
+    async fn test_server_persist_get_returns_current_state() {
         let state = create_empty_state();
         assert!(!state.server_config.is_persistent());
         let app = router(state.clone(), None);
@@ -993,7 +993,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .method("POST")
+                    .method("GET")
                     .uri("/server/persist")
                     .body(Body::empty())
                     .unwrap(),
@@ -1002,13 +1002,67 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["persistent"], false);
+        // State unchanged
+        assert!(!state.server_config.is_persistent());
+    }
 
+    #[tokio::test]
+    async fn test_server_persist_put_sets_persistent_on() {
+        let state = create_empty_state();
+        assert!(!state.server_config.is_persistent());
+        let app = router(state.clone(), None);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/server/persist")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"persistent": true}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["persistent"], true);
         assert!(state.server_config.is_persistent());
+    }
+
+    #[tokio::test]
+    async fn test_server_persist_put_sets_persistent_off() {
+        let state = create_empty_state();
+        state.server_config.set_persistent(true);
+        let app = router(state.clone(), None);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/server/persist")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"persistent": false}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["persistent"], false);
+        assert!(!state.server_config.is_persistent());
     }
 
     // ── ServerConfig unit tests ──────────────────────────────────────
@@ -1253,9 +1307,10 @@ mod tests {
             .clone()
             .oneshot(
                 Request::builder()
-                    .method("POST")
+                    .method("PUT")
                     .uri("/server/persist")
-                    .body(Body::empty())
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"persistent": true}"#))
                     .unwrap(),
             )
             .await
