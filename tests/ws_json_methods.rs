@@ -23,6 +23,9 @@ fn create_test_state() -> (api::AppState, mpsc::Receiver<Bytes>) {
     let parser = Parser::spawn(&broker, 80, 24, 1000);
     let session = Session {
         name: "test".to_string(),
+        pid: None,
+        command: "test".to_string(),
+        client_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         input_tx,
         output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),
@@ -171,6 +174,9 @@ async fn test_ws_subscribe_then_events() {
     let parser = Parser::spawn(&broker, 80, 24, 1000);
     let session = Session {
         name: "test".to_string(),
+        pid: None,
+        command: "test".to_string(),
+        client_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         input_tx,
         output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),
@@ -298,6 +304,9 @@ async fn test_ws_methods_interleaved_with_events() {
     let parser = Parser::spawn(&broker, 80, 24, 1000);
     let session = Session {
         name: "test".to_string(),
+        pid: None,
+        command: "test".to_string(),
+        client_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         input_tx,
         output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),

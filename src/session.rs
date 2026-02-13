@@ -1,6 +1,7 @@
 use bytes::Bytes;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use parking_lot::RwLock;
 use tokio::sync::{broadcast, mpsc};
 use tokio::sync::broadcast as tokio_broadcast;
@@ -24,6 +25,12 @@ use crate::terminal::TerminalSize;
 pub struct Session {
     /// Human-readable session name (displayed in UI, used in URLs).
     pub name: String,
+    /// PID of the child process spawned in the PTY, if available.
+    pub pid: Option<u32>,
+    /// Human-readable display of the command being run (e.g. shell path or command string).
+    pub command: String,
+    /// Number of currently connected streaming clients (WebSocket, socket, etc.).
+    pub client_count: Arc<AtomicUsize>,
     pub input_tx: mpsc::Sender<Bytes>,
     pub output_rx: broadcast::Sender<Bytes>,
     pub shutdown: ShutdownCoordinator,
@@ -50,7 +57,32 @@ pub struct Session {
     pub screen_mode: Arc<RwLock<ScreenMode>>,
 }
 
+/// RAII guard that decrements the session client count on drop.
+pub struct ClientGuard {
+    counter: Arc<AtomicUsize>,
+}
+
+impl Drop for ClientGuard {
+    fn drop(&mut self) {
+        self.counter.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
 impl Session {
+    /// Register a new streaming client, returning an RAII guard that decrements
+    /// the count when dropped.
+    pub fn connect(&self) -> ClientGuard {
+        self.client_count.fetch_add(1, Ordering::Relaxed);
+        ClientGuard {
+            counter: Arc::clone(&self.client_count),
+        }
+    }
+
+    /// Return the number of currently connected streaming clients.
+    pub fn clients(&self) -> usize {
+        self.client_count.load(Ordering::Relaxed)
+    }
+
     /// Signal all attached streaming clients to detach.
     ///
     /// The session remains alive — only the streaming connections are closed.
@@ -84,6 +116,14 @@ impl Session {
         cwd: Option<String>,
         env: Option<std::collections::HashMap<String, String>>,
     ) -> Result<(Self, tokio::sync::oneshot::Receiver<()>), PtyError> {
+        let command_display = match &command {
+            SpawnCommand::Shell { shell, .. } => {
+                shell.clone().unwrap_or_else(|| {
+                    std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
+                })
+            }
+            SpawnCommand::Command { command, .. } => command.clone(),
+        };
         let mut cmd = Pty::build_command(&command);
         if let Some(ref dir) = cwd {
             cmd.cwd(dir);
@@ -97,6 +137,7 @@ impl Session {
         let pty_reader = pty.take_reader()?;
         let pty_writer = pty.take_writer()?;
         let pty_child = pty.take_child();
+        let pid = pty_child.as_ref().and_then(|c| c.process_id());
         let pty = Arc::new(pty);
 
         // Monitor child exit via a oneshot channel.
@@ -162,6 +203,9 @@ impl Session {
         Ok((
             Session {
                 name,
+                pid,
+                command: command_display,
+                client_count: Arc::new(AtomicUsize::new(0)),
                 input_tx,
                 output_rx: broker.sender(),
                 shutdown,
@@ -370,6 +414,9 @@ mod tests {
 
         let session = Session {
             name: name.to_string(),
+            pid: None,
+            command: "test".to_string(),
+            client_count: Arc::new(AtomicUsize::new(0)),
             input_tx,
             output_rx: broker.sender(),
             shutdown: ShutdownCoordinator::new(),

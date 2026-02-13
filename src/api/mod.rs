@@ -62,12 +62,11 @@ pub fn router(state: AppState, token: Option<String>) -> Router {
         StreamableHttpService, StreamableHttpServerConfig,
         session::local::LocalSessionManager,
     };
-    use std::sync::Arc as StdArc;
 
     let mcp_state = state.clone();
     let mcp_service = StreamableHttpService::new(
         move || Ok(crate::mcp::WshMcpServer::new(mcp_state.clone())),
-        StdArc::new(LocalSessionManager::default()),
+        Arc::new(LocalSessionManager::default()),
         StreamableHttpServerConfig::default(),
     );
     let session_routes = Router::new()
@@ -177,6 +176,9 @@ mod tests {
         let parser = Parser::spawn(&broker, 80, 24, 1000);
         let session = crate::session::Session {
             name: "test".to_string(),
+            pid: None,
+            command: "test".to_string(),
+            client_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             input_tx,
             output_rx: broker.sender(),
             shutdown: ShutdownCoordinator::new(),

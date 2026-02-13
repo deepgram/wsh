@@ -174,8 +174,11 @@ impl WshMcpServer {
             .sessions
             .monitor_child_exit(assigned_name.clone(), child_exit_rx);
 
+        let session = self.state.sessions.get(&assigned_name)
+            .expect("just inserted session");
         let result = serde_json::json!({
             "name": assigned_name,
+            "pid": session.pid,
             "rows": rows,
             "cols": cols,
         });
@@ -197,8 +200,11 @@ impl WshMcpServer {
             let (rows, cols) = session.terminal_size.get();
             let result = serde_json::json!({
                 "name": session.name,
+                "pid": session.pid,
+                "command": session.command,
                 "rows": rows,
                 "cols": cols,
+                "clients": session.clients(),
             });
             Ok(CallToolResult::success(vec![Content::text(
                 serde_json::to_string(&result).unwrap_or_default(),
@@ -213,8 +219,11 @@ impl WshMcpServer {
                     let (rows, cols) = session.terminal_size.get();
                     Some(serde_json::json!({
                         "name": name,
+                        "pid": session.pid,
+                        "command": session.command.clone(),
                         "rows": rows,
                         "cols": cols,
+                        "clients": session.clients(),
                     }))
                 })
                 .collect();

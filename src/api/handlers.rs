@@ -67,6 +67,7 @@ async fn handle_ws_raw(
 ) {
     // Register this connection for graceful shutdown tracking
     let (_guard, mut shutdown_rx) = shutdown.register();
+    let _client_guard = session.connect();
 
     let (mut ws_tx, mut ws_rx) = socket.split();
 
@@ -142,6 +143,7 @@ async fn handle_ws_json(
     shutdown: crate::shutdown::ShutdownCoordinator,
 ) {
     let (_guard, mut shutdown_rx) = shutdown.register();
+    let _client_guard = session.connect();
     let (mut ws_tx, mut ws_rx) = socket.split();
 
     // Send connected message
@@ -533,6 +535,7 @@ struct TaggedSessionEvent {
 struct SubHandle {
     subscribed_types: Vec<EventType>,
     task: tokio::task::JoinHandle<()>,
+    _client_guard: Option<crate::session::ClientGuard>,
 }
 
 /// Convert a registry-level SessionEvent to a JSON value for the WS protocol.
@@ -867,7 +870,18 @@ async fn handle_server_ws_request(
             let names = state.sessions.list();
             let sessions: Vec<serde_json::Value> = names
                 .into_iter()
-                .map(|name| serde_json::json!({ "name": name }))
+                .filter_map(|name| {
+                    let session = state.sessions.get(&name)?;
+                    let (rows, cols) = session.terminal_size.get();
+                    Some(serde_json::json!({
+                        "name": name,
+                        "pid": session.pid,
+                        "command": session.command,
+                        "rows": rows,
+                        "cols": cols,
+                        "clients": session.clients(),
+                    }))
+                })
                 .collect();
             return Some(super::ws_methods::WsResponse::success(
                 id,
@@ -1115,6 +1129,7 @@ async fn handle_server_ws_request(
                     SubHandle {
                         subscribed_types: subscribed_types.clone(),
                         task,
+                        _client_guard: Some(session.connect()),
                     },
                 );
 
@@ -1855,6 +1870,23 @@ pub(super) struct CreateSessionRequest {
 #[derive(Serialize)]
 pub(super) struct SessionInfo {
     pub name: String,
+    pub pid: Option<u32>,
+    pub command: String,
+    pub rows: u16,
+    pub cols: u16,
+    pub clients: usize,
+}
+
+fn build_session_info(session: &crate::session::Session) -> SessionInfo {
+    let (rows, cols) = session.terminal_size.get();
+    SessionInfo {
+        name: session.name.clone(),
+        pid: session.pid,
+        command: session.command.clone(),
+        rows,
+        cols,
+        clients: session.clients(),
+    }
 }
 
 #[derive(Deserialize)]
@@ -1868,7 +1900,13 @@ pub(super) async fn session_list(
     State(state): State<AppState>,
 ) -> Json<Vec<SessionInfo>> {
     let names = state.sessions.list();
-    let infos = names.into_iter().map(|name| SessionInfo { name }).collect();
+    let infos = names
+        .into_iter()
+        .filter_map(|name| {
+            let session = state.sessions.get(&name)?;
+            Some(build_session_info(&session))
+        })
+        .collect();
     Json(infos)
 }
 
@@ -1906,11 +1944,11 @@ pub(super) async fn session_create(
     // Monitor child exit so the session is auto-removed when the process dies.
     state.sessions.monitor_child_exit(assigned_name.clone(), child_exit_rx);
 
+    let session = state.sessions.get(&assigned_name)
+        .expect("just inserted session");
     Ok((
         StatusCode::CREATED,
-        Json(SessionInfo {
-            name: assigned_name,
-        }),
+        Json(build_session_info(&session)),
     ))
 }
 
@@ -1919,9 +1957,7 @@ pub(super) async fn session_get(
     Path(name): Path<String>,
 ) -> Result<Json<SessionInfo>, ApiError> {
     let session = get_session(&state.sessions, &name)?;
-    Ok(Json(SessionInfo {
-        name: session.name,
-    }))
+    Ok(Json(build_session_info(&session)))
 }
 
 pub(super) async fn session_rename(
@@ -1934,7 +1970,9 @@ pub(super) async fn session_rename(
         RegistryError::NotFound(n) => ApiError::SessionNotFound(n),
     })?;
 
-    Ok(Json(SessionInfo { name: req.name }))
+    let session = state.sessions.get(&req.name)
+        .expect("just renamed session");
+    Ok(Json(build_session_info(&session)))
 }
 
 pub(super) async fn session_kill(

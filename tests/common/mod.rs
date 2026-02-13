@@ -32,6 +32,9 @@ pub fn create_test_session_with_size(name: &str, rows: u16, cols: u16) -> TestSe
     let parser = Parser::spawn(&broker, cols as usize, rows as usize, 1000);
     let session = Session {
         name: name.to_string(),
+        pid: None,
+        command: "test".to_string(),
+        client_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         input_tx,
         output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),

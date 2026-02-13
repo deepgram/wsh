@@ -175,6 +175,7 @@ async fn handle_create_session<S: AsyncRead + AsyncWrite + Unpin>(
     // Send response
     let resp = CreateSessionResponseMsg {
         name: name.clone(),
+        pid: session.pid,
         rows: msg.rows,
         cols: msg.cols,
     };
@@ -307,7 +308,21 @@ async fn handle_list_sessions<S: AsyncRead + AsyncWrite + Unpin>(
 ) -> io::Result<()> {
     let names = sessions.list();
     let resp = ListSessionsResponseMsg {
-        sessions: names.into_iter().map(|name| SessionInfoMsg { name }).collect(),
+        sessions: names
+            .into_iter()
+            .filter_map(|name| {
+                let session = sessions.get(&name)?;
+                let (rows, cols) = session.terminal_size.get();
+                Some(SessionInfoMsg {
+                    name,
+                    pid: session.pid,
+                    command: session.command.clone(),
+                    rows,
+                    cols,
+                    clients: session.clients(),
+                })
+            })
+            .collect(),
     };
     let resp_frame = Frame::control(FrameType::ListSessionsResponse, &resp)
         .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
@@ -423,6 +438,7 @@ async fn run_streaming<S: AsyncRead + AsyncWrite + Unpin>(
     stream: &mut S,
     session: &Session,
 ) -> io::Result<()> {
+    let _client_guard = session.connect();
     let (mut reader, mut writer) = tokio::io::split(stream);
 
     // Subscribe to session output

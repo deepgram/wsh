@@ -30,6 +30,9 @@ fn create_test_state() -> (api::AppState, mpsc::Receiver<Bytes>, ActivityTracker
     let activity = ActivityTracker::new();
     let session = Session {
         name: "test".to_string(),
+        pid: None,
+        command: "test".to_string(),
+        client_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         input_tx,
         output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),
@@ -696,6 +699,9 @@ fn create_multi_session_state() -> (api::AppState, ActivityTracker, ActivityTrac
         let activity = ActivityTracker::new();
         let session = Session {
             name: name.to_string(),
+            pid: None,
+            command: "test".to_string(),
+            client_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             input_tx,
             output_rx: broker.sender(),
             shutdown: ShutdownCoordinator::new(),

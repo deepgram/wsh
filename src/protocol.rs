@@ -199,6 +199,7 @@ pub struct CreateSessionMsg {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateSessionResponseMsg {
     pub name: String,
+    pub pid: Option<u32>,
     pub rows: u16,
     pub cols: u16,
 }
@@ -272,6 +273,11 @@ pub struct ListSessionsResponseMsg {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionInfoMsg {
     pub name: String,
+    pub pid: Option<u32>,
+    pub command: String,
+    pub rows: u16,
+    pub cols: u16,
+    pub clients: usize,
 }
 
 /// Client → Server: request to kill (destroy) a session.
@@ -476,12 +482,14 @@ mod tests {
     fn control_frame_create_session_response() {
         let msg = CreateSessionResponseMsg {
             name: "session-0".to_string(),
+            pid: None,
             rows: 40,
             cols: 120,
         };
         let frame = Frame::control(FrameType::CreateSessionResponse, &msg).unwrap();
         let decoded: CreateSessionResponseMsg = frame.parse_json().unwrap();
         assert_eq!(decoded.name, "session-0");
+        assert_eq!(decoded.pid, None);
         assert_eq!(decoded.rows, 40);
         assert_eq!(decoded.cols, 120);
     }
@@ -593,15 +601,35 @@ mod tests {
     fn control_frame_list_sessions_response() {
         let msg = ListSessionsResponseMsg {
             sessions: vec![
-                SessionInfoMsg { name: "alpha".to_string() },
-                SessionInfoMsg { name: "beta".to_string() },
+                SessionInfoMsg {
+                    name: "alpha".to_string(),
+                    pid: Some(1234),
+                    command: "/bin/bash".to_string(),
+                    rows: 24,
+                    cols: 80,
+                    clients: 1,
+                },
+                SessionInfoMsg {
+                    name: "beta".to_string(),
+                    pid: None,
+                    command: String::new(),
+                    rows: 0,
+                    cols: 0,
+                    clients: 0,
+                },
             ],
         };
         let frame = Frame::control(FrameType::ListSessionsResponse, &msg).unwrap();
         let decoded: ListSessionsResponseMsg = frame.parse_json().unwrap();
         assert_eq!(decoded.sessions.len(), 2);
         assert_eq!(decoded.sessions[0].name, "alpha");
+        assert_eq!(decoded.sessions[0].pid, Some(1234));
+        assert_eq!(decoded.sessions[0].command, "/bin/bash");
+        assert_eq!(decoded.sessions[0].rows, 24);
+        assert_eq!(decoded.sessions[0].cols, 80);
+        assert_eq!(decoded.sessions[0].clients, 1);
         assert_eq!(decoded.sessions[1].name, "beta");
+        assert_eq!(decoded.sessions[1].pid, None);
     }
 
     #[test]

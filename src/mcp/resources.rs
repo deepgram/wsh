@@ -118,8 +118,11 @@ pub async fn read_resource(
                     let (rows, cols) = session.terminal_size.get();
                     Some(serde_json::json!({
                         "name": name,
+                        "pid": session.pid,
+                        "command": session.command.clone(),
                         "rows": rows,
                         "cols": cols,
+                        "clients": session.clients(),
                     }))
                 })
                 .collect();

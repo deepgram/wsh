@@ -1098,6 +1098,9 @@ mod tests {
         let parser = Parser::spawn(&broker, 80, 24, 1000);
         let session = Session {
             name: "test".to_string(),
+            pid: None,
+            command: "test".to_string(),
+            client_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             input_tx,
             output_rx: broker.sender(),
             shutdown: ShutdownCoordinator::new(),

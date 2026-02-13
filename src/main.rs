@@ -393,67 +393,163 @@ async fn run_server(
 
 // ── MCP stdio mode ─────────────────────────────────────────────────
 
-/// Run the MCP stdio bridge: start an in-process server and serve MCP
-/// JSON-RPC over stdin/stdout for AI hosts like Claude Desktop.
+/// Run the MCP stdio bridge: connect to (or spawn) a server, then bridge
+/// stdin/stdout JSON-RPC ↔ the server's `/mcp` Streamable HTTP endpoint.
 async fn run_mcp(
     bind: SocketAddr,
     socket: Option<PathBuf>,
     token: Option<String>,
 ) -> Result<(), WshError> {
-    use rmcp::transport::io::stdio;
-    use rmcp::ServiceExt as _;
-
     tracing::info!("wsh mcp stdio bridge starting");
 
-    // Start server infrastructure in-process
-    let sessions = SessionRegistry::new();
-    let shutdown = ShutdownCoordinator::new();
-    let server_config = std::sync::Arc::new(api::ServerConfig::new(false));
-    let state = api::AppState {
-        sessions: sessions.clone(),
-        shutdown: shutdown.clone(),
-        server_config,
-    };
-
-    let token = resolve_token(&bind, &token);
-    let app = api::router(state.clone(), token);
-
-    // Start HTTP server in background (for any HTTP/WS clients that want to connect)
-    let http_handle = tokio::spawn(async move {
-        let listener = tokio::net::TcpListener::bind(bind).await.unwrap();
-        tracing::info!(addr = %bind, "HTTP/WS server listening");
-        axum::serve(listener, app).await.unwrap();
-    });
-
-    // Start Unix socket server in background
     let socket_path = socket.unwrap_or_else(server::default_socket_path);
-    let socket_sessions = sessions.clone();
-    let socket_handle = tokio::spawn(async move {
-        if let Err(e) = server::serve(socket_sessions, &socket_path).await {
-            tracing::error!(?e, "Unix socket server error");
+
+    // Connect to existing server or spawn one
+    match client::Client::connect(&socket_path).await {
+        Ok(_) => {
+            tracing::debug!("connected to existing server");
         }
-    });
+        Err(_) => {
+            tracing::debug!("no server running, spawning daemon");
+            spawn_server_daemon(&socket_path, &bind, token.as_deref())?;
+            wait_for_socket(&socket_path).await?;
+        }
+    }
 
-    // Serve MCP over stdio using the shared AppState
-    let mcp = wsh::mcp::WshMcpServer::new(state);
-    let service = mcp.serve(stdio()).await.map_err(|e| {
-        WshError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("MCP serve error: {e}"),
-        ))
-    })?;
+    let mcp_url = format!("http://{}/mcp", bind);
+    let http_client = reqwest::Client::new();
+    let mut session_id: Option<String> = None;
 
-    // Wait until the MCP host closes the connection
-    service.waiting().await.map_err(|e| {
-        WshError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("MCP wait error: {e}"),
-        ))
-    })?;
+    let stdin = tokio::io::stdin();
+    let mut reader = tokio::io::BufReader::new(stdin);
+    let mut stdout = tokio::io::stdout();
 
-    // Clean up
-    http_handle.abort();
-    socket_handle.abort();
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = tokio::io::AsyncBufReadExt::read_line(&mut reader, &mut line)
+            .await
+            .map_err(WshError::Io)?;
+        if n == 0 {
+            // EOF on stdin
+            break;
+        }
+
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        // Build HTTP request
+        let mut req = http_client
+            .post(&mcp_url)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json, text/event-stream");
+
+        if let Some(ref sid) = session_id {
+            req = req.header("Mcp-Session-Id", sid);
+        }
+        if let Some(ref t) = token {
+            req = req.bearer_auth(t);
+        }
+
+        req = req.body(trimmed.to_string());
+
+        let resp = match req.send().await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!(?e, "HTTP request to /mcp failed");
+                // Write a JSON-RPC error to stdout
+                let err_json = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "error": {
+                        "code": -32603,
+                        "message": format!("HTTP request failed: {e}")
+                    },
+                    "id": null
+                });
+                let err_line = format!("{}\n", err_json);
+                tokio::io::AsyncWriteExt::write_all(&mut stdout, err_line.as_bytes())
+                    .await
+                    .map_err(WshError::Io)?;
+                tokio::io::AsyncWriteExt::flush(&mut stdout)
+                    .await
+                    .map_err(WshError::Io)?;
+                continue;
+            }
+        };
+
+        // Capture headers before consuming the body
+        let content_type = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+
+        // Capture mcp-session-id from response headers
+        if let Some(sid) = resp.headers().get("mcp-session-id") {
+            if let Ok(s) = sid.to_str() {
+                session_id = Some(s.to_string());
+            }
+        }
+
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+
+        if !status.is_success() && !status.is_informational() {
+            tracing::warn!(status = %status, "MCP endpoint returned error");
+            // Try to pass through the body as-is (it may be a JSON-RPC error)
+            if !body.trim().is_empty() {
+                let out_line = format!("{}\n", body.trim());
+                tokio::io::AsyncWriteExt::write_all(&mut stdout, out_line.as_bytes())
+                    .await
+                    .map_err(WshError::Io)?;
+                tokio::io::AsyncWriteExt::flush(&mut stdout)
+                    .await
+                    .map_err(WshError::Io)?;
+            }
+            continue;
+        }
+
+        // Parse SSE response: look for `data:` lines in event-stream format
+        // The response may be plain JSON or SSE depending on content type
+        if content_type.contains("text/event-stream") || body.contains("data:") {
+            // Parse as SSE
+            for event in body.split("\n\n") {
+                let event = event.trim();
+                if event.is_empty() {
+                    continue;
+                }
+                for event_line in event.lines() {
+                    if let Some(data) = event_line.strip_prefix("data:") {
+                        let json_str = data.trim();
+                        if !json_str.is_empty() {
+                            let out_line = format!("{}\n", json_str);
+                            tokio::io::AsyncWriteExt::write_all(
+                                &mut stdout,
+                                out_line.as_bytes(),
+                            )
+                            .await
+                            .map_err(WshError::Io)?;
+                        }
+                    }
+                }
+            }
+        } else {
+            // Plain JSON response
+            let trimmed_body = body.trim();
+            if !trimmed_body.is_empty() {
+                let out_line = format!("{}\n", trimmed_body);
+                tokio::io::AsyncWriteExt::write_all(&mut stdout, out_line.as_bytes())
+                    .await
+                    .map_err(WshError::Io)?;
+            }
+        }
+        tokio::io::AsyncWriteExt::flush(&mut stdout)
+            .await
+            .map_err(WshError::Io)?;
+    }
 
     tracing::info!("wsh mcp stdio bridge exiting");
     Ok(())
@@ -464,7 +560,11 @@ async fn run_mcp(
 /// Spawn a wsh server daemon as a background process.
 ///
 /// The spawned server runs in ephemeral mode (exits when last session ends).
-fn spawn_server_daemon(socket_path: &std::path::Path, bind: &SocketAddr) -> Result<(), WshError> {
+fn spawn_server_daemon(
+    socket_path: &std::path::Path,
+    bind: &SocketAddr,
+    token: Option<&str>,
+) -> Result<(), WshError> {
     let exe = std::env::current_exe().map_err(WshError::Io)?;
     let mut cmd = std::process::Command::new(exe);
     cmd.arg("server")
@@ -473,6 +573,10 @@ fn spawn_server_daemon(socket_path: &std::path::Path, bind: &SocketAddr) -> Resu
         .arg(bind.to_string())
         .arg("--socket")
         .arg(socket_path);
+
+    if let Some(t) = token {
+        cmd.arg("--token").arg(t);
+    }
 
     // Detach from parent: redirect stdio, start new session
     cmd.stdin(std::process::Stdio::null())
@@ -528,7 +632,7 @@ async fn run_standalone(cli: Cli) -> Result<(), WshError> {
         }
         Err(_) => {
             tracing::debug!("no server running, spawning daemon");
-            spawn_server_daemon(&socket_path, &cli.bind)?;
+            spawn_server_daemon(&socket_path, &cli.bind, None)?;
             wait_for_socket(&socket_path).await?;
             client::Client::connect(&socket_path).await.map_err(|e| {
                 eprintln!("wsh: failed to connect to server after spawn: {}", e);
@@ -696,9 +800,20 @@ async fn run_list(socket: Option<PathBuf>) -> Result<(), WshError> {
     if sessions.is_empty() {
         println!("No active sessions.");
     } else {
-        println!("{:<20}", "NAME");
+        println!(
+            "{:<20} {:<8} {:<20} {:<12} {}",
+            "NAME", "PID", "COMMAND", "SIZE", "CLIENTS"
+        );
         for s in &sessions {
-            println!("{:<20}", s.name);
+            let pid_str = match s.pid {
+                Some(pid) => pid.to_string(),
+                None => "-".to_string(),
+            };
+            let size = format!("{}x{}", s.cols, s.rows);
+            println!(
+                "{:<20} {:<8} {:<20} {:<12} {}",
+                s.name, pid_str, s.command, size, s.clients
+            );
         }
     }
 
