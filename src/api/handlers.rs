@@ -2023,9 +2023,21 @@ pub(super) async fn exit_alt_screen(
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub(super) async fn server_persist(
+pub(super) async fn server_persist_get(
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    state.server_config.set_persistent(true);
-    (StatusCode::OK, Json(serde_json::json!({"persistent": true})))
+    let persistent = state.server_config.is_persistent();
+    (StatusCode::OK, Json(serde_json::json!({"persistent": persistent})))
+}
+
+pub(super) async fn server_persist_set(
+    State(state): State<AppState>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    if let Some(persistent) = body.get("persistent").and_then(|v| v.as_bool()) {
+        state.server_config.set_persistent(persistent);
+        (StatusCode::OK, Json(serde_json::json!({"persistent": persistent})))
+    } else {
+        (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "missing or invalid 'persistent' boolean field"})))
+    }
 }

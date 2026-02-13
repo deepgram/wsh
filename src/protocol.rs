@@ -233,6 +233,15 @@ pub struct AttachSessionResponseMsg {
     /// Raw terminal bytes for current screen state (base64-encoded in JSON).
     #[serde(with = "base64_bytes")]
     pub screen: Vec<u8>,
+    /// Current input routing mode (passthrough or capture).
+    #[serde(default)]
+    pub input_mode: crate::input::mode::Mode,
+    /// Current screen mode (normal or alt).
+    #[serde(default)]
+    pub screen_mode: crate::overlay::ScreenMode,
+    /// ID of the currently focused overlay/panel, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focused_id: Option<String>,
 }
 
 /// Client → Server: resize notification.
@@ -499,12 +508,37 @@ mod tests {
             cols: 80,
             scrollback: b"scrollback data here".to_vec(),
             screen: b"\x1b[H\x1b[2Jscreen".to_vec(),
+            input_mode: crate::input::mode::Mode::Passthrough,
+            screen_mode: crate::overlay::ScreenMode::Normal,
+            focused_id: None,
         };
         let frame = Frame::control(FrameType::AttachSessionResponse, &msg).unwrap();
         let decoded: AttachSessionResponseMsg = frame.parse_json().unwrap();
         assert_eq!(decoded.name, "test");
         assert_eq!(decoded.scrollback, b"scrollback data here");
         assert_eq!(decoded.screen, b"\x1b[H\x1b[2Jscreen");
+        assert_eq!(decoded.input_mode, crate::input::mode::Mode::Passthrough);
+        assert_eq!(decoded.screen_mode, crate::overlay::ScreenMode::Normal);
+        assert_eq!(decoded.focused_id, None);
+    }
+
+    #[test]
+    fn control_frame_attach_session_response_with_session_state() {
+        let msg = AttachSessionResponseMsg {
+            name: "test".to_string(),
+            rows: 24,
+            cols: 80,
+            scrollback: Vec::new(),
+            screen: Vec::new(),
+            input_mode: crate::input::mode::Mode::Capture,
+            screen_mode: crate::overlay::ScreenMode::Alt,
+            focused_id: Some("overlay-123".to_string()),
+        };
+        let frame = Frame::control(FrameType::AttachSessionResponse, &msg).unwrap();
+        let decoded: AttachSessionResponseMsg = frame.parse_json().unwrap();
+        assert_eq!(decoded.input_mode, crate::input::mode::Mode::Capture);
+        assert_eq!(decoded.screen_mode, crate::overlay::ScreenMode::Alt);
+        assert_eq!(decoded.focused_id, Some("overlay-123".to_string()));
     }
 
     #[test]

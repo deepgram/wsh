@@ -134,8 +134,15 @@ enum Commands {
         socket: Option<PathBuf>,
     },
 
-    /// Upgrade a running server to persistent mode (it won't shut down when sessions end)
+    /// Query or set server persistence mode.
+    ///
+    /// With no argument, prints the current persistence state.
+    /// `wsh persist on` — server stays alive when all sessions end.
+    /// `wsh persist off` — server exits when the last session ends.
     Persist {
+        /// "on" or "off". Omit to query without changing.
+        value: Option<String>,
+
         /// Address of the HTTP/WebSocket API server
         #[arg(long, default_value = "127.0.0.1:8080")]
         bind: SocketAddr,
@@ -206,8 +213,8 @@ async fn main() -> Result<(), WshError> {
         Some(Commands::Detach { name, socket }) => {
             run_detach(name, socket).await
         }
-        Some(Commands::Persist { bind, token }) => {
-            run_persist(bind, token).await
+        Some(Commands::Persist { value, bind, token }) => {
+            run_persist(value, bind, token).await
         }
         None => {
             run_standalone(cli).await
@@ -640,23 +647,61 @@ async fn run_detach(name: String, socket: Option<PathBuf>) -> Result<(), WshErro
     Ok(())
 }
 
-async fn run_persist(bind: SocketAddr, token: Option<String>) -> Result<(), WshError> {
+async fn run_persist(
+    value: Option<String>,
+    bind: SocketAddr,
+    token: Option<String>,
+) -> Result<(), WshError> {
     let url = format!("http://{}/server/persist", bind);
     let client = reqwest::Client::new();
-    let mut req = client.post(&url);
-    if let Some(t) = &token {
-        req = req.bearer_auth(t);
-    }
 
-    let resp = match req.send().await {
-        Ok(r) => r,
-        Err(e) => {
-            if e.is_connect() {
-                eprintln!("wsh persist: could not connect to wsh server at {} — is the server running?", bind);
-            } else {
-                eprintln!("wsh persist: {}", e);
-            }
+    // Determine whether to GET (query) or PUT (set)
+    let persistent_value = match value.as_deref() {
+        None => None,
+        Some("on") => Some(true),
+        Some("off") => Some(false),
+        Some(other) => {
+            eprintln!("wsh persist: expected 'on' or 'off', got '{}'", other);
             std::process::exit(1);
+        }
+    };
+
+    let resp = match persistent_value {
+        None => {
+            // Query current state
+            let mut req = client.get(&url);
+            if let Some(t) = &token {
+                req = req.bearer_auth(t);
+            }
+            match req.send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    if e.is_connect() {
+                        eprintln!("wsh persist: could not connect to wsh server at {} — is the server running?", bind);
+                    } else {
+                        eprintln!("wsh persist: {}", e);
+                    }
+                    std::process::exit(1);
+                }
+            }
+        }
+        Some(val) => {
+            // Set new state
+            let mut req = client.put(&url).json(&serde_json::json!({"persistent": val}));
+            if let Some(t) = &token {
+                req = req.bearer_auth(t);
+            }
+            match req.send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    if e.is_connect() {
+                        eprintln!("wsh persist: could not connect to wsh server at {} — is the server running?", bind);
+                    } else {
+                        eprintln!("wsh persist: {}", e);
+                    }
+                    std::process::exit(1);
+                }
+            }
         }
     };
 
@@ -665,7 +710,13 @@ async fn run_persist(bind: SocketAddr, token: Option<String>) -> Result<(), WshE
         std::process::exit(1);
     }
 
-    println!("Server upgraded to persistent mode.");
+    let body: serde_json::Value = resp.json().await.unwrap_or_default();
+    let is_persistent = body["persistent"].as_bool().unwrap_or(false);
+    if is_persistent {
+        println!("Server is in persistent mode (will stay alive when sessions end).");
+    } else {
+        println!("Server is in ephemeral mode (will exit when last session ends).");
+    }
     Ok(())
 }
 

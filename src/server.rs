@@ -283,6 +283,9 @@ async fn handle_attach_session<S: AsyncRead + AsyncWrite + Unpin>(
         cols: msg.cols,
         scrollback: scrollback_data,
         screen: screen_data,
+        input_mode: session.input_mode.get(),
+        screen_mode: *session.screen_mode.read(),
+        focused_id: session.focus.focused(),
     };
     let resp_frame = Frame::control(FrameType::AttachSessionResponse, &resp)
         .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
