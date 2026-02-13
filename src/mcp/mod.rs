@@ -22,6 +22,7 @@ use tools::{
     SendInputParams, Encoding, GetScreenParams, GetScrollbackParams,
     AwaitQuiesceParams, RunCommandParams,
     OverlayParams, RemoveOverlayParams, PanelParams, RemovePanelParams,
+    InputModeParams, InputModeAction, ScreenModeParams, ScreenModeAction,
 };
 
 #[derive(Clone)]
@@ -816,5 +817,145 @@ impl WshMcpServer {
                 )]))
             }
         }
+    }
+
+    // ── Input & screen mode tools ────────────────────────────────
+
+    /// Query or change the input mode and focus state of a terminal session.
+    #[tool(description = "Query or change the input mode and focus state of a terminal session. Without arguments, returns the current mode and focused element. Set mode to 'capture' (input goes to API only) or 'release' (input goes to both API and PTY). Set focus to an overlay/panel ID (must be focusable), or unfocus=true to clear focus.")]
+    async fn wsh_input_mode(
+        &self,
+        Parameters(params): Parameters<InputModeParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let session = self.get_session(&params.session)?;
+
+        // Apply mode change if requested
+        if let Some(ref action) = params.mode {
+            match action {
+                InputModeAction::Capture => {
+                    session.input_mode.capture();
+                }
+                InputModeAction::Release => {
+                    session.input_mode.release();
+                    session.focus.unfocus();
+                }
+            }
+        }
+
+        // Apply focus change if requested
+        if let Some(ref id) = params.focus {
+            // Validate that the target is focusable
+            let is_focusable = if let Some(overlay) = session.overlays.get(id) {
+                overlay.focusable
+            } else if let Some(panel) = session.panels.get(id) {
+                panel.focusable
+            } else {
+                return Err(ErrorData::invalid_params(
+                    format!("no overlay or panel with id '{id}'"),
+                    None,
+                ));
+            };
+
+            if !is_focusable {
+                return Err(ErrorData::invalid_params(
+                    format!("target '{id}' is not focusable"),
+                    None,
+                ));
+            }
+
+            session.focus.focus(id.clone());
+        }
+
+        // Apply unfocus if requested
+        if params.unfocus {
+            session.focus.unfocus();
+        }
+
+        // Return current state
+        let mode = session.input_mode.get();
+        let mode_str = match mode {
+            crate::input::mode::Mode::Passthrough => "passthrough",
+            crate::input::mode::Mode::Capture => "capture",
+        };
+        let focused_element = session.focus.focused();
+
+        let result = serde_json::json!({
+            "mode": mode_str,
+            "focused_element": focused_element,
+        });
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string(&result).unwrap_or_default(),
+        )]))
+    }
+
+    /// Query or change the screen mode of a terminal session.
+    #[tool(description = "Query or change the screen mode of a terminal session. Without arguments, returns the current mode ('normal' or 'alt'). Set action to 'enter_alt' to switch to alternate screen mode, or 'exit_alt' to return to normal mode (which cleans up alt-mode overlays and panels).")]
+    async fn wsh_screen_mode(
+        &self,
+        Parameters(params): Parameters<ScreenModeParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let session = self.get_session(&params.session)?;
+
+        if let Some(ref action) = params.action {
+            match action {
+                ScreenModeAction::EnterAlt => {
+                    let mut mode = session.screen_mode.write();
+                    if *mode == crate::overlay::ScreenMode::Alt {
+                        return Err(ErrorData::invalid_params(
+                            "session is already in alternate screen mode",
+                            None,
+                        ));
+                    }
+                    *mode = crate::overlay::ScreenMode::Alt;
+                }
+                ScreenModeAction::ExitAlt => {
+                    {
+                        let mut mode = session.screen_mode.write();
+                        if *mode == crate::overlay::ScreenMode::Normal {
+                            return Err(ErrorData::invalid_params(
+                                "session is not in alternate screen mode",
+                                None,
+                            ));
+                        }
+                        *mode = crate::overlay::ScreenMode::Normal;
+                    }
+                    // Clean up alt-mode overlays and panels
+                    session
+                        .overlays
+                        .delete_by_mode(crate::overlay::ScreenMode::Alt);
+                    session
+                        .panels
+                        .delete_by_mode(crate::overlay::ScreenMode::Alt);
+                    session.focus.unfocus();
+                    crate::panel::reconfigure_layout(
+                        &session.panels,
+                        &session.terminal_size,
+                        &session.pty,
+                        &session.parser,
+                    )
+                    .await;
+                    let _ = session
+                        .visual_update_tx
+                        .send(crate::protocol::VisualUpdate::OverlaysChanged);
+                    let _ = session
+                        .visual_update_tx
+                        .send(crate::protocol::VisualUpdate::PanelsChanged);
+                }
+            }
+        }
+
+        // Return current state
+        let current_mode = *session.screen_mode.read();
+        let mode_str = match current_mode {
+            crate::overlay::ScreenMode::Normal => "normal",
+            crate::overlay::ScreenMode::Alt => "alt",
+        };
+
+        let result = serde_json::json!({
+            "mode": mode_str,
+        });
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string(&result).unwrap_or_default(),
+        )]))
     }
 }

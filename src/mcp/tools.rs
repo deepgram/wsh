@@ -334,6 +334,64 @@ pub struct RemovePanelParams {
     pub id: Option<String>,
 }
 
+// ── Input & screen mode parameter types ─────────────────────────
+
+/// Action to perform on the input mode.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum InputModeAction {
+    /// Switch to capture mode (input goes to API subscribers only).
+    Capture,
+    /// Switch to passthrough mode (input goes to both API subscribers and PTY).
+    Release,
+}
+
+/// Parameters for the `wsh_input_mode` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct InputModeParams {
+    /// The name of the target session.
+    #[schemars(description = "The name of the target session.")]
+    pub session: String,
+
+    /// Action to change the input mode. Omit to query the current mode without changing it.
+    #[schemars(description = "Action to change the input mode: 'capture' or 'release'. Omit to query without changing.")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<InputModeAction>,
+
+    /// ID of an overlay or panel to focus. The target must have focusable=true.
+    #[schemars(description = "ID of an overlay or panel to focus. The target must have focusable=true.")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub focus: Option<String>,
+
+    /// If true, remove focus from any currently focused element.
+    #[serde(default)]
+    #[schemars(description = "If true, remove focus from any currently focused element.")]
+    pub unfocus: bool,
+}
+
+/// Action to perform on the screen mode.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ScreenModeAction {
+    /// Enter alternate screen mode.
+    EnterAlt,
+    /// Exit alternate screen mode (cleans up alt-mode overlays and panels).
+    ExitAlt,
+}
+
+/// Parameters for the `wsh_screen_mode` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ScreenModeParams {
+    /// The name of the target session.
+    #[schemars(description = "The name of the target session.")]
+    pub session: String,
+
+    /// Action to change the screen mode. Omit to query the current mode without changing it.
+    #[schemars(description = "Action to change the screen mode: 'enter_alt' or 'exit_alt'. Omit to query without changing.")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<ScreenModeAction>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -835,6 +893,163 @@ mod tests {
     fn remove_panel_params_missing_session() {
         let json = serde_json::json!({});
         let result = serde_json::from_value::<RemovePanelParams>(json);
+        assert!(result.is_err());
+    }
+
+    // ── InputModeAction ───────────────────────────────────────────
+
+    #[test]
+    fn input_mode_action_capture() {
+        let json = serde_json::json!("capture");
+        let action: InputModeAction = serde_json::from_value(json).unwrap();
+        assert!(matches!(action, InputModeAction::Capture));
+    }
+
+    #[test]
+    fn input_mode_action_release() {
+        let json = serde_json::json!("release");
+        let action: InputModeAction = serde_json::from_value(json).unwrap();
+        assert!(matches!(action, InputModeAction::Release));
+    }
+
+    #[test]
+    fn input_mode_action_invalid() {
+        let json = serde_json::json!("toggle");
+        let result = serde_json::from_value::<InputModeAction>(json);
+        assert!(result.is_err());
+    }
+
+    // ── InputModeParams ───────────────────────────────────────────
+
+    #[test]
+    fn input_mode_params_query_only() {
+        let json = serde_json::json!({"session": "my-session"});
+        let params: InputModeParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.session, "my-session");
+        assert!(params.mode.is_none());
+        assert!(params.focus.is_none());
+        assert!(!params.unfocus);
+    }
+
+    #[test]
+    fn input_mode_params_capture() {
+        let json = serde_json::json!({
+            "session": "s",
+            "mode": "capture"
+        });
+        let params: InputModeParams = serde_json::from_value(json).unwrap();
+        assert!(matches!(params.mode, Some(InputModeAction::Capture)));
+    }
+
+    #[test]
+    fn input_mode_params_release() {
+        let json = serde_json::json!({
+            "session": "s",
+            "mode": "release"
+        });
+        let params: InputModeParams = serde_json::from_value(json).unwrap();
+        assert!(matches!(params.mode, Some(InputModeAction::Release)));
+    }
+
+    #[test]
+    fn input_mode_params_with_focus() {
+        let json = serde_json::json!({
+            "session": "s",
+            "focus": "overlay-123"
+        });
+        let params: InputModeParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.focus.as_deref(), Some("overlay-123"));
+    }
+
+    #[test]
+    fn input_mode_params_with_unfocus() {
+        let json = serde_json::json!({
+            "session": "s",
+            "unfocus": true
+        });
+        let params: InputModeParams = serde_json::from_value(json).unwrap();
+        assert!(params.unfocus);
+    }
+
+    #[test]
+    fn input_mode_params_all_fields() {
+        let json = serde_json::json!({
+            "session": "s",
+            "mode": "capture",
+            "focus": "panel-1",
+            "unfocus": false
+        });
+        let params: InputModeParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.session, "s");
+        assert!(matches!(params.mode, Some(InputModeAction::Capture)));
+        assert_eq!(params.focus.as_deref(), Some("panel-1"));
+        assert!(!params.unfocus);
+    }
+
+    #[test]
+    fn input_mode_params_missing_session() {
+        let json = serde_json::json!({"mode": "capture"});
+        let result = serde_json::from_value::<InputModeParams>(json);
+        assert!(result.is_err());
+    }
+
+    // ── ScreenModeAction ──────────────────────────────────────────
+
+    #[test]
+    fn screen_mode_action_enter_alt() {
+        let json = serde_json::json!("enter_alt");
+        let action: ScreenModeAction = serde_json::from_value(json).unwrap();
+        assert!(matches!(action, ScreenModeAction::EnterAlt));
+    }
+
+    #[test]
+    fn screen_mode_action_exit_alt() {
+        let json = serde_json::json!("exit_alt");
+        let action: ScreenModeAction = serde_json::from_value(json).unwrap();
+        assert!(matches!(action, ScreenModeAction::ExitAlt));
+    }
+
+    #[test]
+    fn screen_mode_action_invalid() {
+        let json = serde_json::json!("toggle");
+        let result = serde_json::from_value::<ScreenModeAction>(json);
+        assert!(result.is_err());
+    }
+
+    // ── ScreenModeParams ──────────────────────────────────────────
+
+    #[test]
+    fn screen_mode_params_query_only() {
+        let json = serde_json::json!({"session": "my-session"});
+        let params: ScreenModeParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.session, "my-session");
+        assert!(params.action.is_none());
+    }
+
+    #[test]
+    fn screen_mode_params_enter_alt() {
+        let json = serde_json::json!({
+            "session": "s",
+            "action": "enter_alt"
+        });
+        let params: ScreenModeParams = serde_json::from_value(json).unwrap();
+        assert!(matches!(params.action, Some(ScreenModeAction::EnterAlt)));
+    }
+
+    #[test]
+    fn screen_mode_params_exit_alt() {
+        let json = serde_json::json!({
+            "session": "s",
+            "action": "exit_alt"
+        });
+        let params: ScreenModeParams = serde_json::from_value(json).unwrap();
+        assert!(matches!(params.action, Some(ScreenModeAction::ExitAlt)));
+    }
+
+    #[test]
+    fn screen_mode_params_missing_session() {
+        let json = serde_json::json!({"action": "enter_alt"});
+        let result = serde_json::from_value::<ScreenModeParams>(json);
         assert!(result.is_err());
     }
 }
