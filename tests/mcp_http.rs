@@ -84,6 +84,19 @@ fn extract_jsonrpc_from_sse(body: &str) -> serde_json::Value {
     );
 }
 
+/// Assert that a tool call result is NOT an error.
+///
+/// The MCP spec allows `isError` to be `false`, absent, or `null` when
+/// a tool call succeeds. This helper accepts all three.
+fn assert_not_error(json: &serde_json::Value) {
+    let is_error = &json["result"]["isError"];
+    assert!(
+        is_error.is_null() || is_error == false,
+        "Expected isError to be false/absent/null, got: {}",
+        is_error
+    );
+}
+
 /// Extract the session ID from an SSE response's headers (for stateful mode).
 async fn send_initialize_and_get_session(
     client: &reqwest::Client,
@@ -831,7 +844,7 @@ async fn test_mcp_tool_session_lifecycle() {
         serde_json::json!({"name": sess_name}),
     )
     .await;
-    assert_eq!(json["result"]["isError"], false);
+    assert_not_error(&json);
     let result = parse_tool_result(&json);
     assert_eq!(result["name"], sess_name);
     assert!(result["rows"].is_number());
@@ -846,7 +859,7 @@ async fn test_mcp_tool_session_lifecycle() {
         serde_json::json!({}),
     )
     .await;
-    assert_eq!(json["result"]["isError"], false);
+    assert_not_error(&json);
     let list: Vec<serde_json::Value> =
         serde_json::from_str(extract_tool_text(&json)).unwrap();
     assert!(
@@ -864,7 +877,7 @@ async fn test_mcp_tool_session_lifecycle() {
         serde_json::json!({"session": sess_name}),
     )
     .await;
-    assert_eq!(json["result"]["isError"], false);
+    assert_not_error(&json);
     let detail = parse_tool_result(&json);
     assert_eq!(detail["name"], sess_name);
     assert!(detail["rows"].is_number());
@@ -882,7 +895,7 @@ async fn test_mcp_tool_session_lifecycle() {
         }),
     )
     .await;
-    assert_eq!(json["result"]["isError"], false);
+    assert_not_error(&json);
     let result = parse_tool_result(&json);
     assert_eq!(result["status"], "killed");
 
@@ -923,7 +936,7 @@ async fn test_mcp_tool_create_duplicate_session() {
         serde_json::json!({"name": sess_name}),
     )
     .await;
-    assert_eq!(json["result"]["isError"], false);
+    assert_not_error(&json);
 
     // Create second session with same name — should fail
     let json = call_tool(
@@ -972,7 +985,7 @@ async fn test_mcp_tool_run_command() {
         serde_json::json!({"name": sess_name}),
     )
     .await;
-    assert_eq!(json["result"]["isError"], false);
+    assert_not_error(&json);
 
     // Give the shell a moment to start
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -1028,7 +1041,7 @@ async fn test_mcp_tool_send_input_and_get_screen() {
         serde_json::json!({"name": sess_name}),
     )
     .await;
-    assert_eq!(json["result"]["isError"], false);
+    assert_not_error(&json);
 
     // Send input
     let json = call_tool(
@@ -1042,7 +1055,7 @@ async fn test_mcp_tool_send_input_and_get_screen() {
         }),
     )
     .await;
-    assert_eq!(json["result"]["isError"], false);
+    assert_not_error(&json);
     let result = parse_tool_result(&json);
     assert_eq!(result["status"], "sent");
     assert!(result["bytes"].is_number());
@@ -1066,7 +1079,7 @@ async fn test_mcp_tool_send_input_and_get_screen() {
         }),
     )
     .await;
-    assert_eq!(json["result"]["isError"], false);
+    assert_not_error(&json);
     let text = extract_tool_text(&json);
     // The response should be valid JSON (screen data)
     let screen: serde_json::Value = serde_json::from_str(text)
@@ -1101,7 +1114,7 @@ async fn test_mcp_tool_overlay_lifecycle() {
         serde_json::json!({"name": sess_name}),
     )
     .await;
-    assert_eq!(json["result"]["isError"], false);
+    assert_not_error(&json);
 
     // 1. List overlays — should be empty
     let json = call_tool(
@@ -1115,7 +1128,7 @@ async fn test_mcp_tool_overlay_lifecycle() {
         }),
     )
     .await;
-    assert_eq!(json["result"]["isError"], false);
+    assert_not_error(&json);
     let result = parse_tool_result(&json);
     let overlays = result["overlays"]
         .as_array()
@@ -1138,7 +1151,7 @@ async fn test_mcp_tool_overlay_lifecycle() {
         }),
     )
     .await;
-    assert_eq!(json["result"]["isError"], false);
+    assert_not_error(&json);
     let result = parse_tool_result(&json);
     assert_eq!(result["status"], "created");
     let overlay_id = result["id"]
@@ -1173,7 +1186,7 @@ async fn test_mcp_tool_overlay_lifecycle() {
         }),
     )
     .await;
-    assert_eq!(json["result"]["isError"], false);
+    assert_not_error(&json);
     let result = parse_tool_result(&json);
     assert_eq!(result["status"], "removed");
 
@@ -1217,7 +1230,7 @@ async fn test_mcp_tool_panel_lifecycle() {
         serde_json::json!({"name": sess_name}),
     )
     .await;
-    assert_eq!(json["result"]["isError"], false);
+    assert_not_error(&json);
 
     // 1. List panels — should be empty
     let json = call_tool(
@@ -1231,7 +1244,7 @@ async fn test_mcp_tool_panel_lifecycle() {
         }),
     )
     .await;
-    assert_eq!(json["result"]["isError"], false);
+    assert_not_error(&json);
     let result = parse_tool_result(&json);
     let panels = result["panels"]
         .as_array()
@@ -1252,7 +1265,7 @@ async fn test_mcp_tool_panel_lifecycle() {
         }),
     )
     .await;
-    assert_eq!(json["result"]["isError"], false);
+    assert_not_error(&json);
     let result = parse_tool_result(&json);
     assert_eq!(result["status"], "created");
     assert!(
@@ -1287,7 +1300,7 @@ async fn test_mcp_tool_panel_lifecycle() {
         }),
     )
     .await;
-    assert_eq!(json["result"]["isError"], false);
+    assert_not_error(&json);
     let result = parse_tool_result(&json);
     assert_eq!(result["status"], "cleared");
 
@@ -1331,7 +1344,7 @@ async fn test_mcp_tool_input_mode() {
         serde_json::json!({"name": sess_name}),
     )
     .await;
-    assert_eq!(json["result"]["isError"], false);
+    assert_not_error(&json);
 
     // 1. Query current mode — should be passthrough
     let json = call_tool(
@@ -1342,7 +1355,7 @@ async fn test_mcp_tool_input_mode() {
         serde_json::json!({"session": sess_name}),
     )
     .await;
-    assert_eq!(json["result"]["isError"], false);
+    assert_not_error(&json);
     let result = parse_tool_result(&json);
     assert_eq!(result["mode"], "passthrough");
     assert!(
@@ -1362,7 +1375,7 @@ async fn test_mcp_tool_input_mode() {
         }),
     )
     .await;
-    assert_eq!(json["result"]["isError"], false);
+    assert_not_error(&json);
     let result = parse_tool_result(&json);
     assert_eq!(result["mode"], "capture");
 
@@ -1378,7 +1391,7 @@ async fn test_mcp_tool_input_mode() {
         }),
     )
     .await;
-    assert_eq!(json["result"]["isError"], false);
+    assert_not_error(&json);
     let result = parse_tool_result(&json);
     assert_eq!(result["mode"], "passthrough");
 
@@ -1406,7 +1419,7 @@ async fn test_mcp_tool_screen_mode() {
         serde_json::json!({"name": sess_name}),
     )
     .await;
-    assert_eq!(json["result"]["isError"], false);
+    assert_not_error(&json);
 
     // 1. Query current mode — should be normal
     let json = call_tool(
@@ -1417,7 +1430,7 @@ async fn test_mcp_tool_screen_mode() {
         serde_json::json!({"session": sess_name}),
     )
     .await;
-    assert_eq!(json["result"]["isError"], false);
+    assert_not_error(&json);
     let result = parse_tool_result(&json);
     assert_eq!(result["mode"], "normal");
 
@@ -1433,7 +1446,7 @@ async fn test_mcp_tool_screen_mode() {
         }),
     )
     .await;
-    assert_eq!(json["result"]["isError"], false);
+    assert_not_error(&json);
     let result = parse_tool_result(&json);
     assert_eq!(result["mode"], "alt");
 
@@ -1449,7 +1462,7 @@ async fn test_mcp_tool_screen_mode() {
         }),
     )
     .await;
-    assert_eq!(json["result"]["isError"], false);
+    assert_not_error(&json);
     let result = parse_tool_result(&json);
     assert_eq!(result["mode"], "normal");
 
@@ -1548,7 +1561,7 @@ async fn test_http_and_mcp_coexist() {
         serde_json::json!({}),
     )
     .await;
-    assert_eq!(json["result"]["isError"], false);
+    assert_not_error(&json);
     let list: Vec<serde_json::Value> =
         serde_json::from_str(extract_tool_text(&json)).unwrap();
     assert!(
@@ -1566,7 +1579,7 @@ async fn test_http_and_mcp_coexist() {
         serde_json::json!({"name": "mcp-created"}),
     )
     .await;
-    assert_eq!(json["result"]["isError"], false);
+    assert_not_error(&json);
     let result = parse_tool_result(&json);
     assert_eq!(result["name"], "mcp-created");
 
@@ -1680,7 +1693,7 @@ async fn test_mcp_tool_manage_session_rename() {
         serde_json::json!({"name": old_name}),
     )
     .await;
-    assert_eq!(json["result"]["isError"], false);
+    assert_not_error(&json);
 
     // Rename the session
     let json = call_tool(
@@ -1695,7 +1708,7 @@ async fn test_mcp_tool_manage_session_rename() {
         }),
     )
     .await;
-    assert_eq!(json["result"]["isError"], false);
+    assert_not_error(&json);
     let result = parse_tool_result(&json);
     assert_eq!(result["status"], "renamed");
     assert_eq!(result["old_name"], old_name);
@@ -1733,4 +1746,166 @@ async fn test_mcp_tool_manage_session_rename() {
 
     // Cleanup
     cleanup_session(&client, addr, &mcp_session, new_name).await;
+}
+
+// ── Test 23: wsh_get_scrollback ──────────────────────────────────
+
+#[tokio::test]
+async fn test_mcp_tool_get_scrollback() {
+    let app = create_test_app();
+    let addr = start_test_server(app).await;
+    let client = reqwest::Client::new();
+    let mcp_session = setup_mcp_session(&client, addr).await;
+
+    let sess_name = "mcp-scrollback-test";
+
+    // Create session
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_create_session",
+        serde_json::json!({"name": sess_name}),
+    )
+    .await;
+    assert_not_error(&json);
+
+    // Give the shell a moment to start
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Get scrollback with offset and limit
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_get_scrollback",
+        serde_json::json!({
+            "session": sess_name,
+            "offset": 0,
+            "limit": 10,
+            "format": "plain",
+        }),
+    )
+    .await;
+    assert_not_error(&json);
+
+    // The result should be a valid JSON object (parser response)
+    let result = parse_tool_result(&json);
+    assert!(
+        result.is_object(),
+        "Scrollback response should be a JSON object, got: {}",
+        result
+    );
+
+    // Cleanup
+    cleanup_session(&client, addr, &mcp_session, sess_name).await;
+}
+
+// ── Test 24: wsh_await_quiesce ───────────────────────────────────
+
+#[tokio::test]
+async fn test_mcp_tool_await_quiesce() {
+    let app = create_test_app();
+    let addr = start_test_server(app).await;
+    let client = reqwest::Client::new();
+    let mcp_session = setup_mcp_session(&client, addr).await;
+
+    let sess_name = "mcp-quiesce-test";
+
+    // Create session
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_create_session",
+        serde_json::json!({"name": sess_name}),
+    )
+    .await;
+    assert_not_error(&json);
+
+    // Give the shell a moment to start and settle
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Await quiescence — a freshly created session should settle quickly
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_await_quiesce",
+        serde_json::json!({
+            "session": sess_name,
+            "timeout_ms": 500,
+            "max_wait_ms": 5000,
+        }),
+    )
+    .await;
+    assert_not_error(&json);
+
+    let result = parse_tool_result(&json);
+    assert_eq!(
+        result["status"], "quiescent",
+        "Expected status 'quiescent', got: {}",
+        result
+    );
+    assert!(
+        result["generation"].is_number(),
+        "Expected generation number in quiesce response, got: {}",
+        result
+    );
+
+    // Cleanup
+    cleanup_session(&client, addr, &mcp_session, sess_name).await;
+}
+
+// ── Test 25: wsh_send_input with base64 encoding ─────────────────
+
+#[tokio::test]
+async fn test_mcp_tool_send_input_base64() {
+    let app = create_test_app();
+    let addr = start_test_server(app).await;
+    let client = reqwest::Client::new();
+    let mcp_session = setup_mcp_session(&client, addr).await;
+
+    let sess_name = "mcp-base64-input-test";
+
+    // Create session
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_create_session",
+        serde_json::json!({"name": sess_name}),
+    )
+    .await;
+    assert_not_error(&json);
+
+    // Send base64-encoded Ctrl-C (byte 0x03 = "Aw==" in base64)
+    let json = call_tool(
+        &client,
+        addr,
+        &mcp_session,
+        "wsh_send_input",
+        serde_json::json!({
+            "session": sess_name,
+            "input": "Aw==",
+            "encoding": "base64",
+        }),
+    )
+    .await;
+    assert_not_error(&json);
+
+    let result = parse_tool_result(&json);
+    assert_eq!(
+        result["status"], "sent",
+        "Expected status 'sent', got: {}",
+        result
+    );
+    assert_eq!(
+        result["bytes"], 1,
+        "Expected exactly 1 byte sent (Ctrl-C), got: {}",
+        result["bytes"]
+    );
+
+    // Cleanup
+    cleanup_session(&client, addr, &mcp_session, sess_name).await;
 }
