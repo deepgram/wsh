@@ -109,7 +109,7 @@ Returns overlays filtered by the session's current screen mode.
 ```
 
 Note: `region_writes` is omitted when empty. `screen_mode` is omitted when
-`"normal"` (the default).
+`"normal"` (it only appears in responses for alt-mode elements).
 
 **Example:**
 

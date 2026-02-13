@@ -123,7 +123,8 @@ position then z-order descending.
 ```
 
 Note: `region_writes` is omitted when empty. `screen_mode` is omitted when
-`"normal"` (the default). `focusable` is omitted when `false`.
+`"normal"` (it only appears in responses for alt-mode elements). `focusable`
+is omitted when `false`.
 
 **Example:**
 
