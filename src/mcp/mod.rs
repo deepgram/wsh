@@ -106,6 +106,22 @@ impl ServerHandler for WshMcpServer {
     ) -> impl Future<Output = Result<ReadResourceResult, ErrorData>> + Send + '_ {
         async move { resources::read_resource(&self.state, request).await }
     }
+
+    fn list_prompts(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<ListPromptsResult, ErrorData>> + Send + '_ {
+        async { prompts::list_prompts().await }
+    }
+
+    fn get_prompt(
+        &self,
+        request: GetPromptRequestParams,
+        _: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<GetPromptResult, ErrorData>> + Send + '_ {
+        async move { prompts::get_prompt(&request.name).await }
+    }
 }
 
 #[tool_router]
