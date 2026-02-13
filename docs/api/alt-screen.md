@@ -13,7 +13,7 @@ A session is always in one of two screen modes:
 
 | Mode | Description |
 |------|-------------|
-| `normal` | Default mode. Elements created here persist normally. |
+| `normal` | Initial mode. Elements created here persist normally. |
 | `alt` | Alternate mode. Elements created here are temporary. |
 
 This is distinct from the terminal emulator's alternate screen buffer (used by
@@ -28,7 +28,7 @@ and read-only -- you cannot set it directly on creation. It is automatically
 determined by the session's current mode.
 
 The `screen_mode` field is omitted from JSON responses when the value is
-`"normal"` (the default).
+`"normal"` (it only appears for alt-mode elements).
 
 ### List Filtering
 
