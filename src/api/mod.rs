@@ -64,6 +64,8 @@ pub fn router(state: AppState, token: Option<String>) -> Router {
         .route("/input/mode", get(input_mode_get))
         .route("/input/capture", post(input_capture))
         .route("/input/release", post(input_release))
+        .route("/input/focus", get(input_focus_get).post(input_focus))
+        .route("/input/unfocus", post(input_unfocus))
         .route("/quiesce", get(quiesce))
         .route("/ws/raw", get(ws_raw))
         .route("/ws/json", get(ws_json))
@@ -82,6 +84,8 @@ pub fn router(state: AppState, token: Option<String>) -> Router {
                 .patch(overlay_patch)
                 .delete(overlay_delete),
         )
+        .route("/overlay/:id/spans", post(overlay_update_spans))
+        .route("/overlay/:id/write", post(overlay_region_write))
         .route(
             "/panel",
             get(panel_list)
@@ -94,7 +98,12 @@ pub fn router(state: AppState, token: Option<String>) -> Router {
                 .put(panel_update)
                 .patch(panel_patch)
                 .delete(panel_delete),
-        );
+        )
+        .route("/panel/:id/spans", post(panel_update_spans))
+        .route("/panel/:id/write", post(panel_region_write))
+        .route("/screen_mode", get(screen_mode_get))
+        .route("/screen_mode/enter_alt", post(enter_alt_screen))
+        .route("/screen_mode/exit_alt", post(exit_alt_screen));
 
     let session_mgmt_routes = Router::new()
         .route(
@@ -171,8 +180,10 @@ mod tests {
             input_mode: InputMode::new(),
             input_broadcaster: crate::input::InputBroadcaster::new(),
             activity: ActivityTracker::new(),
+            focus: crate::input::FocusTracker::new(),
             is_local: false,
             detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
+            screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(crate::overlay::ScreenMode::Normal)),
         };
         let registry = crate::session::SessionRegistry::new();
         registry.insert(Some("test".into()), session).unwrap();
@@ -309,6 +320,8 @@ mod tests {
         let body = serde_json::json!({
             "x": 10,
             "y": 5,
+            "width": 80,
+            "height": 1,
             "spans": [
                 { "text": "Hello" }
             ]
@@ -347,14 +360,20 @@ mod tests {
                 1,
                 2,
                 None,
+                80,
+                1,
+                None,
                 vec![crate::overlay::OverlaySpan {
                     text: "Test".to_string(),
+                    id: None,
                     fg: None,
                     bg: None,
                     bold: false,
                     italic: false,
                     underline: false,
                 }],
+                false,
+                crate::overlay::ScreenMode::Normal,
             );
         }
 
@@ -388,7 +407,7 @@ mod tests {
         // Create an overlay
         let id = {
             let session = state.sessions.get("test").unwrap();
-            session.overlays.create(0, 0, None, vec![])
+            session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Normal)
         };
 
         let app = router(state, None);
@@ -1285,5 +1304,339 @@ mod tests {
         )
         .await;
         assert!(result.is_err(), "upgraded-to-persistent server should not shutdown");
+    }
+
+    // ── Screen mode HTTP tests ──────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_screen_mode_get_default_normal() {
+        let (state, _input_rx, _name) = create_test_state();
+        let app = router(state, None);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/test/screen_mode")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["mode"], "normal");
+    }
+
+    #[tokio::test]
+    async fn test_enter_alt_screen() {
+        let (state, _input_rx, _name) = create_test_state();
+        let app = router(state, None);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/sessions/test/screen_mode/enter_alt")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+        // Verify mode is now alt
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/test/screen_mode")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["mode"], "alt");
+    }
+
+    #[tokio::test]
+    async fn test_enter_alt_screen_already_alt_returns_409() {
+        let (state, _input_rx, _name) = create_test_state();
+
+        // Pre-set to alt mode
+        {
+            let session = state.sessions.get("test").unwrap();
+            *session.screen_mode.write() = crate::overlay::ScreenMode::Alt;
+        }
+
+        let app = router(state, None);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/sessions/test/screen_mode/enter_alt")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"]["code"], "already_in_alt_screen");
+    }
+
+    #[tokio::test]
+    async fn test_exit_alt_screen() {
+        let (state, _input_rx, _name) = create_test_state();
+
+        // Pre-set to alt mode
+        {
+            let session = state.sessions.get("test").unwrap();
+            *session.screen_mode.write() = crate::overlay::ScreenMode::Alt;
+        }
+
+        let app = router(state, None);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/sessions/test/screen_mode/exit_alt")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+        // Verify mode is back to normal
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/test/screen_mode")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["mode"], "normal");
+    }
+
+    #[tokio::test]
+    async fn test_exit_alt_screen_already_normal_returns_409() {
+        let (state, _input_rx, _name) = create_test_state();
+        let app = router(state, None);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/sessions/test/screen_mode/exit_alt")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"]["code"], "not_in_alt_screen");
+    }
+
+    #[tokio::test]
+    async fn test_screen_mode_filters_overlay_list() {
+        let (state, _input_rx, _name) = create_test_state();
+
+        // Create an overlay in normal mode
+        {
+            let session = state.sessions.get("test").unwrap();
+            session.overlays.create(
+                0, 0, None, 80, 1, None,
+                vec![crate::overlay::OverlaySpan {
+                    text: "Normal overlay".to_string(),
+                    id: None, fg: None, bg: None, bold: false, italic: false, underline: false,
+                }],
+                false,
+                crate::overlay::ScreenMode::Normal,
+            );
+        }
+
+        // Create an overlay in alt mode
+        {
+            let session = state.sessions.get("test").unwrap();
+            session.overlays.create(
+                0, 0, None, 80, 1, None,
+                vec![crate::overlay::OverlaySpan {
+                    text: "Alt overlay".to_string(),
+                    id: None, fg: None, bg: None, bold: false, italic: false, underline: false,
+                }],
+                false,
+                crate::overlay::ScreenMode::Alt,
+            );
+        }
+
+        let app = router(state.clone(), None);
+
+        // In normal mode, should see 1 overlay
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/test/overlay")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json.len(), 1);
+        assert_eq!(json[0]["spans"][0]["text"], "Normal overlay");
+
+        // Switch to alt mode
+        {
+            let session = state.sessions.get("test").unwrap();
+            *session.screen_mode.write() = crate::overlay::ScreenMode::Alt;
+        }
+
+        // In alt mode, should see 1 overlay (the alt one)
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/test/overlay")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json.len(), 1);
+        assert_eq!(json[0]["spans"][0]["text"], "Alt overlay");
+    }
+
+    #[tokio::test]
+    async fn test_screen_mode_filters_panel_list() {
+        let (state, _input_rx, _name) = create_test_state();
+
+        // Create a panel in normal mode
+        {
+            let session = state.sessions.get("test").unwrap();
+            session.panels.create(
+                crate::panel::Position::Top,
+                1,
+                None,
+                None,
+                vec![crate::overlay::OverlaySpan {
+                    text: "Normal panel".to_string(),
+                    id: None, fg: None, bg: None, bold: false, italic: false, underline: false,
+                }],
+                false,
+                crate::overlay::ScreenMode::Normal,
+            );
+        }
+
+        // Create a panel in alt mode
+        {
+            let session = state.sessions.get("test").unwrap();
+            session.panels.create(
+                crate::panel::Position::Bottom,
+                1,
+                None,
+                None,
+                vec![crate::overlay::OverlaySpan {
+                    text: "Alt panel".to_string(),
+                    id: None, fg: None, bg: None, bold: false, italic: false, underline: false,
+                }],
+                false,
+                crate::overlay::ScreenMode::Alt,
+            );
+        }
+
+        let app = router(state.clone(), None);
+
+        // In normal mode, should see 1 panel
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/test/panel")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json.len(), 1);
+        assert_eq!(json[0]["spans"][0]["text"], "Normal panel");
+
+        // Switch to alt mode
+        {
+            let session = state.sessions.get("test").unwrap();
+            *session.screen_mode.write() = crate::overlay::ScreenMode::Alt;
+        }
+
+        // In alt mode, should see 1 panel (the alt one)
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/test/panel")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json.len(), 1);
+        assert_eq!(json[0]["spans"][0]["text"], "Alt panel");
     }
 }

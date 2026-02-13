@@ -16,6 +16,8 @@ pub enum InputEvent {
         mode: Mode,
         raw: Vec<u8>,
         parsed: Option<ParsedKey>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        target: Option<String>,
     },
     Mode {
         mode: Mode,
@@ -34,7 +36,7 @@ impl InputBroadcaster {
         Self { tx }
     }
 
-    pub fn broadcast_input(&self, data: &[u8], mode: Mode) {
+    pub fn broadcast_input(&self, data: &[u8], mode: Mode, target: Option<String>) {
         let parsed = parse_key(data);
         let parsed = if parsed.key.is_some() {
             Some(parsed)
@@ -45,6 +47,7 @@ impl InputBroadcaster {
             mode,
             raw: data.to_vec(),
             parsed,
+            target,
         });
     }
 
@@ -78,16 +81,17 @@ mod tests {
         let broadcaster = InputBroadcaster::new();
         let mut rx = broadcaster.subscribe();
 
-        broadcaster.broadcast_input(b"a", Mode::Passthrough);
+        broadcaster.broadcast_input(b"a", Mode::Passthrough, None);
 
         let event = rx.try_recv().unwrap();
         match event {
-            InputEvent::Input { mode, raw, parsed } => {
+            InputEvent::Input { mode, raw, parsed, target } => {
                 assert_eq!(mode, Mode::Passthrough);
                 assert_eq!(raw, vec![b'a']);
                 assert!(parsed.is_some());
                 let parsed = parsed.unwrap();
                 assert_eq!(parsed.key, Some("a".to_string()));
+                assert!(target.is_none());
             }
             _ => panic!("Expected Input event"),
         }
@@ -99,14 +103,15 @@ mod tests {
         let mut rx = broadcaster.subscribe();
 
         // Unknown sequence
-        broadcaster.broadcast_input(&[0x80, 0x81], Mode::Capture);
+        broadcaster.broadcast_input(&[0x80, 0x81], Mode::Capture, None);
 
         let event = rx.try_recv().unwrap();
         match event {
-            InputEvent::Input { mode, raw, parsed } => {
+            InputEvent::Input { mode, raw, parsed, target } => {
                 assert_eq!(mode, Mode::Capture);
                 assert_eq!(raw, vec![0x80, 0x81]);
                 assert!(parsed.is_none());
+                assert!(target.is_none());
             }
             _ => panic!("Expected Input event"),
         }
@@ -134,6 +139,7 @@ mod tests {
             mode: Mode::Passthrough,
             raw: vec![b'a'],
             parsed: Some(ParsedKey::new(Some("a".to_string()))),
+            target: None,
         };
 
         let json = serde_json::to_string(&event).unwrap();

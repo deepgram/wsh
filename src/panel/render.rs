@@ -3,7 +3,7 @@
 //! Renders panel content into specific row ranges outside the scroll region,
 //! and manages DECSTBM scroll region boundaries.
 
-use crate::overlay::{self, OverlaySpan};
+use crate::overlay::{self, OverlaySpan, RegionWrite};
 
 use super::layout::Layout;
 use super::types::Panel;
@@ -22,14 +22,29 @@ pub fn reset_scroll_region() -> &'static str {
 
 /// Render a single panel starting at `start_row` (0-indexed terminal row).
 ///
-/// For each row in the panel's height:
-/// - Positions cursor at the row
-/// - Renders span content for that row (spans are split on `\n`)
-/// - Clears remaining columns with spaces up to `terminal_cols`
+/// Rendering pipeline:
+/// 1. Fill background (if background is set) for all rows
+/// 2. Render span content for each row (spans are split on `\n`)
+/// 3. Clear remaining columns with spaces up to `terminal_cols`
+/// 4. Render region writes on top of everything
 pub fn render_panel(panel: &Panel, start_row: u16, terminal_cols: u16) -> String {
     let mut result = String::new();
 
-    // Flatten all span text into lines, preserving style info.
+    // Step 1: Fill background if set
+    if let Some(ref background) = panel.background {
+        let bg_code = render_color(&background.bg, true);
+        for row_offset in 0..panel.height {
+            let row = start_row + row_offset;
+            result.push_str(&overlay::cursor_position(row, 0));
+            result.push_str(&bg_code);
+            for _ in 0..terminal_cols {
+                result.push(' ');
+            }
+            result.push_str(overlay::reset());
+        }
+    }
+
+    // Step 2: Flatten all span text into lines, preserving style info.
     let mut text_lines: Vec<Vec<StyledSegment>> = vec![vec![]];
 
     for span in &panel.spans {
@@ -82,6 +97,16 @@ pub fn render_panel(panel: &Panel, start_row: u16, terminal_cols: u16) -> String
         }
     }
 
+    // Step 3: Render region writes
+    for write in &panel.region_writes {
+        let abs_row = start_row + write.row;
+        let abs_col = write.col;
+        result.push_str(&overlay::cursor_position(abs_row, abs_col));
+        result.push_str(&render_region_write_style(write));
+        result.push_str(&write.text);
+        result.push_str(overlay::reset());
+    }
+
     result
 }
 
@@ -109,6 +134,30 @@ fn render_span_style(span: &OverlaySpan) -> String {
         result.push_str(&render_color(fg, false));
     }
     if let Some(ref bg) = span.bg {
+        result.push_str(&render_color(bg, true));
+    }
+
+    result
+}
+
+/// Render style attributes for a region write.
+fn render_region_write_style(write: &RegionWrite) -> String {
+    let mut result = String::new();
+
+    if write.bold {
+        result.push_str("\x1b[1m");
+    }
+    if write.italic {
+        result.push_str("\x1b[3m");
+    }
+    if write.underline {
+        result.push_str("\x1b[4m");
+    }
+
+    if let Some(ref fg) = write.fg {
+        result.push_str(&render_color(fg, false));
+    }
+    if let Some(ref bg) = write.bg {
         result.push_str(&render_color(bg, true));
     }
 
@@ -203,12 +252,13 @@ pub fn erase_all_panels(layout: &Layout, terminal_cols: u16) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::overlay::{Color, NamedColor, OverlaySpan};
+    use crate::overlay::{BackgroundStyle, Color, NamedColor, OverlaySpan, RegionWrite, ScreenMode};
     use crate::panel::types::Position;
 
     fn span(text: &str) -> OverlaySpan {
         OverlaySpan {
             text: text.to_string(),
+            id: None,
             fg: None,
             bg: None,
             bold: false,
@@ -223,8 +273,12 @@ mod tests {
             position,
             height,
             z,
+            background: None,
             spans: vec![],
+            region_writes: vec![],
             visible: true,
+            focusable: false,
+            screen_mode: ScreenMode::Normal,
         }
     }
 
@@ -245,8 +299,12 @@ mod tests {
             position: Position::Bottom,
             height: 1,
             z: 0,
+            background: None,
             spans: vec![span("hello")],
+            region_writes: vec![],
             visible: true,
+            focusable: false,
+            screen_mode: ScreenMode::Normal,
         };
         let result = render_panel(&panel, 23, 10);
         // Should position at row 23, col 0 (0-indexed -> \x1b[24;1H)
@@ -263,8 +321,12 @@ mod tests {
             position: Position::Top,
             height: 2,
             z: 0,
+            background: None,
             spans: vec![span("line1\nline2")],
+            region_writes: vec![],
             visible: true,
+            focusable: false,
+            screen_mode: ScreenMode::Normal,
         };
         let result = render_panel(&panel, 0, 10);
         // Row 0: line1
@@ -282,8 +344,12 @@ mod tests {
             position: Position::Top,
             height: 3,
             z: 0,
+            background: None,
             spans: vec![span("only one line")],
+            region_writes: vec![],
             visible: true,
+            focusable: false,
+            screen_mode: ScreenMode::Normal,
         };
         let result = render_panel(&panel, 0, 20);
         // Should render content on row 0, then clear rows 1 and 2
@@ -298,15 +364,20 @@ mod tests {
             position: Position::Bottom,
             height: 1,
             z: 0,
+            background: None,
             spans: vec![OverlaySpan {
                 text: "error".to_string(),
+                id: None,
                 fg: Some(Color::Named(NamedColor::Red)),
                 bg: None,
                 bold: true,
                 italic: false,
                 underline: false,
             }],
+            region_writes: vec![],
             visible: true,
+            focusable: false,
+            screen_mode: ScreenMode::Normal,
         };
         let result = render_panel(&panel, 23, 10);
         assert!(result.contains("\x1b[1m")); // bold
@@ -346,5 +417,57 @@ mod tests {
         assert!(result.contains("\x1b[1;1H")); // row 0
         assert!(result.contains("\x1b[2;1H")); // row 1
         assert!(result.contains("\x1b[24;1H")); // row 23
+    }
+
+    // --- Tests for background fill and region writes ---
+
+    #[test]
+    fn test_render_panel_with_background() {
+        let panel = Panel {
+            id: "t".to_string(),
+            position: Position::Bottom,
+            height: 1,
+            z: 0,
+            background: Some(BackgroundStyle {
+                bg: Color::Named(NamedColor::Blue),
+            }),
+            spans: vec![span("hello")],
+            visible: true,
+            region_writes: vec![],
+            focusable: false,
+            screen_mode: ScreenMode::Normal,
+        };
+        let result = render_panel(&panel, 23, 10);
+        assert!(result.contains("\x1b[44m")); // blue bg
+    }
+
+    #[test]
+    fn test_render_panel_with_region_writes() {
+        let panel = Panel {
+            id: "t".to_string(),
+            position: Position::Bottom,
+            height: 3,
+            z: 0,
+            background: None,
+            spans: vec![],
+            visible: true,
+            region_writes: vec![RegionWrite {
+                row: 1,
+                col: 2,
+                text: "bar".to_string(),
+                fg: Some(Color::Named(NamedColor::Yellow)),
+                bg: None,
+                bold: false,
+                italic: false,
+                underline: false,
+            }],
+            focusable: false,
+            screen_mode: ScreenMode::Normal,
+        };
+        let result = render_panel(&panel, 10, 20);
+        // row=10+1=11, col=2, 1-indexed: \x1b[12;3H
+        assert!(result.contains("\x1b[12;3H"));
+        assert!(result.contains("bar"));
+        assert!(result.contains("\x1b[33m")); // yellow
     }
 }

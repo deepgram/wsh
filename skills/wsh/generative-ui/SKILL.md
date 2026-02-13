@@ -32,49 +32,60 @@ sections. A wizard that walks through multiple steps.
 Still no external programs — just wsh primitives
 orchestrated together.
 
-**Layer 3: Generated Programs**
-Write and run a small program that produces terminal
-output. A Python script that renders a table. A bash
-script that draws a chart. A small TUI application
-built with a framework. The generated program runs
-in the terminal; you read its output and interact
-with it through wsh.
+**Layer 3: Direct Drawing**
+Use overlays and panels as 2D drawing surfaces. Opaque
+overlays with explicit dimensions become windows and
+dialogs. Named spans enable surgical updates to
+individual elements. Region writes let you place text
+at specific coordinates within an overlay or panel.
+Alternate screen mode gives you a clean canvas that
+vanishes when you're done. This layer turns the wsh
+primitives into a full rendering engine — no external
+programs, no generated scripts, just direct control
+over every cell on screen.
 
 ## Choosing a Layer
 
 Start with the simplest layer that works:
 - Need to show some text? Layer 1.
 - Need interaction with multiple elements? Layer 2.
-- Need complex rendering, live data, or rich layout
-  that's awkward to build from spans? Layer 3.
+- Need windows, live-updating fields, structured
+  layouts, or a temporary full-screen UI? Layer 3.
 
 Most generative UI lives in layers 1 and 2. Layer 3
-is for when you need something the primitives can't
-do well.
+is for when you need precise control over what
+appears where, or when you want a fully immersive
+experience that cleans up after itself.
 
 ## Design Patterns
 
 ### Live Dashboard
 Combine panels with periodic updates to create a
-real-time display. Each update replaces the panel
-content:
+real-time display. Use named spans so you can update
+individual values without redrawing the whole panel:
 
-    panel (top, 3 lines), update every few seconds:
+    panel (top, 3 lines):
       "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
       " CPU: ████░░░░ 52%  │  MEM: 3.2/8G "
       " Pods: 12 ready     │  Errs: 0     "
 
-Read the data source (run a command, read a file,
-call an API), format it into spans, update the
-panel. The human sees a live-updating display without
-any dedicated monitoring tool installed.
+    named spans:
+      id="cpu"  → "████░░░░ 52%"
+      id="mem"  → "3.2/8G"
+      id="pods" → "12 ready"
+      id="errs" → "0"
+
+When new data arrives, update just the span that
+changed — e.g., update the "cpu" span to "██████░░ 75%"
+without touching anything else. No flicker, no
+redrawing borders or labels.
 
 ### Interactive Browser
 Let the human explore structured data — files,
-commits, log entries, API responses. Combine an
-overlay list with input capture:
+commits, log entries, API responses. Use an opaque
+overlay as a window:
 
-    overlay:
+    overlay (width: 40, height: 12, background: dark):
       "┌─ Recent Commits ──────────────────┐"
       "│ ▸ 81883ad docs: rewrite README    │"
       "│   8acf8d7 feat: clear screen on   │"
@@ -84,10 +95,75 @@ overlay list with input capture:
       "│   q: close                        │"
       "└───────────────────────────────────┘"
 
-On Enter, fetch the diff for the selected commit,
+The explicit width and height create an opaque
+rectangle that cleanly covers terminal content behind
+it. On Enter, fetch the diff for the selected commit,
 replace the overlay content with the diff view,
 and add a "Back" option. You're building a mini
 application from overlays and keystrokes.
+
+### Dialog Window
+Create a modal dialog using an opaque overlay.
+The background fills the rectangle, giving it a
+solid, window-like appearance:
+
+    overlay (center, width: 50, height: 8, background: dark):
+
+    region writes within the overlay:
+      (1, 2)  "Confirm Deployment"        bold
+      (3, 2)  "Environment:  production"
+      (4, 2)  "Version:      v2.4.1"
+      (5, 2)  "Containers:   12"
+      (7, 8)  "[Y]es"   green
+      (7, 20) "[N]o"    red
+
+Region writes place each piece of text at a specific
+(row, col) offset within the overlay. No need to
+construct a single spans array with exact spacing —
+just draw each element where it belongs.
+
+### Canvas Rendering
+Use region writes to build structured layouts like
+tables, grids, or charts:
+
+    overlay (width: 60, height: 15, background: dark):
+
+    # Draw headers
+    region write (0, 0):  "Service" bold
+    region write (0, 20): "Status"  bold
+    region write (0, 40): "Latency" bold
+
+    # Draw separator
+    region write (1, 0):  "─" × 60
+
+    # Draw rows
+    region write (2, 0):  "auth-service"
+    region write (2, 20): "● healthy"   green
+    region write (2, 40): "12ms"
+
+    region write (3, 0):  "api-gateway"
+    region write (3, 20): "● degraded"  yellow
+    region write (3, 40): "340ms"
+
+Each row and column is independently addressable.
+Update a single cell when data changes — no need
+to redraw the entire table.
+
+### Live-Updating Status
+Combine named spans with periodic updates for
+elements that change independently:
+
+    panel (bottom, 1 line):
+      span id="status": "● connected"  green
+      span id="sep1":   " │ "
+      span id="time":   "14:32:07"
+      span id="sep2":   " │ "
+      span id="count":  "47 events"
+
+Update the "time" span every few seconds. Update
+"count" when events arrive. Update "status" if the
+connection state changes. Each is independent — no
+need to rebuild the entire status bar.
 
 ### Wizard
 Walk the human through a multi-step process,
@@ -98,7 +174,7 @@ current step:
     panel (bottom, 1 line):
       " Step 2/4: Configure database ──────"
 
-    overlay (center):
+    overlay (center, width: 35, height: 6, background: dark):
       "┌─ Database Type ───────────────┐"
       "│   SQLite                      │"
       "│ ▸ PostgreSQL                  │"
@@ -128,77 +204,41 @@ Read the file periodically, render a simplified
 version, update the panel. The human gets live
 feedback without switching tools.
 
-## When to Generate a Program
+### Full-Screen Agent UI
+Use alternate screen mode to take over the entire
+display temporarily. Create a fully immersive
+interface, then exit cleanly:
 
-Sometimes overlays and panels aren't enough. You need
-scrolling, complex layout, rich interactivity, or live
-data streams. In these cases, write a small program,
-run it in the terminal, and interact with it via wsh.
+    enter alt screen
 
-### Good Candidates for Generation
-- **Data tables** with sorting and filtering — hard to
-  build from overlays, trivial with a script
-- **Charts and graphs** — ASCII bar charts, sparklines,
-  histograms
-- **Log viewers** with search and highlighting
-- **File browsers** with directory traversal
-- **Forms** with multiple field types (text, checkbox,
-  dropdown)
+    # Now working on a clean canvas.
+    # Create panels and overlays freely — they exist
+    # only in alt screen mode.
 
-### Keep It Simple
-Generated programs should be disposable — small,
-single-purpose, written in seconds. Don't build
-a framework. Write the minimum that solves the
-immediate need.
+    panel (top, 1 line):  "═══ Environment Setup ═══"
+    panel (bottom, 1 line): " [Tab] next  [Esc] cancel "
 
-Good choices for generation:
-- **Bash + standard tools** — printf, column, tput.
-  Available everywhere, no dependencies.
-- **Python** — rich standard library, good string
-  formatting, widely installed.
-- **Tools like `gum`, `fzf`, `dialog`** — if installed,
-  these provide polished interactive elements with
-  minimal code.
+    overlay (center, width: 60, height: 20, background: dark):
+      # Your main UI content here
 
-### Example: Quick Data Table
+    # When done:
+    exit alt screen
+    # Everything created in alt mode is automatically
+    # deleted. The human's original terminal is restored.
 
-Write a small script, run it, read the result:
-
-    # Generate and run
-    write /tmp/report.py:
-        import json, sys
-        data = json.load(open("/tmp/metrics.json"))
-        print(f"{'Service':<20} {'Status':<10} {'Latency':>8}")
-        print("─" * 40)
-        for s in data:
-            print(f"{s['name']:<20} {s['status']:<10} {s['ms']:>6}ms")
-
-    send: python3 /tmp/report.py\n
-    wait, read screen
-
-### Example: Interactive Selection with fzf
-
-If `fzf` is available, use it instead of building
-your own menu:
-
-    send: ls src/**/*.rs | fzf --preview 'head -20 {}'\n
-    # fzf enters alternate screen
-    # interact via wsh:tui patterns
-    # result is printed to stdout after selection
-
-### Clean Up After Yourself
-Delete generated scripts when done. Don't leave
-/tmp littered with one-off programs:
-
-    delete /tmp/report.py
+Alt screen mode is perfect for intensive workflows
+that need the full terminal — setup wizards,
+dashboards, configuration editors. The human's
+terminal is completely preserved underneath.
 
 ## Composition Philosophy
 
 The best generative UI combines layers fluidly. A
-dashboard panel at the bottom. An overlay menu when
-the human needs to make a choice. A generated script
-when you need rich output. Each layer serves its
-purpose, then gets out of the way.
+dashboard panel at the bottom. An overlay window when
+the human needs to make a choice. Named spans for
+live-updating values. Region writes for structured
+layouts. Alt screen mode when you need a clean slate.
+Each layer serves its purpose, then gets out of the way.
 
 ### Design Principles
 
@@ -216,6 +256,8 @@ for it.
 should be easy to dismiss and leave no trace. The
 human should never have to clean up after your
 interface. When they're done, everything disappears.
+Alt screen mode is the ultimate expression of this —
+exit and it's as if your UI never existed.
 
 **Adapt to the terminal size.** Read `cols` and `rows`
 from the screen response. A dashboard designed for
@@ -242,18 +284,19 @@ Use wsh:tui to drive existing tools when they're
 available.
 
 ### Don't Over-Engineer
-A generated script that took 30 seconds to write
-and solves the problem is better than an elegant
-TUI application that takes 10 minutes. The human
-is waiting. Bias toward quick and functional.
+A simple overlay that solves the problem in seconds
+is better than an elaborate multi-panel layout that
+takes minutes to construct. The human is waiting.
+Bias toward quick and functional.
 
 ### Don't Mix Layers Carelessly
-If you have a generated program running in alternate
-screen AND overlays displayed, the overlays will
-sit on top of the TUI. This might be useful
-(annotations on a running program) or confusing
-(two layers of UI competing for attention). Be
-deliberate about what's visible when.
+Overlays sit on top of terminal content. If you have
+multiple opaque overlays stacked, or overlays fighting
+with panels for attention, the result is confusing.
+Be deliberate about what's visible when. If you need
+a clean canvas without worrying about layering, use
+alt screen mode — it gives you a fresh surface where
+you control everything.
 
 ### Test on Small Terminals
 If you don't know the terminal size, design for 80x24

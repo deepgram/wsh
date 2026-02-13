@@ -2,7 +2,7 @@
 //!
 //! Converts overlays to ANSI escape sequences for terminal rendering.
 
-use super::types::{Color, NamedColor, Overlay, OverlaySpan};
+use super::types::{Color, NamedColor, Overlay, OverlaySpan, RegionWrite};
 
 /// Returns the ANSI escape sequence to save the cursor position.
 pub fn save_cursor() -> &'static str {
@@ -87,6 +87,30 @@ fn render_span_style(span: &OverlaySpan) -> String {
     result
 }
 
+/// Renders the style attributes for a region write as ANSI escape sequences.
+fn render_region_write_style(write: &RegionWrite) -> String {
+    let mut result = String::new();
+
+    if write.bold {
+        result.push_str("\x1b[1m");
+    }
+    if write.italic {
+        result.push_str("\x1b[3m");
+    }
+    if write.underline {
+        result.push_str("\x1b[4m");
+    }
+
+    if let Some(ref fg) = write.fg {
+        result.push_str(&render_fg_color(fg));
+    }
+    if let Some(ref bg) = write.bg {
+        result.push_str(&render_bg_color(bg));
+    }
+
+    result
+}
+
 /// Renders a slice of overlay spans to an ANSI-escaped string.
 ///
 /// Includes style codes for colors and attributes, ends with reset.
@@ -117,12 +141,28 @@ pub fn render_spans(spans: &[OverlaySpan]) -> String {
 
 /// Renders a single overlay with cursor positioning.
 ///
-/// Handles newlines by repositioning the cursor to the next row.
+/// Rendering pipeline:
+/// 1. Fill background rectangle (if background is set)
+/// 2. Render spans on top
+/// 3. Render region writes on top of everything
 pub fn render_overlay(overlay: &Overlay) -> String {
     let mut result = String::new();
-    let mut current_row = overlay.y;
 
-    // Position cursor at overlay start
+    // Step 1: Fill background rectangle if set
+    if let Some(ref background) = overlay.background {
+        let bg_code = render_bg_color(&background.bg);
+        for row_offset in 0..overlay.height {
+            result.push_str(&cursor_position(overlay.y + row_offset, overlay.x));
+            result.push_str(&bg_code);
+            for _ in 0..overlay.width {
+                result.push(' ');
+            }
+            result.push_str(reset());
+        }
+    }
+
+    // Step 2: Render spans
+    let mut current_row = overlay.y;
     result.push_str(&cursor_position(current_row, overlay.x));
 
     for span in &overlay.spans {
@@ -139,6 +179,7 @@ pub fn render_overlay(overlay: &Overlay) -> String {
             if !line.is_empty() {
                 let line_span = OverlaySpan {
                     text: line.to_string(),
+                    id: None,
                     fg: span.fg.clone(),
                     bg: span.bg.clone(),
                     bold: span.bold,
@@ -150,6 +191,16 @@ pub fn render_overlay(overlay: &Overlay) -> String {
                 result.push_str(reset());
             }
         }
+    }
+
+    // Step 3: Render region writes
+    for write in &overlay.region_writes {
+        let abs_row = overlay.y + write.row;
+        let abs_col = overlay.x + write.col;
+        result.push_str(&cursor_position(abs_row, abs_col));
+        result.push_str(&render_region_write_style(write));
+        result.push_str(&write.text);
+        result.push_str(reset());
     }
 
     result
@@ -206,13 +257,16 @@ pub fn overlay_line_extents(overlay: &Overlay) -> Vec<(u16, u16, u16)> {
 }
 
 /// Generates ANSI sequences to erase a single overlay by overwriting with spaces.
+///
+/// Uses the overlay's explicit `width` and `height` dimensions to erase the full
+/// bounding rectangle, since backgrounds and region writes can extend beyond spans.
 pub fn erase_overlay(overlay: &Overlay) -> String {
     let mut result = String::new();
-    for (row, col, width) in overlay_line_extents(overlay) {
-        result.push_str(&cursor_position(row, col));
-        for _ in 0..width {
-            result.push(' ');
-        }
+    let w = overlay.width as usize;
+    let spaces: String = " ".repeat(w);
+    for row_offset in 0..overlay.height {
+        result.push_str(&cursor_position(overlay.y + row_offset, overlay.x));
+        result.push_str(&spaces);
     }
     result
 }
@@ -251,11 +305,13 @@ pub fn render_all_overlays(overlays: &[Overlay]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::types::{BackgroundStyle, ScreenMode};
 
     #[test]
     fn test_render_plain_text() {
         let spans = vec![OverlaySpan {
             text: "Hello".to_string(),
+            id: None,
             fg: None,
             bg: None,
             bold: false,
@@ -270,6 +326,7 @@ mod tests {
     fn test_render_colored_text() {
         let spans = vec![OverlaySpan {
             text: "Error".to_string(),
+            id: None,
             fg: Some(Color::Named(NamedColor::Red)),
             bg: None,
             bold: false,
@@ -286,6 +343,7 @@ mod tests {
     fn test_render_bold_text() {
         let spans = vec![OverlaySpan {
             text: "Important".to_string(),
+            id: None,
             fg: None,
             bg: None,
             bold: true,
@@ -315,6 +373,7 @@ mod tests {
     fn test_render_rgb_color() {
         let spans = vec![OverlaySpan {
             text: "Orange".to_string(),
+            id: None,
             fg: Some(Color::Rgb {
                 r: 255,
                 g: 128,
@@ -342,14 +401,21 @@ mod tests {
             x: 10,
             y: 5,
             z: 0,
+            width: 80,
+            height: 1,
+            background: None,
             spans: vec![OverlaySpan {
                 text: "Status".to_string(),
+                id: None,
                 fg: None,
                 bg: None,
                 bold: false,
                 italic: false,
                 underline: false,
             }],
+            region_writes: vec![],
+            focusable: false,
+            screen_mode: ScreenMode::Normal,
         };
         let result = render_overlay(&overlay);
         // y=5, x=10 (0-indexed) -> row=6, col=11 (1-indexed)
@@ -364,6 +430,7 @@ mod tests {
     fn test_render_background_color() {
         let spans = vec![OverlaySpan {
             text: "Highlight".to_string(),
+            id: None,
             fg: None,
             bg: Some(Color::Named(NamedColor::Yellow)),
             bold: false,
@@ -382,6 +449,7 @@ mod tests {
     fn test_render_italic_text() {
         let spans = vec![OverlaySpan {
             text: "Emphasis".to_string(),
+            id: None,
             fg: None,
             bg: None,
             bold: false,
@@ -400,6 +468,7 @@ mod tests {
     fn test_render_underline_text() {
         let spans = vec![OverlaySpan {
             text: "Link".to_string(),
+            id: None,
             fg: None,
             bg: None,
             bold: false,
@@ -419,6 +488,7 @@ mod tests {
         let spans = vec![
             OverlaySpan {
                 text: "Normal ".to_string(),
+                id: None,
                 fg: None,
                 bg: None,
                 bold: false,
@@ -427,6 +497,7 @@ mod tests {
             },
             OverlaySpan {
                 text: "Bold".to_string(),
+                id: None,
                 fg: None,
                 bg: None,
                 bold: true,
@@ -447,14 +518,21 @@ mod tests {
             x: 0,
             y: 0,
             z: 0,
+            width: 80,
+            height: 1,
+            background: None,
             spans: vec![OverlaySpan {
                 text: "Test".to_string(),
+                id: None,
                 fg: None,
                 bg: None,
                 bold: false,
                 italic: false,
                 underline: false,
             }],
+            region_writes: vec![],
+            focusable: false,
+            screen_mode: ScreenMode::Normal,
         }];
         let result = render_all_overlays(&overlays);
         assert!(
@@ -473,6 +551,7 @@ mod tests {
     fn test_render_rgb_background() {
         let spans = vec![OverlaySpan {
             text: "Custom".to_string(),
+            id: None,
             fg: None,
             bg: Some(Color::Rgb {
                 r: 100,
@@ -495,6 +574,7 @@ mod tests {
     fn test_render_combined_attributes() {
         let spans = vec![OverlaySpan {
             text: "Fancy".to_string(),
+            id: None,
             fg: Some(Color::Named(NamedColor::Green)),
             bg: Some(Color::Named(NamedColor::Black)),
             bold: true,
@@ -531,14 +611,21 @@ mod tests {
             x: 5,
             y: 3,
             z: 0,
+            width: 80,
+            height: 1,
+            background: None,
             spans: vec![OverlaySpan {
                 text: "hello".to_string(),
+                id: None,
                 fg: None,
                 bg: None,
                 bold: false,
                 italic: false,
                 underline: false,
             }],
+            region_writes: vec![],
+            focusable: false,
+            screen_mode: ScreenMode::Normal,
         };
         let extents = overlay_line_extents(&overlay);
         assert_eq!(extents, vec![(3, 5, 5)]);
@@ -551,14 +638,21 @@ mod tests {
             x: 0,
             y: 0,
             z: 0,
+            width: 80,
+            height: 3,
+            background: None,
             spans: vec![OverlaySpan {
                 text: "ab\ncde\nf".to_string(),
+                id: None,
                 fg: None,
                 bg: None,
                 bold: false,
                 italic: false,
                 underline: false,
             }],
+            region_writes: vec![],
+            focusable: false,
+            screen_mode: ScreenMode::Normal,
         };
         let extents = overlay_line_extents(&overlay);
         assert_eq!(extents, vec![(0, 0, 2), (1, 0, 3), (2, 0, 1)]);
@@ -571,9 +665,13 @@ mod tests {
             x: 2,
             y: 1,
             z: 0,
+            width: 80,
+            height: 1,
+            background: None,
             spans: vec![
                 OverlaySpan {
                     text: "ab".to_string(),
+                    id: None,
                     fg: None,
                     bg: None,
                     bold: false,
@@ -582,6 +680,7 @@ mod tests {
                 },
                 OverlaySpan {
                     text: "cd".to_string(),
+                    id: None,
                     fg: None,
                     bg: None,
                     bold: false,
@@ -589,6 +688,9 @@ mod tests {
                     underline: false,
                 },
             ],
+            region_writes: vec![],
+            focusable: false,
+            screen_mode: ScreenMode::Normal,
         };
         let extents = overlay_line_extents(&overlay);
         // Two spans on same line: width = 2 + 2 = 4
@@ -602,9 +704,13 @@ mod tests {
             x: 0,
             y: 0,
             z: 0,
+            width: 80,
+            height: 2,
+            background: None,
             spans: vec![
                 OverlaySpan {
                     text: "ab\n".to_string(),
+                    id: None,
                     fg: None,
                     bg: None,
                     bold: false,
@@ -613,6 +719,7 @@ mod tests {
                 },
                 OverlaySpan {
                     text: "cd".to_string(),
+                    id: None,
                     fg: None,
                     bg: None,
                     bold: false,
@@ -620,6 +727,9 @@ mod tests {
                     underline: false,
                 },
             ],
+            region_writes: vec![],
+            focusable: false,
+            screen_mode: ScreenMode::Normal,
         };
         let extents = overlay_line_extents(&overlay);
         // First span: "ab\n" -> line "ab" (width 2), then newline
@@ -634,18 +744,25 @@ mod tests {
             x: 5,
             y: 3,
             z: 0,
+            width: 10,
+            height: 1,
+            background: None,
             spans: vec![OverlaySpan {
                 text: "hello".to_string(),
+                id: None,
                 fg: None,
                 bg: None,
                 bold: false,
                 italic: false,
                 underline: false,
             }],
+            region_writes: vec![],
+            focusable: false,
+            screen_mode: ScreenMode::Normal,
         };
         let result = erase_overlay(&overlay);
-        // Should position cursor at (3,5) -> \x1b[4;6H then 5 spaces
-        assert_eq!(result, "\x1b[4;6H     ");
+        // Should erase full width=10 rectangle at (3,5) -> \x1b[4;6H then 10 spaces
+        assert_eq!(result, format!("\x1b[4;6H{}", " ".repeat(10)));
     }
 
     #[test]
@@ -655,19 +772,26 @@ mod tests {
             x: 0,
             y: 0,
             z: 0,
+            width: 20,
+            height: 2,
+            background: None,
             spans: vec![OverlaySpan {
                 text: "ab\ncde".to_string(),
+                id: None,
                 fg: None,
                 bg: None,
                 bold: false,
                 italic: false,
                 underline: false,
             }],
+            region_writes: vec![],
+            focusable: false,
+            screen_mode: ScreenMode::Normal,
         };
         let result = erase_overlay(&overlay);
-        // Line 1: row 0, col 0, width 2 -> \x1b[1;1H + 2 spaces
-        // Line 2: row 1, col 0, width 3 -> \x1b[2;1H + 3 spaces
-        assert_eq!(result, "\x1b[1;1H  \x1b[2;1H   ");
+        let spaces = " ".repeat(20);
+        // Row 0 and row 1 both erased with full width=20
+        assert_eq!(result, format!("\x1b[1;1H{spaces}\x1b[2;1H{spaces}"));
     }
 
     #[test]
@@ -675,5 +799,68 @@ mod tests {
         let result = erase_all_overlays(&[]);
         // Just save + restore cursor, no erase sequences
         assert_eq!(result, "\x1b[s\x1b[u");
+    }
+
+    // --- Tests for background fill and region writes ---
+
+    #[test]
+    fn test_render_overlay_with_background_fills_rectangle() {
+        let overlay = Overlay {
+            id: "t".to_string(),
+            x: 0,
+            y: 0,
+            z: 0,
+            width: 5,
+            height: 2,
+            background: Some(BackgroundStyle {
+                bg: Color::Rgb {
+                    r: 30,
+                    g: 30,
+                    b: 30,
+                },
+            }),
+            spans: vec![],
+            region_writes: vec![],
+            focusable: false,
+            screen_mode: ScreenMode::Normal,
+        };
+        let result = render_overlay(&overlay);
+        // Should contain background color
+        assert!(result.contains("\x1b[48;2;30;30;30m"));
+        // Should position cursor for row 0 and row 1
+        assert!(result.contains("\x1b[1;1H"));
+        assert!(result.contains("\x1b[2;1H"));
+    }
+
+    #[test]
+    fn test_render_overlay_with_region_writes() {
+        let overlay = Overlay {
+            id: "t".to_string(),
+            x: 10,
+            y: 5,
+            z: 0,
+            width: 20,
+            height: 3,
+            background: None,
+            spans: vec![],
+            region_writes: vec![RegionWrite {
+                row: 1,
+                col: 5,
+                text: "hello".to_string(),
+                fg: Some(Color::Named(NamedColor::Green)),
+                bg: None,
+                bold: false,
+                italic: false,
+                underline: false,
+            }],
+            focusable: false,
+            screen_mode: ScreenMode::Normal,
+        };
+        let result = render_overlay(&overlay);
+        // Region write at (1, 5) within overlay at (10, 5)
+        // Absolute: row=5+1=6, col=10+5=15, 1-indexed: \x1b[7;16H
+        assert!(result.contains("\x1b[7;16H"));
+        assert!(result.contains("hello"));
+        assert!(result.contains("\x1b[32m")); // green fg
     }
 }

@@ -129,8 +129,9 @@ For per-session WebSocket in server mode:
 
 You can also send requests over the WebSocket instead of
 HTTP — `get_screen`, `send_input`, `capture_input`,
-`release_input`, etc. Same capabilities, persistent
-connection.
+`release_input`, `focus`, `unfocus`, `get_focus`,
+`get_screen_mode`, `enter_alt_screen`, `exit_alt_screen`,
+etc. Same capabilities, persistent connection.
 
 ## Visual Elements
 
@@ -138,18 +139,56 @@ connection.
 Floating text positioned on top of terminal content. They don't
 affect the terminal — they're a layer on top.
 
-    # Create an overlay at position (0, 0)
+    # Create an overlay at position (0, 0) with explicit size
     curl -s -X POST http://localhost:8080/overlay \
       -H "Content-Type: application/json" \
-      -d '{"x": 0, "y": 0, "spans": [{"text": "Hello!", "bold": true}]}'
+      -d '{"x": 0, "y": 0, "width": 20, "height": 1,
+           "spans": [{"text": "Hello!", "bold": true}]}'
 
     # Returns {"id": "uuid"} — use this to update or delete it
     curl -s -X DELETE http://localhost:8080/overlay/{id}
     curl -s -X DELETE http://localhost:8080/overlay          # clear all
 
+**Opaque overlays:** Add `background` to fill the rectangle with a
+solid color, making it a window-like element:
+
+    curl -s -X POST http://localhost:8080/overlay \
+      -H "Content-Type: application/json" \
+      -d '{"x": 10, "y": 5, "width": 40, "height": 10,
+           "background": {"bg": "black"},
+           "spans": [{"text": "Window content"}]}'
+
+Background accepts named colors (`"bg": "blue"`) or RGB
+(`"bg": {"r": 30, "g": 30, "b": 30}`).
+
+**Named spans:** Give spans an `id` for targeted updates:
+
+    curl -s -X POST http://localhost:8080/overlay \
+      -H "Content-Type: application/json" \
+      -d '{"x": 0, "y": 0, "width": 30, "height": 1,
+           "spans": [
+            {"id": "label", "text": "Status: ", "bold": true},
+            {"id": "value", "text": "running", "fg": "green"}
+          ]}'
+
+    # Update named spans by id (POST with array of span updates)
+    curl -s -X POST http://localhost:8080/overlay/{id}/spans \
+      -H "Content-Type: application/json" \
+      -d '{"spans": [{"id": "value", "text": "stopped", "fg": "red"}]}'
+
+**Region writes:** Place styled text at specific (row, col) offsets:
+
+    curl -s -X POST http://localhost:8080/overlay/{id}/write \
+      -H "Content-Type: application/json" \
+      -d '{"writes": [{"row": 2, "col": 5, "text": "Hello", "bold": true}]}'
+
+**Focusable:** Add `focusable: true` to allow focus routing during
+input capture (see Input Capture below).
+
 Use overlays for: tooltips, status indicators, annotations,
 notifications — anything that should appear *on top of* the
-terminal without disrupting it.
+terminal without disrupting it. With explicit dimensions: windows,
+dialogs, cards.
 
 ### Panels
 Agent-owned screen regions at the top or bottom of the terminal.
@@ -159,6 +198,30 @@ dedicated space.
     curl -s -X POST http://localhost:8080/panel \
       -H "Content-Type: application/json" \
       -d '{"position": "bottom", "height": 3, "spans": [{"text": "Status: running"}]}'
+
+**Background:** Add `background` to fill the panel with a solid color:
+
+    curl -s -X POST http://localhost:8080/panel \
+      -H "Content-Type: application/json" \
+      -d '{"position": "bottom", "height": 2,
+           "background": {"bg": "blue"},
+           "spans": [{"text": "Status: ok"}]}'
+
+**Named spans:** Same as overlays — give spans an `id` for targeted
+updates via POST with an array of span updates:
+
+    curl -s -X POST http://localhost:8080/panel/{id}/spans \
+      -H "Content-Type: application/json" \
+      -d '{"spans": [{"id": "status", "text": "3 errors", "fg": "red"}]}'
+
+**Region writes:** Place text at specific (row, col) offsets:
+
+    curl -s -X POST http://localhost:8080/panel/{id}/write \
+      -H "Content-Type: application/json" \
+      -d '{"writes": [{"row": 0, "col": 10, "text": "updated", "bold": true}]}'
+
+**Focusable:** Add `focusable: true` to allow focus routing during
+input capture.
 
 Use panels for: persistent status bars, progress displays,
 context summaries — anything that deserves its own screen
@@ -171,11 +234,43 @@ Intercept keyboard input so it comes to you instead of the shell.
     curl -s -X POST http://localhost:8080/input/release    # release back
 
 While captured, keystrokes are available via WebSocket subscription
-instead of going to the PTY. The human can always press Ctrl+\ to
-force-release.
+instead of going to the PTY. The human can press Ctrl+\ to toggle
+capture mode (it switches between passthrough and capture).
+
+**Focus routing:** Direct captured input to a specific focusable
+overlay or panel. At most one element has focus at a time.
+
+    curl -s -X POST http://localhost:8080/input/focus \
+      -H "Content-Type: application/json" \
+      -d '{"id": "overlay-uuid"}'
+
+    curl -s http://localhost:8080/input/focus               # get current focus
+    curl -s -X POST http://localhost:8080/input/unfocus     # clear focus
+
+Focus is automatically cleared when input is released or when the
+focused element is deleted.
 
 Use input capture for: approval prompts, custom menus, interactive
 dialogs between you and the human.
+
+### Alternate Screen Mode
+Enter a separate screen mode where you can create a completely
+independent set of overlays and panels. Exiting cleans up everything
+automatically.
+
+    curl -s http://localhost:8080/screen_mode                  # get current mode
+    curl -s -X POST http://localhost:8080/screen_mode/enter_alt  # enter alt screen
+    curl -s -X POST http://localhost:8080/screen_mode/exit_alt   # exit alt screen
+
+Overlays and panels are automatically tagged with the screen mode
+active at the time of creation. List endpoints return only elements
+belonging to the current mode. When you exit alt screen, all elements
+created in alt mode are deleted and the original screen's elements
+are restored.
+
+Use alt screen mode for: temporary full-screen agent UIs, setup
+wizards, immersive dashboards — anything that needs a clean canvas
+and should leave no trace when done.
 
 ## Server Mode
 
@@ -272,5 +367,5 @@ dialogs.
 
 **wsh:generative-ui** — You need to build a dynamic interactive
 experience in the terminal. Combining overlays, panels, input
-capture, and potentially generated programs to create bespoke
-interfaces on the fly.
+capture, direct drawing, and alternate screen mode to create
+bespoke interfaces on the fly.

@@ -25,6 +25,8 @@ async fn test_overlay_crud_flow() {
     let create_body = serde_json::json!({
         "x": 10,
         "y": 5,
+        "width": 80,
+        "height": 1,
         "spans": [
             {
                 "text": "Hello World",
@@ -170,6 +172,8 @@ async fn test_overlay_list_and_clear() {
     let create_body1 = serde_json::json!({
         "x": 0,
         "y": 0,
+        "width": 80,
+        "height": 1,
         "spans": [{ "text": "Overlay 1" }]
     });
 
@@ -190,6 +194,8 @@ async fn test_overlay_list_and_clear() {
     let create_body2 = serde_json::json!({
         "x": 10,
         "y": 10,
+        "width": 80,
+        "height": 1,
         "spans": [{ "text": "Overlay 2" }]
     });
 
@@ -272,6 +278,8 @@ async fn test_overlay_patch_position() {
         "x": 5,
         "y": 10,
         "z": 1,
+        "width": 80,
+        "height": 1,
         "spans": [{ "text": "Test" }]
     });
 
@@ -390,4 +398,243 @@ async fn test_overlay_not_found() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_overlay_create_with_background() {
+    let (state, _, _) = common::create_test_state();
+    let app = router(state, None);
+
+    // Create overlay with an opaque background
+    let create_body = serde_json::json!({
+        "x": 5,
+        "y": 3,
+        "width": 40,
+        "height": 5,
+        "background": { "bg": "blue" },
+        "spans": [
+            { "text": "With background" }
+        ]
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/sessions/test/overlay")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&create_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let overlay_id = json["id"].as_str().unwrap().to_string();
+
+    // Verify background is present in GET response
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/sessions/test/overlay/{}", overlay_id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["background"]["bg"], "blue");
+    assert_eq!(json["width"], 40);
+    assert_eq!(json["height"], 5);
+    assert_eq!(json["spans"][0]["text"], "With background");
+}
+
+#[tokio::test]
+async fn test_overlay_named_span_update() {
+    let (state, _, _) = common::create_test_state();
+    let app = router(state, None);
+
+    // Create overlay with named spans
+    let create_body = serde_json::json!({
+        "x": 0,
+        "y": 0,
+        "width": 80,
+        "height": 1,
+        "spans": [
+            { "id": "label", "text": "Progress: ", "bold": true },
+            { "id": "value", "text": "0%", "fg": "yellow" }
+        ]
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/sessions/test/overlay")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&create_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let overlay_id = json["id"].as_str().unwrap().to_string();
+
+    // Update only the "value" span via POST /overlay/:id/spans
+    let update_body = serde_json::json!({
+        "spans": [
+            { "id": "value", "text": "75%", "fg": "green", "bold": true }
+        ]
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/sessions/test/overlay/{}/spans", overlay_id))
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&update_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    // Verify the "value" span was updated and "label" is unchanged
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/sessions/test/overlay/{}", overlay_id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    // Label span should be unchanged
+    assert_eq!(json["spans"][0]["id"], "label");
+    assert_eq!(json["spans"][0]["text"], "Progress: ");
+    assert_eq!(json["spans"][0]["bold"], true);
+
+    // Value span should be updated
+    assert_eq!(json["spans"][1]["id"], "value");
+    assert_eq!(json["spans"][1]["text"], "75%");
+    assert_eq!(json["spans"][1]["fg"], "green");
+    assert_eq!(json["spans"][1]["bold"], true);
+}
+
+#[tokio::test]
+async fn test_overlay_region_write() {
+    let (state, _, _) = common::create_test_state();
+    let app = router(state, None);
+
+    // Create overlay with enough height for region writes
+    let create_body = serde_json::json!({
+        "x": 0,
+        "y": 0,
+        "width": 40,
+        "height": 10,
+        "spans": []
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/sessions/test/overlay")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&create_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let overlay_id = json["id"].as_str().unwrap().to_string();
+
+    // POST region writes
+    let write_body = serde_json::json!({
+        "writes": [
+            { "row": 0, "col": 5, "text": "Title", "fg": "cyan", "bold": true },
+            { "row": 2, "col": 0, "text": "Line 2 content" }
+        ]
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/sessions/test/overlay/{}/write", overlay_id))
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&write_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    // Verify region writes via GET
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/sessions/test/overlay/{}", overlay_id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    let writes = json["region_writes"].as_array().unwrap();
+    assert_eq!(writes.len(), 2);
+    assert_eq!(writes[0]["row"], 0);
+    assert_eq!(writes[0]["col"], 5);
+    assert_eq!(writes[0]["text"], "Title");
+    assert_eq!(writes[0]["fg"], "cyan");
+    assert_eq!(writes[0]["bold"], true);
+    assert_eq!(writes[1]["row"], 2);
+    assert_eq!(writes[1]["col"], 0);
+    assert_eq!(writes[1]["text"], "Line 2 content");
 }

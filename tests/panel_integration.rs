@@ -525,3 +525,211 @@ async fn test_multiple_panels_cumulative_height() {
         assert_eq!(panel["visible"], true);
     }
 }
+
+#[tokio::test]
+async fn test_panel_create_with_background() {
+    let state = create_test_state();
+    let app = router(state, None);
+
+    // Create panel with a background
+    let create_body = serde_json::json!({
+        "position": "top",
+        "height": 2,
+        "background": { "bg": "magenta" },
+        "spans": [
+            { "text": "Status bar" }
+        ]
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/sessions/test/panel")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&create_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let json = json_body(response).await;
+    let panel_id = json["id"].as_str().unwrap().to_string();
+
+    // Verify background in GET response
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/sessions/test/panel/{}", panel_id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = json_body(response).await;
+    assert_eq!(json["background"]["bg"], "magenta");
+    assert_eq!(json["height"], 2);
+    assert_eq!(json["spans"][0]["text"], "Status bar");
+}
+
+#[tokio::test]
+async fn test_panel_named_span_update() {
+    let state = create_test_state();
+    let app = router(state, None);
+
+    // Create panel with named spans
+    let create_body = serde_json::json!({
+        "position": "bottom",
+        "height": 1,
+        "spans": [
+            { "id": "label", "text": "CPU: ", "bold": true },
+            { "id": "value", "text": "12%", "fg": "green" }
+        ]
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/sessions/test/panel")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&create_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let json = json_body(response).await;
+    let panel_id = json["id"].as_str().unwrap().to_string();
+
+    // Update only the "value" span via POST /panel/:id/spans
+    let update_body = serde_json::json!({
+        "spans": [
+            { "id": "value", "text": "89%", "fg": "red", "bold": true }
+        ]
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/sessions/test/panel/{}/spans", panel_id))
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&update_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    // Verify the "value" span was updated and "label" is unchanged
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/sessions/test/panel/{}", panel_id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = json_body(response).await;
+
+    // Label span should be unchanged
+    assert_eq!(json["spans"][0]["id"], "label");
+    assert_eq!(json["spans"][0]["text"], "CPU: ");
+    assert_eq!(json["spans"][0]["bold"], true);
+
+    // Value span should be updated
+    assert_eq!(json["spans"][1]["id"], "value");
+    assert_eq!(json["spans"][1]["text"], "89%");
+    assert_eq!(json["spans"][1]["fg"], "red");
+    assert_eq!(json["spans"][1]["bold"], true);
+}
+
+#[tokio::test]
+async fn test_panel_region_write() {
+    let state = create_test_state();
+    let app = router(state, None);
+
+    // Create panel with enough height for region writes
+    let create_body = serde_json::json!({
+        "position": "bottom",
+        "height": 5,
+        "spans": []
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/sessions/test/panel")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&create_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let json = json_body(response).await;
+    let panel_id = json["id"].as_str().unwrap().to_string();
+
+    // POST region writes
+    let write_body = serde_json::json!({
+        "writes": [
+            { "row": 0, "col": 0, "text": "Row 0", "fg": "yellow" },
+            { "row": 3, "col": 10, "text": "Row 3", "bold": true }
+        ]
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/sessions/test/panel/{}/write", panel_id))
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&write_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    // Verify region writes via GET
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/sessions/test/panel/{}", panel_id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = json_body(response).await;
+
+    let writes = json["region_writes"].as_array().unwrap();
+    assert_eq!(writes.len(), 2);
+    assert_eq!(writes[0]["row"], 0);
+    assert_eq!(writes[0]["col"], 0);
+    assert_eq!(writes[0]["text"], "Row 0");
+    assert_eq!(writes[0]["fg"], "yellow");
+    assert_eq!(writes[1]["row"], 3);
+    assert_eq!(writes[1]["col"], 10);
+    assert_eq!(writes[1]["text"], "Row 3");
+    assert_eq!(writes[1]["bold"], true);
+}

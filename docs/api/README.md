@@ -34,6 +34,8 @@ compatibility.
 | `PUT` | `/sessions/:name/overlay/:id` | Replace overlay spans |
 | `PATCH` | `/sessions/:name/overlay/:id` | Move/reorder an overlay |
 | `DELETE` | `/sessions/:name/overlay/:id` | Delete an overlay |
+| `POST` | `/sessions/:name/overlay/:id/spans` | Partial span update by ID |
+| `POST` | `/sessions/:name/overlay/:id/write` | Region write (cell-level drawing) |
 | `POST` | `/sessions/:name/panel` | Create a panel |
 | `GET` | `/sessions/:name/panel` | List all panels |
 | `DELETE` | `/sessions/:name/panel` | Clear all panels |
@@ -41,9 +43,17 @@ compatibility.
 | `PUT` | `/sessions/:name/panel/:id` | Replace a panel |
 | `PATCH` | `/sessions/:name/panel/:id` | Partially update a panel |
 | `DELETE` | `/sessions/:name/panel/:id` | Delete a panel |
+| `POST` | `/sessions/:name/panel/:id/spans` | Partial span update by ID |
+| `POST` | `/sessions/:name/panel/:id/write` | Region write (cell-level drawing) |
 | `GET` | `/sessions/:name/input/mode` | Get current input mode |
 | `POST` | `/sessions/:name/input/capture` | Switch to capture mode |
 | `POST` | `/sessions/:name/input/release` | Switch to passthrough mode |
+| `GET` | `/sessions/:name/input/focus` | Get current input focus |
+| `POST` | `/sessions/:name/input/focus` | Set input focus to an element |
+| `POST` | `/sessions/:name/input/unfocus` | Clear input focus |
+| `GET` | `/sessions/:name/screen_mode` | Get current screen mode |
+| `POST` | `/sessions/:name/screen_mode/enter_alt` | Enter alternate screen mode |
+| `POST` | `/sessions/:name/screen_mode/exit_alt` | Exit alternate screen mode |
 | `GET` | `/sessions/:name/quiesce` | Wait for terminal quiescence |
 | `POST` | `/sessions/:name/detach` | Detach all clients from the session |
 
@@ -320,6 +330,7 @@ See [input-capture.md](input-capture.md) for the full input capture documentatio
 
 Input capture lets API clients intercept keyboard input before it reaches the
 terminal's PTY. Useful for building custom key handlers and agent interactions.
+Includes focus tracking for directing input to specific overlays or panels.
 
 ## Quiescence Sync
 
@@ -927,6 +938,14 @@ All errors return JSON with a consistent structure:
 }
 ```
 
+## Alternate Screen Mode
+
+See [alt-screen.md](alt-screen.md) for full alternate screen mode documentation.
+
+Alternate screen mode lets agents create temporary UI contexts. Overlays and
+panels created in alt mode are isolated from normal-mode elements and are
+automatically cleaned up when exiting alt screen.
+
 ## Related Documents
 
 - [authentication.md](authentication.md) -- Auth model and token configuration
@@ -934,5 +953,6 @@ All errors return JSON with a consistent structure:
 - [errors.md](errors.md) -- Error code reference
 - [overlays.md](overlays.md) -- Overlay system
 - [panels.md](panels.md) -- Panel system
-- [input-capture.md](input-capture.md) -- Input capture mode
+- [input-capture.md](input-capture.md) -- Input capture and focus tracking
+- [alt-screen.md](alt-screen.md) -- Alternate screen mode
 - [openapi.yaml](openapi.yaml) -- Machine-readable OpenAPI 3.1 spec

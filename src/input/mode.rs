@@ -55,6 +55,19 @@ impl InputMode {
         *self.inner.write().unwrap() = Mode::Passthrough;
     }
 
+    /// Toggles the mode: Passthrough → Capture, Capture → Passthrough.
+    ///
+    /// Returns the new mode after toggling.
+    pub fn toggle(&self) -> Mode {
+        let mut guard = self.inner.write().unwrap();
+        let new_mode = match *guard {
+            Mode::Passthrough => Mode::Capture,
+            Mode::Capture => Mode::Passthrough,
+        };
+        *guard = new_mode;
+        new_mode
+    }
+
     /// Returns true if the current mode is Capture.
     pub fn is_capture(&self) -> bool {
         self.get() == Mode::Capture
@@ -90,6 +103,20 @@ mod tests {
         input_mode.capture();
         assert_eq!(input_mode.get(), Mode::Capture);
         input_mode.release();
+        assert_eq!(input_mode.get(), Mode::Passthrough);
+    }
+
+    #[test]
+    fn test_toggle() {
+        let input_mode = InputMode::new();
+        assert_eq!(input_mode.get(), Mode::Passthrough);
+
+        let new_mode = input_mode.toggle();
+        assert_eq!(new_mode, Mode::Capture);
+        assert_eq!(input_mode.get(), Mode::Capture);
+
+        let new_mode = input_mode.toggle();
+        assert_eq!(new_mode, Mode::Passthrough);
         assert_eq!(input_mode.get(), Mode::Passthrough);
     }
 

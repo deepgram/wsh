@@ -18,7 +18,7 @@ use tokio::sync::broadcast;
 use std::io::Write;
 
 use crate::input::Mode;
-use crate::overlay::{self, Overlay, OverlaySpan};
+use crate::overlay::{self, BackgroundStyle, Overlay, OverlaySpan, RegionWrite};
 use crate::panel::{self, Panel, Position};
 use crate::parser::{
     events::EventType,
@@ -1397,7 +1397,13 @@ pub(super) struct CreateOverlayRequest {
     x: u16,
     y: u16,
     z: Option<i32>,
+    width: u16,
+    height: u16,
+    #[serde(default)]
+    background: Option<BackgroundStyle>,
     spans: Vec<OverlaySpan>,
+    #[serde(default)]
+    focusable: bool,
 }
 
 #[derive(Serialize)]
@@ -1415,6 +1421,20 @@ pub(super) struct PatchOverlayRequest {
     x: Option<u16>,
     y: Option<u16>,
     z: Option<i32>,
+    width: Option<u16>,
+    height: Option<u16>,
+    #[serde(default)]
+    background: Option<BackgroundStyle>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct UpdateSpansRequest {
+    spans: Vec<OverlaySpan>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct RegionWriteRequest {
+    writes: Vec<RegionWrite>,
 }
 
 // Overlay handlers
@@ -1424,7 +1444,8 @@ pub(super) async fn overlay_create(
     Json(req): Json<CreateOverlayRequest>,
 ) -> Result<(StatusCode, Json<CreateOverlayResponse>), ApiError> {
     let session = get_session(&state.sessions, &name)?;
-    let id = session.overlays.create(req.x, req.y, req.z, req.spans);
+    let current_mode = *session.screen_mode.read();
+    let id = session.overlays.create(req.x, req.y, req.z, req.width, req.height, req.background, req.spans, req.focusable, current_mode);
     if session.is_local {
         let all = session.overlays.list();
         flush_overlays_to_stdout(&[], &all);
@@ -1437,7 +1458,8 @@ pub(super) async fn overlay_list(
     Path(name): Path<String>,
 ) -> Result<Json<Vec<Overlay>>, ApiError> {
     let session = get_session(&state.sessions, &name)?;
-    Ok(Json(session.overlays.list()))
+    let mode = *session.screen_mode.read();
+    Ok(Json(session.overlays.list_by_mode(mode)))
 }
 
 pub(super) async fn overlay_get(
@@ -1483,7 +1505,7 @@ pub(super) async fn overlay_patch(
         .overlays
         .get(&id)
         .ok_or_else(|| ApiError::OverlayNotFound(id.clone()))?;
-    if session.overlays.move_to(&id, req.x, req.y, req.z) {
+    if session.overlays.move_to(&id, req.x, req.y, req.z, req.width, req.height, req.background) {
         if session.is_local {
             let all = session.overlays.list();
             flush_overlays_to_stdout(&[old], &all);
@@ -1504,6 +1526,7 @@ pub(super) async fn overlay_delete(
         .get(&id)
         .ok_or_else(|| ApiError::OverlayNotFound(id.clone()))?;
     if session.overlays.delete(&id) {
+        session.focus.clear_if_focused(&id);
         if session.is_local {
             let remaining = session.overlays.list();
             flush_overlays_to_stdout(&[old], &remaining);
@@ -1521,10 +1544,53 @@ pub(super) async fn overlay_clear(
     let session = get_session(&state.sessions, &name)?;
     let old_list = session.overlays.list();
     session.overlays.clear();
+    session.focus.unfocus();
     if session.is_local {
         flush_overlays_to_stdout(&old_list, &[]);
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn overlay_update_spans(
+    State(state): State<AppState>,
+    Path((name, id)): Path<(String, String)>,
+    Json(req): Json<UpdateSpansRequest>,
+) -> Result<StatusCode, ApiError> {
+    let session = get_session(&state.sessions, &name)?;
+    let old = session
+        .overlays
+        .get(&id)
+        .ok_or_else(|| ApiError::OverlayNotFound(id.clone()))?;
+    if session.overlays.update_spans(&id, &req.spans) {
+        if session.is_local {
+            let all = session.overlays.list();
+            flush_overlays_to_stdout(&[old], &all);
+        }
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::OverlayNotFound(id))
+    }
+}
+
+pub(super) async fn overlay_region_write(
+    State(state): State<AppState>,
+    Path((name, id)): Path<(String, String)>,
+    Json(req): Json<RegionWriteRequest>,
+) -> Result<StatusCode, ApiError> {
+    let session = get_session(&state.sessions, &name)?;
+    let old = session
+        .overlays
+        .get(&id)
+        .ok_or_else(|| ApiError::OverlayNotFound(id.clone()))?;
+    if session.overlays.region_write(&id, req.writes) {
+        if session.is_local {
+            let all = session.overlays.list();
+            flush_overlays_to_stdout(&[old], &all);
+        }
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::OverlayNotFound(id))
+    }
 }
 
 // Panel request/response types
@@ -1535,7 +1601,11 @@ pub(super) struct CreatePanelRequest {
     height: u16,
     z: Option<i32>,
     #[serde(default)]
+    background: Option<BackgroundStyle>,
+    #[serde(default)]
     spans: Vec<OverlaySpan>,
+    #[serde(default)]
+    focusable: bool,
 }
 
 #[derive(Serialize)]
@@ -1556,6 +1626,8 @@ pub(super) struct PatchPanelRequest {
     position: Option<Position>,
     height: Option<u16>,
     z: Option<i32>,
+    #[serde(default)]
+    background: Option<BackgroundStyle>,
     spans: Option<Vec<OverlaySpan>>,
 }
 
@@ -1567,9 +1639,10 @@ pub(super) async fn panel_create(
     Json(req): Json<CreatePanelRequest>,
 ) -> Result<(StatusCode, Json<CreatePanelResponse>), ApiError> {
     let session = get_session(&state.sessions, &name)?;
+    let current_mode = *session.screen_mode.read();
     let id = session
         .panels
-        .create(req.position, req.height, req.z, req.spans);
+        .create(req.position, req.height, req.z, req.background, req.spans, req.focusable, current_mode);
     panel::reconfigure_layout(&session.panels, &session.terminal_size, &session.pty, &session.parser)
         .await;
     Ok((StatusCode::CREATED, Json(CreatePanelResponse { id })))
@@ -1580,7 +1653,8 @@ pub(super) async fn panel_list(
     Path(name): Path<String>,
 ) -> Result<Json<Vec<Panel>>, ApiError> {
     let session = get_session(&state.sessions, &name)?;
-    Ok(Json(session.panels.list()))
+    let mode = *session.screen_mode.read();
+    Ok(Json(session.panels.list_by_mode(mode)))
 }
 
 pub(super) async fn panel_get(
@@ -1609,7 +1683,7 @@ pub(super) async fn panel_update(
     // Full replace: update all fields via patch
     if !session
         .panels
-        .patch(&id, Some(req.position.clone()), Some(req.height), Some(req.z), Some(req.spans))
+        .patch(&id, Some(req.position.clone()), Some(req.height), Some(req.z), None, Some(req.spans))
     {
         return Err(ApiError::PanelNotFound(id));
     }
@@ -1641,7 +1715,7 @@ pub(super) async fn panel_patch(
 
     if !session
         .panels
-        .patch(&id, req.position.clone(), req.height, req.z, req.spans.clone())
+        .patch(&id, req.position.clone(), req.height, req.z, req.background, req.spans.clone())
     {
         return Err(ApiError::PanelNotFound(id));
     }
@@ -1669,6 +1743,7 @@ pub(super) async fn panel_delete(
     if !session.panels.delete(&id) {
         return Err(ApiError::PanelNotFound(id));
     }
+    session.focus.clear_if_focused(&id);
     panel::reconfigure_layout(&session.panels, &session.terminal_size, &session.pty, &session.parser)
         .await;
     Ok(StatusCode::NO_CONTENT)
@@ -1680,9 +1755,38 @@ pub(super) async fn panel_clear(
 ) -> Result<StatusCode, ApiError> {
     let session = get_session(&state.sessions, &name)?;
     session.panels.clear();
+    session.focus.unfocus();
     panel::reconfigure_layout(&session.panels, &session.terminal_size, &session.pty, &session.parser)
         .await;
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn panel_update_spans(
+    State(state): State<AppState>,
+    Path((name, id)): Path<(String, String)>,
+    Json(req): Json<UpdateSpansRequest>,
+) -> Result<StatusCode, ApiError> {
+    let session = get_session(&state.sessions, &name)?;
+    if session.panels.update_spans(&id, &req.spans) {
+        panel::flush_panel_content(&session.panels, &id, &session.terminal_size);
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::PanelNotFound(id))
+    }
+}
+
+pub(super) async fn panel_region_write(
+    State(state): State<AppState>,
+    Path((name, id)): Path<(String, String)>,
+    Json(req): Json<RegionWriteRequest>,
+) -> Result<StatusCode, ApiError> {
+    let session = get_session(&state.sessions, &name)?;
+    if session.panels.region_write(&id, req.writes) {
+        panel::flush_panel_content(&session.panels, &id, &session.terminal_size);
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::PanelNotFound(id))
+    }
 }
 
 // Input mode response type
@@ -1717,7 +1821,64 @@ pub(super) async fn input_release(
 ) -> Result<StatusCode, ApiError> {
     let session = get_session(&state.sessions, &name)?;
     session.input_mode.release();
+    session.focus.unfocus();
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+pub(super) struct FocusRequest {
+    pub id: String,
+}
+
+#[derive(Serialize)]
+pub(super) struct FocusResponse {
+    pub focused: Option<String>,
+}
+
+pub(super) async fn input_focus(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(req): Json<FocusRequest>,
+) -> Result<StatusCode, ApiError> {
+    let session = get_session(&state.sessions, &name)?;
+
+    // Check if the target is a focusable overlay or panel
+    let is_focusable = if let Some(overlay) = session.overlays.get(&req.id) {
+        overlay.focusable
+    } else if let Some(panel) = session.panels.get(&req.id) {
+        panel.focusable
+    } else {
+        return Err(ApiError::InvalidRequest(format!(
+            "no overlay or panel with id '{}'",
+            req.id
+        )));
+    };
+
+    if !is_focusable {
+        return Err(ApiError::NotFocusable(req.id));
+    }
+
+    session.focus.focus(req.id);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn input_unfocus(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let session = get_session(&state.sessions, &name)?;
+    session.focus.unfocus();
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn input_focus_get(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<FocusResponse>, ApiError> {
+    let session = get_session(&state.sessions, &name)?;
+    Ok(Json(FocusResponse {
+        focused: session.focus.focused(),
+    }))
 }
 
 pub(super) async fn openapi_spec() -> impl IntoResponse {
@@ -1853,6 +2014,61 @@ pub(super) async fn session_detach(
         .get(&name)
         .ok_or_else(|| ApiError::SessionNotFound(name))?;
     session.detach();
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ── Screen mode handlers ──────────────────────────────────────
+
+#[derive(Serialize)]
+pub(super) struct ScreenModeResponse {
+    pub mode: crate::overlay::ScreenMode,
+}
+
+pub(super) async fn screen_mode_get(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<ScreenModeResponse>, ApiError> {
+    let session = get_session(&state.sessions, &name)?;
+    let mode = *session.screen_mode.read();
+    Ok(Json(ScreenModeResponse { mode }))
+}
+
+pub(super) async fn enter_alt_screen(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let session = get_session(&state.sessions, &name)?;
+    let mut mode = session.screen_mode.write();
+    if *mode == crate::overlay::ScreenMode::Alt {
+        return Err(ApiError::AlreadyInAltScreen);
+    }
+    *mode = crate::overlay::ScreenMode::Alt;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn exit_alt_screen(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let session = get_session(&state.sessions, &name)?;
+    {
+        let mut mode = session.screen_mode.write();
+        if *mode == crate::overlay::ScreenMode::Normal {
+            return Err(ApiError::NotInAltScreen);
+        }
+        *mode = crate::overlay::ScreenMode::Normal;
+    }
+    // Delete all alt-mode overlays and panels
+    session.overlays.delete_by_mode(crate::overlay::ScreenMode::Alt);
+    session.panels.delete_by_mode(crate::overlay::ScreenMode::Alt);
+    // Reconfigure panel layout to restore normal-mode panels
+    panel::reconfigure_layout(
+        &session.panels,
+        &session.terminal_size,
+        &session.pty,
+        &session.parser,
+    )
+    .await;
     Ok(StatusCode::NO_CONTENT)
 }
 

@@ -20,7 +20,7 @@ pub struct Layout {
 }
 
 /// Minimum number of rows reserved for the PTY viewport.
-const MIN_PTY_ROWS: u16 = 1;
+const MIN_PTY_ROWS: u16 = 0;
 
 /// Compute the screen layout given all panels and the terminal dimensions.
 ///
@@ -104,7 +104,7 @@ pub fn compute_layout(panels: &[Panel], terminal_rows: u16, terminal_cols: u16) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::overlay::OverlaySpan;
+    use crate::overlay::{OverlaySpan, ScreenMode};
 
     fn make_panel(id: &str, position: Position, height: u16, z: i32) -> Panel {
         Panel {
@@ -112,14 +112,19 @@ mod tests {
             position,
             height,
             z,
+            background: None,
             spans: vec![],
+            region_writes: vec![],
             visible: true,
+            focusable: false,
+            screen_mode: ScreenMode::Normal,
         }
     }
 
     fn span(text: &str) -> OverlaySpan {
         OverlaySpan {
             text: text.to_string(),
+            id: None,
             fg: None,
             bg: None,
             bold: false,
@@ -205,13 +210,13 @@ mod tests {
     }
 
     #[test]
-    fn test_terminal_one_row_no_panels_possible() {
+    fn test_terminal_one_row_panels_consume_all() {
         let panels = vec![make_panel("a", Position::Top, 1, 0)];
         let layout = compute_layout(&panels, 1, 80);
-        // Can't fit any panel -- need at least 1 PTY row
-        assert_eq!(layout.pty_rows, 1);
-        assert!(layout.top_panels.is_empty());
-        assert_eq!(layout.hidden_panels, vec!["a"]);
+        // With MIN_PTY_ROWS=0, the panel can consume the last row
+        assert_eq!(layout.pty_rows, 0);
+        assert_eq!(layout.top_panels.len(), 1);
+        assert!(layout.hidden_panels.is_empty());
     }
 
     #[test]
@@ -262,14 +267,26 @@ mod tests {
     }
 
     #[test]
+    fn test_panels_can_consume_all_rows() {
+        let panels = vec![make_panel("a", Position::Top, 24, 0)];
+        let layout = compute_layout(&panels, 24, 80);
+        assert_eq!(layout.pty_rows, 0);
+        assert!(layout.hidden_panels.is_empty());
+    }
+
+    #[test]
     fn test_panel_with_spans() {
         let panels = vec![Panel {
             id: "s".to_string(),
             position: Position::Bottom,
             height: 1,
             z: 0,
+            background: None,
             spans: vec![span("hello")],
+            region_writes: vec![],
             visible: true,
+            focusable: false,
+            screen_mode: ScreenMode::Normal,
         }];
         let layout = compute_layout(&panels, 24, 80);
         assert_eq!(layout.bottom_panels[0].spans[0].text, "hello");

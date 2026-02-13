@@ -275,3 +275,398 @@ async fn test_input_mode_state_shared_across_requests() {
         assert_eq!(json["mode"], "capture", "mode should persist across requests");
     }
 }
+
+#[tokio::test]
+async fn test_focus_and_unfocus_flow() {
+    let (state, _, _) = common::create_test_state();
+    let app = router(state, None);
+
+    // Create a focusable overlay
+    let create_body = serde_json::json!({
+        "x": 0,
+        "y": 0,
+        "width": 40,
+        "height": 5,
+        "focusable": true,
+        "spans": [{ "text": "Focusable overlay" }]
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/sessions/test/overlay")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&create_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let overlay_id = json["id"].as_str().unwrap().to_string();
+
+    // Verify no focus initially
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/sessions/test/input/focus")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(json["focused"].is_null(), "initially no focus");
+
+    // Focus the overlay
+    let focus_body = serde_json::json!({ "id": overlay_id });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/sessions/test/input/focus")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&focus_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    // Verify focus is set
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/sessions/test/input/focus")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["focused"], overlay_id);
+
+    // Unfocus
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/sessions/test/input/unfocus")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    // Verify focus is cleared
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/sessions/test/input/focus")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(json["focused"].is_null(), "focus should be cleared after unfocus");
+}
+
+#[tokio::test]
+async fn test_focus_cleared_on_input_release() {
+    let (state, _, _) = common::create_test_state();
+    let app = router(state, None);
+
+    // Create a focusable overlay
+    let create_body = serde_json::json!({
+        "x": 0,
+        "y": 0,
+        "width": 40,
+        "height": 5,
+        "focusable": true,
+        "spans": [{ "text": "Focusable" }]
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/sessions/test/overlay")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&create_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let overlay_id = json["id"].as_str().unwrap().to_string();
+
+    // Capture input and focus the overlay
+    let _ = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/sessions/test/input/capture")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let focus_body = serde_json::json!({ "id": overlay_id });
+    let _ = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/sessions/test/input/focus")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&focus_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // Verify focus is set
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/sessions/test/input/focus")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["focused"], overlay_id);
+
+    // Release input -- should clear focus
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/sessions/test/input/release")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    // Verify focus is cleared
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/sessions/test/input/focus")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(json["focused"].is_null(), "focus should be cleared after input release");
+}
+
+#[tokio::test]
+async fn test_focus_cleared_on_element_delete() {
+    let (state, _, _) = common::create_test_state();
+    let app = router(state, None);
+
+    // Create a focusable overlay
+    let create_body = serde_json::json!({
+        "x": 0,
+        "y": 0,
+        "width": 40,
+        "height": 5,
+        "focusable": true,
+        "spans": [{ "text": "Will be deleted" }]
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/sessions/test/overlay")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&create_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let overlay_id = json["id"].as_str().unwrap().to_string();
+
+    // Focus the overlay
+    let focus_body = serde_json::json!({ "id": overlay_id });
+    let _ = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/sessions/test/input/focus")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&focus_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // Verify focus is set
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/sessions/test/input/focus")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["focused"], overlay_id);
+
+    // Delete the focused overlay
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/sessions/test/overlay/{}", overlay_id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    // Verify focus is cleared
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/sessions/test/input/focus")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(json["focused"].is_null(), "focus should be cleared when focused element is deleted");
+}
+
+#[tokio::test]
+async fn test_focus_non_focusable_returns_400() {
+    let (state, _, _) = common::create_test_state();
+    let app = router(state, None);
+
+    // Create a non-focusable overlay (focusable defaults to false)
+    let create_body = serde_json::json!({
+        "x": 0,
+        "y": 0,
+        "width": 40,
+        "height": 5,
+        "spans": [{ "text": "Not focusable" }]
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/sessions/test/overlay")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&create_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let overlay_id = json["id"].as_str().unwrap().to_string();
+
+    // Attempt to focus the non-focusable overlay
+    let focus_body = serde_json::json!({ "id": overlay_id });
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/sessions/test/input/focus")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&focus_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"]["code"], "not_focusable");
+}

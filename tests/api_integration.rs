@@ -20,7 +20,7 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tower::ServiceExt;
 use wsh::api::{router, AppState};
 use wsh::broker::Broker;
-use wsh::input::{InputBroadcaster, InputMode};
+use wsh::input::{FocusTracker, InputBroadcaster, InputMode};
 use wsh::overlay::OverlayStore;
 use wsh::parser::Parser;
 use wsh::session::{Session, SessionRegistry};
@@ -45,8 +45,10 @@ fn create_test_app() -> (axum::Router, mpsc::Receiver<Bytes>, broadcast::Sender<
         pty: std::sync::Arc::new(wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
+        focus: FocusTracker::new(),
         is_local: false,
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
+        screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
@@ -138,8 +140,10 @@ async fn test_api_input_multiple_requests() {
         pty: std::sync::Arc::new(wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
+        focus: FocusTracker::new(),
         is_local: false,
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
+        screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
@@ -224,8 +228,10 @@ async fn test_websocket_receives_pty_output() {
         pty: std::sync::Arc::new(wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
+        focus: FocusTracker::new(),
         is_local: false,
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
+        screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
@@ -282,8 +288,10 @@ async fn test_websocket_sends_input_to_pty() {
         pty: std::sync::Arc::new(wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
+        focus: FocusTracker::new(),
         is_local: false,
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
+        screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
@@ -336,8 +344,10 @@ async fn test_websocket_text_input_to_pty() {
         pty: std::sync::Arc::new(wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
+        focus: FocusTracker::new(),
         is_local: false,
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
+        screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
@@ -389,8 +399,10 @@ async fn test_websocket_bidirectional_communication() {
         pty: std::sync::Arc::new(wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
+        focus: FocusTracker::new(),
         is_local: false,
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
+        screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
@@ -461,8 +473,10 @@ async fn test_websocket_multiple_outputs() {
         pty: std::sync::Arc::new(wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
+        focus: FocusTracker::new(),
         is_local: false,
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
+        screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
@@ -582,8 +596,10 @@ async fn test_websocket_line_event_includes_total_lines() {
         pty: std::sync::Arc::new(wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
+        focus: FocusTracker::new(),
         is_local: false,
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
+        screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
@@ -669,8 +685,10 @@ async fn test_scrollback_endpoint() {
         pty: std::sync::Arc::new(wsh::pty::Pty::spawn(5, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
         terminal_size: wsh::terminal::TerminalSize::new(5, 80),
         activity: wsh::activity::ActivityTracker::new(),
+        focus: FocusTracker::new(),
         is_local: false,
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
+        screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
@@ -732,8 +750,10 @@ async fn test_scrollback_initial_state() {
         pty: std::sync::Arc::new(wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
+        focus: FocusTracker::new(),
         is_local: false,
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
+        screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();

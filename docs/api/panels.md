@@ -12,8 +12,12 @@ A panel has:
 - **Position** (`position`): `"top"` or `"bottom"` edge of the terminal
 - **Height** (`height`): Number of rows the panel occupies
 - **Z-order** (`z`): Priority when allocating space (higher = closer to the screen edge)
-- **Spans**: One or more styled text segments (same format as overlay spans)
+- **Background** (`background`): Optional fill color for the panel area
+- **Spans**: One or more styled text segments (same format as overlay spans), optionally named with `id`
+- **Region writes**: Freeform styled text placed at specific (row, col) offsets
 - **Visible** (`visible`): Whether the panel is currently rendered
+- **Focusable** (`focusable`): Whether the panel can receive input focus
+- **Screen mode** (`screen_mode`): Which screen mode the panel belongs to (informational, auto-set at creation)
 - **ID**: A unique identifier assigned on creation
 
 Panels resize the PTY. When a panel is created, the terminal's usable area
@@ -30,6 +34,14 @@ rejected) to ensure at least one PTY row remains usable.
 Hidden panels remain in the system. Their `visible` field is set to `false` in
 API responses. If space becomes available (e.g., a higher-priority panel is
 deleted), hidden panels become visible again automatically.
+
+### Screen Mode
+
+Every panel is tagged with a `screen_mode` (`"normal"` or `"alt"`) at creation
+time, matching the session's current screen mode. Panels are only returned by
+list endpoints when their mode matches the session's current mode. When the
+session exits alt screen mode, all alt-mode panels are deleted and the PTY
+reclaims their space. See [alt-screen.md](alt-screen.md) for details.
 
 ### Newlines in Span Text
 
@@ -50,10 +62,12 @@ Content-Type: application/json
   "position": "top",
   "height": 2,
   "z": 100,
+  "background": {"bg": {"r": 30, "g": 30, "b": 30}},
   "spans": [
-    {"text": "Status: ", "bold": true},
-    {"text": "OK", "fg": "green"}
-  ]
+    {"id": "label", "text": "Status: ", "bold": true},
+    {"id": "value", "text": "OK", "fg": "green"}
+  ],
+  "focusable": false
 }
 ```
 
@@ -62,7 +76,9 @@ Content-Type: application/json
 | `position` | string | yes | `"top"` or `"bottom"` |
 | `height` | integer | yes | Number of rows |
 | `z` | integer | no | Z-order (auto-assigned if omitted) |
+| `background` | BackgroundStyle | no | Background fill for the panel area |
 | `spans` | array | yes | Styled text spans |
+| `focusable` | boolean | no | Whether the panel can receive input focus (default: false) |
 
 **Response:** `201 Created`
 
@@ -75,7 +91,7 @@ Content-Type: application/json
 ```bash
 curl -X POST http://localhost:8080/panel \
   -H 'Content-Type: application/json' \
-  -d '{"position": "top", "height": 2, "z": 100, "spans": [{"text": "Status: ", "bold": true}, {"text": "OK", "fg": "green"}]}'
+  -d '{"position": "top", "height": 2, "z": 100, "background": {"bg": "blue"}, "spans": [{"text": "Status: ", "bold": true}, {"text": "OK", "fg": "green"}]}'
 ```
 
 ## List Panels
@@ -84,7 +100,8 @@ curl -X POST http://localhost:8080/panel \
 GET /panel
 ```
 
-Returns all panels sorted by position then z-order descending.
+Returns all panels filtered by the session's current screen mode, sorted by
+position then z-order descending.
 
 **Response:** `200 OK`
 
@@ -95,14 +112,18 @@ Returns all panels sorted by position then z-order descending.
     "position": "top",
     "height": 2,
     "z": 100,
+    "background": {"bg": {"r": 30, "g": 30, "b": 30}},
     "spans": [
-      {"text": "Status: ", "bold": true},
-      {"text": "OK", "fg": "green"}
+      {"id": "label", "text": "Status: ", "bold": true},
+      {"id": "value", "text": "OK", "fg": "green"}
     ],
     "visible": true
   }
 ]
 ```
+
+Note: `region_writes` is omitted when empty. `screen_mode` is omitted when
+`"normal"` (the default). `focusable` is omitted when `false`.
 
 **Example:**
 
@@ -183,6 +204,7 @@ optional -- only provided fields are updated.
 ```json
 {
   "height": 3,
+  "background": {"bg": "blue"},
   "spans": [
     {"text": "Line 1\nLine 2\nLine 3"}
   ]
@@ -194,6 +216,7 @@ optional -- only provided fields are updated.
 | `position` | string | no | New position (`"top"` or `"bottom"`) |
 | `height` | integer | no | New height in rows |
 | `z` | integer | no | New z-order |
+| `background` | BackgroundStyle | no | New background fill |
 | `spans` | array | no | New styled text spans |
 
 **Response:** `204 No Content`
@@ -208,6 +231,90 @@ curl -X PATCH http://localhost:8080/panel/f47ac10b-58cc-4372-a567-0e02b2c3d479 \
   -d '{"height": 3, "spans": [{"text": "Line 1\nLine 2\nLine 3"}]}'
 ```
 
+## Partial Span Update by ID
+
+```
+POST /panel/:id/spans
+Content-Type: application/json
+```
+
+Updates only the spans whose `id` matches a span in the request. Spans without
+a matching `id` in the panel are ignored. This avoids replacing the entire span
+list when only one or two values change.
+
+**Request body:**
+
+```json
+{
+  "spans": [
+    {"id": "value", "text": "Error", "fg": "red"}
+  ]
+}
+```
+
+**Response:** `204 No Content`
+
+**Error:** `404` with code `panel_not_found` if the ID doesn't exist.
+
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/panel/f47ac10b-58cc-4372-a567-0e02b2c3d479/spans \
+  -H 'Content-Type: application/json' \
+  -d '{"spans": [{"id": "value", "text": "Error", "fg": "red"}]}'
+```
+
+## Region Write
+
+```
+POST /panel/:id/write
+Content-Type: application/json
+```
+
+Writes styled text at specific (row, col) positions within the panel. Useful
+for cell-level drawing. Each write replaces any existing region write at the
+same position.
+
+**Request body:**
+
+```json
+{
+  "writes": [
+    {"row": 0, "col": 0, "text": "A", "fg": "red", "bold": true},
+    {"row": 1, "col": 5, "text": "B", "fg": "blue"}
+  ]
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `writes` | array | yes | Array of region write objects |
+
+Each region write object:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `row` | integer | yes | Row offset within the panel (0-based) |
+| `col` | integer | yes | Column offset within the panel (0-based) |
+| `text` | string | yes | Text to write |
+| `fg` | OverlayColor | no | Foreground color |
+| `bg` | OverlayColor | no | Background color |
+| `bold` | boolean | no | Bold (default: false) |
+| `italic` | boolean | no | Italic (default: false) |
+| `underline` | boolean | no | Underline (default: false) |
+
+**Response:** `204 No Content`
+
+**Error:** `404` with code `panel_not_found` if the ID doesn't exist.
+
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/panel/f47ac10b-58cc-4372-a567-0e02b2c3d479/write \
+  -H 'Content-Type: application/json' \
+  -d '{"writes": [{"row": 0, "col": 0, "text": "X", "fg": "red"}]}'
+```
+
 ## Delete a Panel
 
 ```
@@ -217,6 +324,8 @@ DELETE /panel/:id
 **Response:** `204 No Content`
 
 **Error:** `404` with code `panel_not_found` if the ID doesn't exist.
+
+If the deleted panel had input focus, focus is automatically cleared.
 
 **Example:**
 
@@ -230,7 +339,8 @@ curl -X DELETE http://localhost:8080/panel/f47ac10b-58cc-4372-a567-0e02b2c3d479
 DELETE /panel
 ```
 
-Removes every panel. The PTY reclaims the full terminal height.
+Removes every panel. The PTY reclaims the full terminal height. Focus is
+cleared if any panel had focus.
 
 **Response:** `204 No Content`
 
@@ -254,6 +364,8 @@ the request/response protocol:
 | `patch_panel` | Partial update of a panel |
 | `delete_panel` | Delete a panel by ID |
 | `clear_panels` | Delete all panels |
+| `update_panel_spans` | Partial span update by ID |
+| `panel_region_write` | Write at specific (row, col) positions |
 
 **Examples:**
 
@@ -278,13 +390,21 @@ the request/response protocol:
 {"id": 5, "method": "patch_panel", "params": {"id": "panel-uuid", "spans": [{"text": "Patched"}]}}
 // -> {"id": 5, "method": "patch_panel", "result": {}}
 
+// Partial span update by ID
+{"id": 6, "method": "update_panel_spans", "params": {"id": "panel-uuid", "spans": [{"id": "value", "text": "OK"}]}}
+// -> {"id": 6, "method": "update_panel_spans", "result": {}}
+
+// Region write
+{"id": 7, "method": "panel_region_write", "params": {"id": "panel-uuid", "writes": [{"row": 0, "col": 0, "text": "X"}]}}
+// -> {"id": 7, "method": "panel_region_write", "result": {}}
+
 // Delete a panel
-{"id": 6, "method": "delete_panel", "params": {"id": "panel-uuid"}}
-// -> {"id": 6, "method": "delete_panel", "result": {}}
+{"id": 8, "method": "delete_panel", "params": {"id": "panel-uuid"}}
+// -> {"id": 8, "method": "delete_panel", "result": {}}
 
 // Delete all panels
-{"id": 7, "method": "clear_panels"}
-// -> {"id": 7, "method": "clear_panels", "result": {}}
+{"id": 9, "method": "clear_panels"}
+// -> {"id": 9, "method": "clear_panels", "result": {}}
 ```
 
 ## Panel Spans
@@ -294,6 +414,7 @@ segment:
 
 ```json
 {
+  "id": "label",
   "text": "Hello",
   "fg": "red",
   "bg": {"r": 0, "g": 0, "b": 0},
@@ -305,6 +426,7 @@ segment:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
+| `id` | string | no | Named identifier for partial updates via `/spans` |
 | `text` | string | yes | The text content (may contain `\n`) |
 | `fg` | OverlayColor | no | Foreground color |
 | `bg` | OverlayColor | no | Background color |
@@ -313,7 +435,7 @@ segment:
 | `underline` | boolean | no | Underline (default: false) |
 
 Boolean style fields default to `false` and are omitted from responses when
-`false`.
+`false`. The `id` field is omitted when not set.
 
 Colors are either a named string (`"red"`, `"green"`, `"blue"`, `"yellow"`,
 `"cyan"`, `"magenta"`, `"black"`, `"white"`) or an RGB object
@@ -342,32 +464,31 @@ progress indicators that should never be obscured by terminal output.
 ## Example: Status Bar
 
 ```bash
-# Create a two-row status bar at the top of the terminal
+# Create a two-row status bar at the top of the terminal with a dark background
 curl -X POST http://localhost:8080/panel \
   -H 'Content-Type: application/json' \
   -d '{
     "position": "top",
     "height": 2,
     "z": 100,
+    "background": {"bg": {"r": 30, "g": 30, "b": 30}},
     "spans": [
-      {"text": " Agent: ", "bg": "blue", "bold": true},
-      {"text": "watching ", "bg": "blue"},
-      {"text": "OK", "fg": "green", "bg": "blue"},
+      {"id": "agent", "text": " Agent: ", "bg": "blue", "bold": true},
+      {"id": "status", "text": "watching ", "bg": "blue"},
+      {"id": "icon", "text": "OK", "fg": "green", "bg": "blue"},
       {"text": "\n"},
-      {"text": " Session: abc123 ", "bg": "blue"}
+      {"id": "session", "text": " Session: abc123 ", "bg": "blue"}
     ]
   }'
 # {"id":"abc123"}
 
-# Update the status to show an alert
-curl -X PATCH http://localhost:8080/panel/abc123 \
+# Update just the status and icon using partial span update
+curl -X POST http://localhost:8080/panel/abc123/spans \
   -H 'Content-Type: application/json' \
   -d '{
     "spans": [
-      {"text": " Agent: ", "bg": "red", "bold": true},
-      {"text": "action needed ", "bg": "red"},
-      {"text": "\n"},
-      {"text": " Approve pending command? ", "bg": "red"}
+      {"id": "status", "text": "action needed ", "bg": "red"},
+      {"id": "icon", "text": "!!", "fg": "white", "bg": "red"}
     ]
   }'
 

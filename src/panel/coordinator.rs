@@ -51,8 +51,10 @@ pub async fn reconfigure_layout(
         // Erase old panel content
         let _ = lock.write_all(render::erase_all_panels(&layout, term_cols).as_bytes());
 
-        // Set scroll region (or reset if no panels)
-        if layout.top_panels.is_empty() && layout.bottom_panels.is_empty() {
+        // Set scroll region (or reset if no panels or panels consume all rows)
+        if layout.top_panels.is_empty() && layout.bottom_panels.is_empty()
+            || layout.pty_rows == 0
+        {
             let _ = lock.write_all(render::reset_scroll_region().as_bytes());
         } else {
             let _ = lock.write_all(
@@ -68,12 +70,13 @@ pub async fn reconfigure_layout(
         let _ = lock.flush();
     }
 
-    // Resize PTY and parser
-    if let Err(e) = pty.resize(layout.pty_rows, layout.pty_cols) {
+    // Resize PTY and parser (use at least 1 row to avoid invalid resize)
+    let effective_pty_rows = layout.pty_rows.max(1);
+    if let Err(e) = pty.resize(effective_pty_rows, layout.pty_cols) {
         tracing::error!(?e, "failed to resize PTY");
     }
     if let Err(e) = parser
-        .resize(layout.pty_cols as usize, layout.pty_rows as usize)
+        .resize(layout.pty_cols as usize, effective_pty_rows as usize)
         .await
     {
         tracing::error!(?e, "failed to resize parser");

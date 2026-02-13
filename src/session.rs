@@ -6,8 +6,8 @@ use tokio::sync::{broadcast, mpsc};
 use tokio::sync::broadcast as tokio_broadcast;
 
 use crate::activity::ActivityTracker;
-use crate::input::{InputBroadcaster, InputMode};
-use crate::overlay::OverlayStore;
+use crate::input::{FocusTracker, InputBroadcaster, InputMode};
+use crate::overlay::{OverlayStore, ScreenMode};
 use crate::panel::PanelStore;
 use crate::parser::Parser;
 use crate::pty::{Pty, PtyError, SpawnCommand};
@@ -38,9 +38,15 @@ pub struct Session {
     /// Only the standalone-mode session should have this set to `true`.
     /// Controls whether overlay/panel ANSI escape sequences are written to stdout.
     pub is_local: bool,
+    /// Tracks which overlay or panel currently has input focus.
+    pub focus: FocusTracker,
     /// Signal to detach all streaming clients from this session.
     /// Subscribers receive `()` when `detach()` is called; the session stays alive.
     pub detach_signal: broadcast::Sender<()>,
+    /// Current screen mode (normal or alt). Used to tag overlays/panels and
+    /// filter list results. Protected by a `parking_lot::RwLock` for cheap
+    /// cloning across threads.
+    pub screen_mode: Arc<RwLock<ScreenMode>>,
 }
 
 impl Session {
@@ -116,6 +122,7 @@ impl Session {
         let input_mode = InputMode::new();
         let input_broadcaster = InputBroadcaster::new();
         let activity = ActivityTracker::new();
+        let focus = FocusTracker::new();
         let terminal_size = TerminalSize::new(rows, cols);
 
         // Spawn PTY reader (server mode -- no stdout, only broker)
@@ -165,8 +172,10 @@ impl Session {
                 input_mode,
                 input_broadcaster,
                 activity,
+                focus,
                 is_local: false,
                 detach_signal: broadcast::channel::<()>(1).0,
+                screen_mode: Arc::new(RwLock::new(ScreenMode::Normal)),
             },
             child_exit_rx,
         ))
@@ -371,8 +380,10 @@ mod tests {
             input_mode: InputMode::new(),
             input_broadcaster: InputBroadcaster::new(),
             activity: ActivityTracker::new(),
+            focus: FocusTracker::new(),
             is_local: false,
             detach_signal: broadcast::channel::<()>(1).0,
+            screen_mode: Arc::new(RwLock::new(ScreenMode::Normal)),
         };
         (session, input_rx)
     }

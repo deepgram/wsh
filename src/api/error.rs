@@ -45,6 +45,12 @@ pub enum ApiError {
     SessionNameConflict(String),
     /// 404 - No sessions exist in the registry.
     NoSessions,
+    /// 400 - The target overlay or panel is not focusable.
+    NotFocusable(String),
+    /// 409 - Session is already in alternate screen mode.
+    AlreadyInAltScreen,
+    /// 409 - Session is not in alternate screen mode.
+    NotInAltScreen,
     /// 500 - Catch-all internal error.
     InternalError(String),
 }
@@ -70,6 +76,9 @@ impl ApiError {
             ApiError::SessionCreateFailed(_) => StatusCode::INTERNAL_SERVER_ERROR,
             ApiError::SessionNameConflict(_) => StatusCode::CONFLICT,
             ApiError::NoSessions => StatusCode::NOT_FOUND,
+            ApiError::NotFocusable(_) => StatusCode::BAD_REQUEST,
+            ApiError::AlreadyInAltScreen => StatusCode::CONFLICT,
+            ApiError::NotInAltScreen => StatusCode::CONFLICT,
             ApiError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -94,6 +103,9 @@ impl ApiError {
             ApiError::SessionCreateFailed(_) => "session_create_failed",
             ApiError::SessionNameConflict(_) => "session_name_conflict",
             ApiError::NoSessions => "no_sessions",
+            ApiError::NotFocusable(_) => "not_focusable",
+            ApiError::AlreadyInAltScreen => "already_in_alt_screen",
+            ApiError::NotInAltScreen => "not_in_alt_screen",
             ApiError::InternalError(_) => "internal_error",
         }
     }
@@ -126,6 +138,15 @@ impl ApiError {
                 format!("Session name already exists: {}.", name)
             }
             ApiError::NoSessions => "No sessions exist.".to_string(),
+            ApiError::NotFocusable(id) => {
+                format!("Target '{}' is not focusable.", id)
+            }
+            ApiError::AlreadyInAltScreen => {
+                "Session is already in alternate screen mode.".to_string()
+            }
+            ApiError::NotInAltScreen => {
+                "Session is not in alternate screen mode.".to_string()
+            }
             ApiError::InternalError(detail) => format!("Internal error: {}.", detail),
         }
     }
@@ -499,6 +520,50 @@ mod tests {
         assert_eq!(
             json["error"]["message"],
             "Failed to send input to terminal."
+        );
+    }
+
+    // ── Alt screen error tests ──────────────────────────────────────
+
+    #[tokio::test]
+    async fn already_in_alt_screen_status() {
+        let (status, _) = response_parts(ApiError::AlreadyInAltScreen).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn already_in_alt_screen_code() {
+        let (_, json) = response_parts(ApiError::AlreadyInAltScreen).await;
+        assert_eq!(json["error"]["code"], "already_in_alt_screen");
+    }
+
+    #[tokio::test]
+    async fn already_in_alt_screen_message() {
+        let (_, json) = response_parts(ApiError::AlreadyInAltScreen).await;
+        assert_eq!(
+            json["error"]["message"],
+            "Session is already in alternate screen mode."
+        );
+    }
+
+    #[tokio::test]
+    async fn not_in_alt_screen_status() {
+        let (status, _) = response_parts(ApiError::NotInAltScreen).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn not_in_alt_screen_code() {
+        let (_, json) = response_parts(ApiError::NotInAltScreen).await;
+        assert_eq!(json["error"]["code"], "not_in_alt_screen");
+    }
+
+    #[tokio::test]
+    async fn not_in_alt_screen_message() {
+        let (_, json) = response_parts(ApiError::NotInAltScreen).await;
+        assert_eq!(
+            json["error"]["message"],
+            "Session is not in alternate screen mode."
         );
     }
 }

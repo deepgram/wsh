@@ -128,11 +128,20 @@ The `parsed` field attempts to identify the key from raw bytes:
 When the key cannot be identified (multi-byte sequences, non-standard
 terminals), `parsed` is `null` and you can fall back to inspecting `raw`.
 
-## Escape Hatch
+## Keyboard Toggle
 
-The `Ctrl+\` key combination is treated as an escape hatch. Even in capture
-mode, it is handled specially to allow the user to regain control if an API
-client has captured input and become unresponsive.
+The `Ctrl+\` key combination **toggles** input capture mode. Pressing it
+switches from passthrough to capture, or from capture back to passthrough.
+`Ctrl+\` is never forwarded to the PTY — it is always consumed by wsh.
+
+This gives the user a physical escape hatch: if an agent has captured input
+and become unresponsive, the user presses `Ctrl+\` to regain control. It also
+gives agents a signal when the user *wants* to interact — entering capture mode
+manually is a hint that the user is seeking agent attention.
+
+In server mode (attached client), double-tapping `Ctrl+\` detaches from the
+session. Each press still toggles capture mode on the server (so two rapid
+presses cancel out, leaving capture mode unchanged after re-attach).
 
 ## Example: Approval Workflow
 
@@ -182,6 +191,96 @@ async def approval_flow():
     requests.post(f"{BASE}/input/release")
 ```
 
+## Focus Tracking
+
+Focus tracking lets API clients direct captured input to a specific overlay or
+panel. At most one element has focus at a time.
+
+### Set Focus
+
+```
+POST /input/focus
+Content-Type: application/json
+```
+
+**Request body:**
+
+```json
+{"id": "overlay-or-panel-uuid"}
+```
+
+Sets input focus to the specified overlay or panel. The element must exist and
+have `focusable: true`.
+
+**Response:** `204 No Content`
+
+**Errors:**
+
+| Status | Code | When |
+|--------|------|------|
+| 400 | `invalid_request` | No overlay or panel with that ID |
+| 400 | `not_focusable` | Element exists but `focusable` is false |
+
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/input/focus \
+  -H 'Content-Type: application/json' \
+  -d '{"id": "f47ac10b-58cc-4372-a567-0e02b2c3d479"}'
+```
+
+### Remove Focus
+
+```
+POST /input/unfocus
+```
+
+Clears input focus. No element receives directed input.
+
+**Response:** `204 No Content`
+
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/input/unfocus
+```
+
+### Get Current Focus
+
+```
+GET /input/focus
+```
+
+Returns the ID of the currently focused element, or `null` if nothing has focus.
+
+**Response:** `200 OK`
+
+```json
+{"focused": "f47ac10b-58cc-4372-a567-0e02b2c3d479"}
+```
+
+or when nothing is focused:
+
+```json
+{"focused": null}
+```
+
+**Example:**
+
+```bash
+curl http://localhost:8080/input/focus
+```
+
+### Focus Auto-Clear
+
+Focus is automatically cleared when:
+
+- Input mode is released (`POST /input/release`) -- returning to passthrough
+  mode clears focus
+- The focused element is deleted -- deleting an overlay or panel that has focus
+  clears focus
+- All overlays or panels are cleared (`DELETE /overlay`, `DELETE /panel`)
+
 ## Notes
 
 - Input injected via `POST /input` always reaches the PTY regardless of input
@@ -190,3 +289,5 @@ async def approval_flow():
   affects all clients and the local terminal.
 - Mode changes are broadcast to all WebSocket subscribers watching `input`
   events.
+- Focus requires an overlay or panel with `focusable: true`. Non-focusable
+  elements cannot receive focus.

@@ -22,9 +22,13 @@ They sit on top of terminal content without affecting it.
 - Can overlap terminal content and each other
 - Don't affect the PTY or its layout
 - Best for transient, contextual information
+- Can have explicit `width`, `height`, and `background`
+  making them opaque rectangles — not just floating text
 
 **Use for:** tooltips, warnings, quick tips, annotations,
 notifications, contextual help near relevant output.
+With explicit dimensions: windows, cards, dialogs,
+modal panels — anything that needs a solid backdrop.
 
 ## Panels
 
@@ -40,6 +44,11 @@ programs adapt to the reduced space.
 
 **Use for:** status bars, progress displays, context
 summaries, dashboards, error explanations.
+
+Panels also support `background` fill, named spans with
+`id` fields for targeted updates, and region writes for
+placing text at specific (row, col) offsets. These work
+the same way as they do for overlays.
 
 ## Choosing Between Them
 
@@ -74,12 +83,19 @@ Keep overlay text short. One to three lines, under half
 the screen width. If you need more space, use a panel or
 the conversation instead.
 
+Overlays with explicit `width` and `height` create an
+opaque bounding box. The `background` color fills the
+entire rectangle, and spans and region writes render on
+top of it. This turns overlays into window-like elements
+with solid backgrounds — useful for dialogs, cards, and
+any UI that needs to cleanly cover terminal content.
+
 ### Styling
 Spans support formatting attributes. Use them for
 visual hierarchy:
 
     {"spans": [
-      {"text": "Warning: ", "bold": true, "fg": {"indexed": 3}},
+      {"text": "Warning: ", "bold": true, "fg": "yellow"},
       {"text": "this deletes 47 files"}
     ]}
 
@@ -91,6 +107,53 @@ visual hierarchy:
 Use the indexed color palette (0-7 for standard, 8-15 for
 bright) for broad terminal compatibility. Use RGB colors
 only when you're confident the terminal supports them.
+
+### Named Spans
+Spans can have an `id` field. This lets you update a
+single span by its id instead of replacing all content
+in the overlay or panel.
+
+    {"spans": [
+      {"id": "label", "text": "Status: ", "bold": true},
+      {"id": "value", "text": "building", "fg": "yellow"}
+    ]}
+
+Later, update just the "value" span:
+
+    update span "value" → {"text": "complete", "fg": "green"}
+
+The "label" span stays untouched. This is good for:
+- Live-updating status fields that change frequently
+- Counters, timestamps, or progress percentages
+- Labels that change independently of surrounding text
+- Any element where you want to avoid redrawing
+  everything just to change one piece
+
+### Region Writes
+Write styled text at specific (row, col) offsets within
+an overlay or panel. This turns them into 2D drawable
+surfaces — not just a flat list of spans, but a canvas
+where you can place text at exact coordinates.
+
+    overlay (width: 40, height: 5, background: dark):
+
+    write at (0, 1):  "Name"     bold
+    write at (0, 15): "Status"   bold
+    write at (1, 1):  "auth"
+    write at (1, 15): "● ok"     green
+    write at (2, 1):  "api"
+    write at (2, 15): "● slow"   yellow
+
+Region writes are good for:
+- Tables with aligned columns
+- Grids and structured layouts
+- Charts and diagrams
+- Any content where relative positioning matters
+
+Region writes and spans coexist. Spans flow as inline
+content; region writes place content at absolute
+positions within the element. Use whichever model fits
+the content.
 
 ### Z-Order
 When overlays overlap, higher `z` values render on top.
@@ -169,11 +232,11 @@ Use `│` or `|` between inline elements:
 
     {"spans": [
       {"text": " build: "},
-      {"text": "ok", "fg": {"indexed": 2}},
+      {"text": "ok", "fg": "green"},
       {"text": " │ tests: "},
-      {"text": "3 failed", "fg": {"indexed": 1}},
+      {"text": "3 failed", "fg": "red"},
       {"text": " │ lint: "},
-      {"text": "clean", "fg": {"indexed": 2}},
+      {"text": "clean", "fg": "green"},
       {"text": " "}
     ]}
 
@@ -287,8 +350,8 @@ have a light or dark background. Don't rely on color
 alone to convey meaning — pair it with text labels
 or symbols:
 
-    Good:  {"text": "✗ FAIL", "fg": {"indexed": 1}}
-    Bad:   {"text": "●", "fg": {"indexed": 1}}
+    Good:  {"text": "✗ FAIL", "fg": "red"}
+    Bad:   {"text": "●", "fg": "red"}
 
 The word "FAIL" communicates even without color. A
 red dot is meaningless on a terminal where red is

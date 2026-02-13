@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::overlay::OverlaySpan;
+use crate::overlay::{OverlaySpan, RegionWrite};
 use crate::parser::events::EventType;
 use crate::parser::state::{Format, Query};
 
@@ -195,7 +195,13 @@ pub struct CreateOverlayParams {
     pub x: u16,
     pub y: u16,
     pub z: Option<i32>,
+    pub width: u16,
+    pub height: u16,
+    #[serde(default)]
+    pub background: Option<crate::overlay::BackgroundStyle>,
     pub spans: Vec<OverlaySpan>,
+    #[serde(default)]
+    pub focusable: bool,
 }
 
 /// Parameters for replacing an overlay's spans.
@@ -205,13 +211,17 @@ pub struct UpdateOverlayParams {
     pub spans: Vec<OverlaySpan>,
 }
 
-/// Parameters for patching overlay position / z-order.
+/// Parameters for patching overlay position / z-order / background.
 #[derive(Debug, Deserialize)]
 pub struct PatchOverlayParams {
     pub id: String,
     pub x: Option<u16>,
     pub y: Option<u16>,
     pub z: Option<i32>,
+    pub width: Option<u16>,
+    pub height: Option<u16>,
+    #[serde(default)]
+    pub background: Option<crate::overlay::BackgroundStyle>,
 }
 
 // ---------------------------------------------------------------------------
@@ -233,7 +243,11 @@ pub struct CreatePanelParams {
     pub height: u16,
     pub z: Option<i32>,
     #[serde(default)]
+    pub background: Option<crate::overlay::BackgroundStyle>,
+    #[serde(default)]
     pub spans: Vec<OverlaySpan>,
+    #[serde(default)]
+    pub focusable: bool,
 }
 
 /// Parameters for fully replacing a panel.
@@ -253,7 +267,65 @@ pub struct PatchPanelParams {
     pub position: Option<Position>,
     pub height: Option<u16>,
     pub z: Option<i32>,
+    #[serde(default)]
+    pub background: Option<crate::overlay::BackgroundStyle>,
     pub spans: Option<Vec<OverlaySpan>>,
+}
+
+// ---------------------------------------------------------------------------
+// update_spans / region_write param types
+// ---------------------------------------------------------------------------
+
+/// Parameters for updating specific named spans on an overlay.
+#[derive(Debug, Deserialize)]
+pub struct UpdateOverlaySpansParams {
+    pub id: String,
+    pub spans: Vec<OverlaySpan>,
+}
+
+/// Parameters for region writes on an overlay.
+#[derive(Debug, Deserialize)]
+pub struct OverlayRegionWriteParams {
+    pub id: String,
+    pub writes: Vec<RegionWrite>,
+}
+
+/// Parameters for updating specific named spans on a panel.
+#[derive(Debug, Deserialize)]
+pub struct UpdatePanelSpansParams {
+    pub id: String,
+    pub spans: Vec<OverlaySpan>,
+}
+
+/// Parameters for region writes on a panel.
+#[derive(Debug, Deserialize)]
+pub struct PanelRegionWriteParams {
+    pub id: String,
+    pub writes: Vec<RegionWrite>,
+}
+
+/// Parameters for the `batch_update` method.
+#[derive(Debug, Deserialize)]
+pub struct BatchUpdateParams {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub target_type: BatchTargetType,
+    pub spans: Option<Vec<OverlaySpan>>,
+    pub writes: Option<Vec<RegionWrite>>,
+}
+
+/// Target type for batch updates.
+#[derive(Debug, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum BatchTargetType {
+    Overlay,
+    Panel,
+}
+
+/// Parameters for the `focus` method.
+#[derive(Debug, Deserialize)]
+pub struct FocusParams {
+    pub id: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -297,15 +369,55 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
         }
         "release_input" => {
             session.input_mode.release();
+            session.focus.unfocus();
             WsResponse::success(id, method, serde_json::json!({}))
         }
+        "focus" => {
+            let params: FocusParams = match parse_params(req) {
+                Ok(p) => p,
+                Err(e) => return e,
+            };
+            // Check if the target is a focusable overlay or panel
+            let is_focusable = if let Some(overlay) = session.overlays.get(&params.id) {
+                overlay.focusable
+            } else if let Some(panel) = session.panels.get(&params.id) {
+                panel.focusable
+            } else {
+                return WsResponse::error(
+                    id,
+                    method,
+                    "invalid_request",
+                    &format!("No overlay or panel with id '{}'.", params.id),
+                );
+            };
+            if !is_focusable {
+                return WsResponse::error(
+                    id,
+                    method,
+                    "not_focusable",
+                    &format!("Target '{}' is not focusable.", params.id),
+                );
+            }
+            session.focus.focus(params.id);
+            WsResponse::success(id, method, serde_json::json!({}))
+        }
+        "unfocus" => {
+            session.focus.unfocus();
+            WsResponse::success(id, method, serde_json::json!({}))
+        }
+        "get_focus" => {
+            let focused = session.focus.focused();
+            WsResponse::success(id, method, serde_json::json!({ "focused": focused }))
+        }
         "list_overlays" => {
-            let overlays = session.overlays.list();
+            let mode = *session.screen_mode.read();
+            let overlays = session.overlays.list_by_mode(mode);
             WsResponse::success(id, method, serde_json::to_value(&overlays).unwrap())
         }
         "clear_overlays" => {
             let old = session.overlays.list();
             session.overlays.clear();
+            session.focus.unfocus();
             if session.is_local {
                 flush_overlays_to_stdout(&old, &[]);
             }
@@ -316,7 +428,8 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                 Ok(p) => p,
                 Err(e) => return e,
             };
-            let overlay_id = session.overlays.create(params.x, params.y, params.z, params.spans);
+            let current_mode = *session.screen_mode.read();
+            let overlay_id = session.overlays.create(params.x, params.y, params.z, params.width, params.height, params.background, params.spans, params.focusable, current_mode);
             if session.is_local {
                 let all = session.overlays.list();
                 flush_overlays_to_stdout(&[], &all);
@@ -388,7 +501,7 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                     );
                 }
             };
-            if session.overlays.move_to(&params.id, params.x, params.y, params.z) {
+            if session.overlays.move_to(&params.id, params.x, params.y, params.z, params.width, params.height, params.background) {
                 if session.is_local {
                     flush_overlays_to_stdout(&[old], &session.overlays.list());
                 }
@@ -419,6 +532,7 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                 }
             };
             if session.overlays.delete(&params.id) {
+                session.focus.clear_if_focused(&params.id);
                 if session.is_local {
                     flush_overlays_to_stdout(&[old], &session.overlays.list());
                 }
@@ -514,11 +628,13 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
             }
         }
         "list_panels" => {
-            let panels = session.panels.list();
+            let mode = *session.screen_mode.read();
+            let panels = session.panels.list_by_mode(mode);
             WsResponse::success(id, method, serde_json::to_value(&panels).unwrap())
         }
         "clear_panels" => {
             session.panels.clear();
+            session.focus.unfocus();
             crate::panel::reconfigure_layout(
                 &session.panels,
                 &session.terminal_size,
@@ -533,9 +649,10 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                 Ok(p) => p,
                 Err(e) => return e,
             };
+            let current_mode = *session.screen_mode.read();
             let panel_id = session
                 .panels
-                .create(params.position, params.height, params.z, params.spans);
+                .create(params.position, params.height, params.z, params.background, params.spans, params.focusable, current_mode);
             crate::panel::reconfigure_layout(
                 &session.panels,
                 &session.terminal_size,
@@ -585,6 +702,7 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                 Some(params.position.clone()),
                 Some(params.height),
                 Some(params.z),
+                None,
                 Some(params.spans),
             ) {
                 return WsResponse::error(
@@ -635,6 +753,7 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                 params.position.clone(),
                 params.height,
                 params.z,
+                params.background,
                 params.spans.clone(),
             ) {
                 return WsResponse::error(
@@ -677,6 +796,233 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                     &format!("No panel exists with id '{}'.", params.id),
                 );
             }
+            session.focus.clear_if_focused(&params.id);
+            crate::panel::reconfigure_layout(
+                &session.panels,
+                &session.terminal_size,
+                &session.pty,
+                &session.parser,
+            )
+            .await;
+            WsResponse::success(id, method, serde_json::json!({}))
+        }
+        "update_overlay_spans" => {
+            let params: UpdateOverlaySpansParams = match parse_params(req) {
+                Ok(p) => p,
+                Err(e) => return e,
+            };
+            let old = match session.overlays.get(&params.id) {
+                Some(o) => o,
+                None => {
+                    return WsResponse::error(
+                        id,
+                        method,
+                        "overlay_not_found",
+                        &format!("No overlay exists with id '{}'.", params.id),
+                    );
+                }
+            };
+            if session.overlays.update_spans(&params.id, &params.spans) {
+                if session.is_local {
+                    flush_overlays_to_stdout(&[old], &session.overlays.list());
+                }
+                WsResponse::success(id, method, serde_json::json!({}))
+            } else {
+                WsResponse::error(
+                    id,
+                    method,
+                    "overlay_not_found",
+                    &format!("No overlay exists with id '{}'.", params.id),
+                )
+            }
+        }
+        "overlay_region_write" => {
+            let params: OverlayRegionWriteParams = match parse_params(req) {
+                Ok(p) => p,
+                Err(e) => return e,
+            };
+            let old = match session.overlays.get(&params.id) {
+                Some(o) => o,
+                None => {
+                    return WsResponse::error(
+                        id,
+                        method,
+                        "overlay_not_found",
+                        &format!("No overlay exists with id '{}'.", params.id),
+                    );
+                }
+            };
+            if session.overlays.region_write(&params.id, params.writes) {
+                if session.is_local {
+                    flush_overlays_to_stdout(&[old], &session.overlays.list());
+                }
+                WsResponse::success(id, method, serde_json::json!({}))
+            } else {
+                WsResponse::error(
+                    id,
+                    method,
+                    "overlay_not_found",
+                    &format!("No overlay exists with id '{}'.", params.id),
+                )
+            }
+        }
+        "update_panel_spans" => {
+            let params: UpdatePanelSpansParams = match parse_params(req) {
+                Ok(p) => p,
+                Err(e) => return e,
+            };
+            if session.panels.update_spans(&params.id, &params.spans) {
+                crate::panel::flush_panel_content(
+                    &session.panels,
+                    &params.id,
+                    &session.terminal_size,
+                );
+                WsResponse::success(id, method, serde_json::json!({}))
+            } else {
+                WsResponse::error(
+                    id,
+                    method,
+                    "panel_not_found",
+                    &format!("No panel exists with id '{}'.", params.id),
+                )
+            }
+        }
+        "panel_region_write" => {
+            let params: PanelRegionWriteParams = match parse_params(req) {
+                Ok(p) => p,
+                Err(e) => return e,
+            };
+            if session.panels.region_write(&params.id, params.writes) {
+                crate::panel::flush_panel_content(
+                    &session.panels,
+                    &params.id,
+                    &session.terminal_size,
+                );
+                WsResponse::success(id, method, serde_json::json!({}))
+            } else {
+                WsResponse::error(
+                    id,
+                    method,
+                    "panel_not_found",
+                    &format!("No panel exists with id '{}'.", params.id),
+                )
+            }
+        }
+        "batch_update" => {
+            let params: BatchUpdateParams = match parse_params(req) {
+                Ok(p) => p,
+                Err(e) => return e,
+            };
+            match params.target_type {
+                BatchTargetType::Overlay => {
+                    let old = match session.overlays.get(&params.id) {
+                        Some(o) => o,
+                        None => {
+                            return WsResponse::error(
+                                id,
+                                method,
+                                "overlay_not_found",
+                                &format!("No overlay exists with id '{}'.", params.id),
+                            );
+                        }
+                    };
+                    if let Some(spans) = &params.spans {
+                        if !session.overlays.update_spans(&params.id, spans) {
+                            return WsResponse::error(
+                                id,
+                                method,
+                                "overlay_not_found",
+                                &format!("No overlay exists with id '{}'.", params.id),
+                            );
+                        }
+                    }
+                    if let Some(writes) = params.writes {
+                        if !session.overlays.region_write(&params.id, writes) {
+                            return WsResponse::error(
+                                id,
+                                method,
+                                "overlay_not_found",
+                                &format!("No overlay exists with id '{}'.", params.id),
+                            );
+                        }
+                    }
+                    if session.is_local {
+                        flush_overlays_to_stdout(&[old], &session.overlays.list());
+                    }
+                    WsResponse::success(id, method, serde_json::json!({}))
+                }
+                BatchTargetType::Panel => {
+                    if session.panels.get(&params.id).is_none() {
+                        return WsResponse::error(
+                            id,
+                            method,
+                            "panel_not_found",
+                            &format!("No panel exists with id '{}'.", params.id),
+                        );
+                    }
+                    if let Some(spans) = &params.spans {
+                        if !session.panels.update_spans(&params.id, spans) {
+                            return WsResponse::error(
+                                id,
+                                method,
+                                "panel_not_found",
+                                &format!("No panel exists with id '{}'.", params.id),
+                            );
+                        }
+                    }
+                    if let Some(writes) = params.writes {
+                        if !session.panels.region_write(&params.id, writes) {
+                            return WsResponse::error(
+                                id,
+                                method,
+                                "panel_not_found",
+                                &format!("No panel exists with id '{}'.", params.id),
+                            );
+                        }
+                    }
+                    crate::panel::flush_panel_content(
+                        &session.panels,
+                        &params.id,
+                        &session.terminal_size,
+                    );
+                    WsResponse::success(id, method, serde_json::json!({}))
+                }
+            }
+        }
+        "get_screen_mode" => {
+            let mode = *session.screen_mode.read();
+            WsResponse::success(id, method, serde_json::json!({ "mode": mode }))
+        }
+        "enter_alt_screen" => {
+            let mut mode = session.screen_mode.write();
+            if *mode == crate::overlay::ScreenMode::Alt {
+                return WsResponse::error(
+                    id,
+                    method,
+                    "already_in_alt_screen",
+                    "Session is already in alternate screen mode.",
+                );
+            }
+            *mode = crate::overlay::ScreenMode::Alt;
+            WsResponse::success(id, method, serde_json::json!({}))
+        }
+        "exit_alt_screen" => {
+            {
+                let mut mode = session.screen_mode.write();
+                if *mode == crate::overlay::ScreenMode::Normal {
+                    return WsResponse::error(
+                        id,
+                        method,
+                        "not_in_alt_screen",
+                        "Session is not in alternate screen mode.",
+                    );
+                }
+                *mode = crate::overlay::ScreenMode::Normal;
+            }
+            // Delete all alt-mode overlays and panels
+            session.overlays.delete_by_mode(crate::overlay::ScreenMode::Alt);
+            session.panels.delete_by_mode(crate::overlay::ScreenMode::Alt);
+            // Reconfigure panel layout to restore normal-mode panels
             crate::panel::reconfigure_layout(
                 &session.panels,
                 &session.terminal_size,
@@ -830,8 +1176,10 @@ mod tests {
             pty: std::sync::Arc::new(crate::pty::Pty::spawn(24, 80, crate::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
             terminal_size: crate::terminal::TerminalSize::new(24, 80),
             activity: crate::activity::ActivityTracker::new(),
+            focus: crate::input::FocusTracker::new(),
             is_local: false,
             detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
+            screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(crate::overlay::ScreenMode::Normal)),
         };
         (session, input_rx)
     }
@@ -924,7 +1272,7 @@ mod tests {
     #[tokio::test]
     async fn dispatch_clear_overlays() {
         let (session, _rx) = create_test_session();
-        session.overlays.create(0, 0, None, vec![]);
+        session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Normal);
         assert_eq!(session.overlays.list().len(), 1);
 
         let req = WsRequest {
@@ -1033,7 +1381,7 @@ mod tests {
             id: None,
             method: "create_overlay".to_string(),
             params: Some(serde_json::json!({
-                "x": 10, "y": 5,
+                "x": 10, "y": 5, "width": 80, "height": 1,
                 "spans": [{"text": "Hello"}]
             })),
         };
@@ -1046,10 +1394,10 @@ mod tests {
     #[tokio::test]
     async fn dispatch_get_overlay() {
         let (session, _rx) = create_test_session();
-        let id = session.overlays.create(5, 10, None, vec![crate::overlay::OverlaySpan {
+        let id = session.overlays.create(5, 10, None, 80, 1, None, vec![crate::overlay::OverlaySpan {
             text: "Test".to_string(),
-            fg: None, bg: None, bold: false, italic: false, underline: false,
-        }]);
+            id: None, fg: None, bg: None, bold: false, italic: false, underline: false,
+        }], false, crate::overlay::ScreenMode::Normal);
         let req = WsRequest {
             id: None,
             method: "get_overlay".to_string(),
@@ -1077,10 +1425,10 @@ mod tests {
     #[tokio::test]
     async fn dispatch_update_overlay() {
         let (session, _rx) = create_test_session();
-        let id = session.overlays.create(0, 0, None, vec![crate::overlay::OverlaySpan {
+        let id = session.overlays.create(0, 0, None, 80, 1, None, vec![crate::overlay::OverlaySpan {
             text: "Old".to_string(),
-            fg: None, bg: None, bold: false, italic: false, underline: false,
-        }]);
+            id: None, fg: None, bg: None, bold: false, italic: false, underline: false,
+        }], false, crate::overlay::ScreenMode::Normal);
         let req = WsRequest {
             id: None,
             method: "update_overlay".to_string(),
@@ -1096,7 +1444,7 @@ mod tests {
     #[tokio::test]
     async fn dispatch_patch_overlay() {
         let (session, _rx) = create_test_session();
-        let id = session.overlays.create(0, 0, None, vec![]);
+        let id = session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Normal);
         let req = WsRequest {
             id: None,
             method: "patch_overlay".to_string(),
@@ -1113,7 +1461,7 @@ mod tests {
     #[tokio::test]
     async fn dispatch_delete_overlay() {
         let (session, _rx) = create_test_session();
-        let id = session.overlays.create(0, 0, None, vec![]);
+        let id = session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Normal);
         let req = WsRequest {
             id: None,
             method: "delete_overlay".to_string(),
@@ -1181,10 +1529,13 @@ mod tests {
             crate::panel::Position::Top,
             1,
             None,
+            None,
             vec![crate::overlay::OverlaySpan {
                 text: "Test".to_string(),
-                fg: None, bg: None, bold: false, italic: false, underline: false,
+                id: None, fg: None, bg: None, bold: false, italic: false, underline: false,
             }],
+            false,
+            crate::overlay::ScreenMode::Normal,
         );
         let req = WsRequest {
             id: None,
@@ -1218,7 +1569,10 @@ mod tests {
             crate::panel::Position::Top,
             1,
             None,
+            None,
             vec![],
+            false,
+            crate::overlay::ScreenMode::Normal,
         );
         let panel = session.panels.get(&panel_id).unwrap();
         let req = WsRequest {
@@ -1267,7 +1621,10 @@ mod tests {
             crate::panel::Position::Top,
             1,
             None,
+            None,
             vec![],
+            false,
+            crate::overlay::ScreenMode::Normal,
         );
         let req = WsRequest {
             id: None,
@@ -1305,7 +1662,10 @@ mod tests {
             crate::panel::Position::Bottom,
             2,
             None,
+            None,
             vec![],
+            false,
+            crate::overlay::ScreenMode::Normal,
         );
         assert_eq!(session.panels.list().len(), 1);
         let req = WsRequest {
@@ -1335,8 +1695,8 @@ mod tests {
     #[tokio::test]
     async fn dispatch_clear_panels() {
         let (session, _rx) = create_test_session();
-        session.panels.create(crate::panel::Position::Top, 1, None, vec![]);
-        session.panels.create(crate::panel::Position::Bottom, 1, None, vec![]);
+        session.panels.create(crate::panel::Position::Top, 1, None, None, vec![], false, crate::overlay::ScreenMode::Normal);
+        session.panels.create(crate::panel::Position::Bottom, 1, None, None, vec![], false, crate::overlay::ScreenMode::Normal);
         assert_eq!(session.panels.list().len(), 2);
 
         let req = WsRequest {
@@ -1357,10 +1717,13 @@ mod tests {
             crate::panel::Position::Top,
             1,
             None,
+            None,
             vec![crate::overlay::OverlaySpan {
                 text: "A".to_string(),
-                fg: None, bg: None, bold: false, italic: false, underline: false,
+                id: None, fg: None, bg: None, bold: false, italic: false, underline: false,
             }],
+            false,
+            crate::overlay::ScreenMode::Normal,
         );
         let req = WsRequest {
             id: None,
@@ -1372,5 +1735,727 @@ mod tests {
         let panels = json["result"].as_array().unwrap();
         assert_eq!(panels.len(), 1);
         assert_eq!(panels[0]["position"], "top");
+    }
+
+    // -----------------------------------------------------------------------
+    // update_spans / region_write / batch_update dispatch tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn dispatch_update_overlay_spans() {
+        let (session, _rx) = create_test_session();
+        let oid = session.overlays.create(0, 0, None, 80, 1, None, vec![
+            crate::overlay::OverlaySpan {
+                text: "Old".to_string(),
+                id: Some("lbl".to_string()),
+                fg: None, bg: None, bold: false, italic: false, underline: false,
+            },
+        ], false, crate::overlay::ScreenMode::Normal);
+        let req = WsRequest {
+            id: Some(json!(1)),
+            method: "update_overlay_spans".to_string(),
+            params: Some(json!({
+                "id": oid,
+                "spans": [{"id": "lbl", "text": "New"}]
+            })),
+        };
+        let resp = dispatch(&req, &session).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert!(json["result"].is_object());
+        let overlay = session.overlays.get(&oid).unwrap();
+        assert_eq!(overlay.spans[0].text, "New");
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_overlay_spans_not_found() {
+        let (session, _rx) = create_test_session();
+        let req = WsRequest {
+            id: None,
+            method: "update_overlay_spans".to_string(),
+            params: Some(json!({"id": "nonexistent", "spans": []})),
+        };
+        let resp = dispatch(&req, &session).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["error"]["code"], "overlay_not_found");
+    }
+
+    #[tokio::test]
+    async fn dispatch_overlay_region_write() {
+        let (session, _rx) = create_test_session();
+        let oid = session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Normal);
+        let req = WsRequest {
+            id: Some(json!(2)),
+            method: "overlay_region_write".to_string(),
+            params: Some(json!({
+                "id": oid,
+                "writes": [{"row": 0, "col": 0, "text": "X"}]
+            })),
+        };
+        let resp = dispatch(&req, &session).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert!(json["result"].is_object());
+        let overlay = session.overlays.get(&oid).unwrap();
+        assert_eq!(overlay.region_writes.len(), 1);
+        assert_eq!(overlay.region_writes[0].text, "X");
+    }
+
+    #[tokio::test]
+    async fn dispatch_overlay_region_write_not_found() {
+        let (session, _rx) = create_test_session();
+        let req = WsRequest {
+            id: None,
+            method: "overlay_region_write".to_string(),
+            params: Some(json!({"id": "nonexistent", "writes": []})),
+        };
+        let resp = dispatch(&req, &session).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["error"]["code"], "overlay_not_found");
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_panel_spans() {
+        let (session, _rx) = create_test_session();
+        let pid = session.panels.create(
+            crate::panel::Position::Top,
+            1,
+            None,
+            None,
+            vec![crate::overlay::OverlaySpan {
+                text: "Old".to_string(),
+                id: Some("tag".to_string()),
+                fg: None, bg: None, bold: false, italic: false, underline: false,
+            }],
+            false,
+            crate::overlay::ScreenMode::Normal,
+        );
+        let req = WsRequest {
+            id: Some(json!(3)),
+            method: "update_panel_spans".to_string(),
+            params: Some(json!({
+                "id": pid,
+                "spans": [{"id": "tag", "text": "Updated"}]
+            })),
+        };
+        let resp = dispatch(&req, &session).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert!(json["result"].is_object());
+        let panel = session.panels.get(&pid).unwrap();
+        assert_eq!(panel.spans[0].text, "Updated");
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_panel_spans_not_found() {
+        let (session, _rx) = create_test_session();
+        let req = WsRequest {
+            id: None,
+            method: "update_panel_spans".to_string(),
+            params: Some(json!({"id": "nonexistent", "spans": []})),
+        };
+        let resp = dispatch(&req, &session).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["error"]["code"], "panel_not_found");
+    }
+
+    #[tokio::test]
+    async fn dispatch_panel_region_write() {
+        let (session, _rx) = create_test_session();
+        let pid = session.panels.create(
+            crate::panel::Position::Bottom,
+            3,
+            None,
+            None,
+            vec![],
+            false,
+            crate::overlay::ScreenMode::Normal,
+        );
+        let req = WsRequest {
+            id: Some(json!(4)),
+            method: "panel_region_write".to_string(),
+            params: Some(json!({
+                "id": pid,
+                "writes": [{"row": 1, "col": 2, "text": "Y"}]
+            })),
+        };
+        let resp = dispatch(&req, &session).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert!(json["result"].is_object());
+        let panel = session.panels.get(&pid).unwrap();
+        assert_eq!(panel.region_writes.len(), 1);
+        assert_eq!(panel.region_writes[0].text, "Y");
+        assert_eq!(panel.region_writes[0].row, 1);
+        assert_eq!(panel.region_writes[0].col, 2);
+    }
+
+    #[tokio::test]
+    async fn dispatch_panel_region_write_not_found() {
+        let (session, _rx) = create_test_session();
+        let req = WsRequest {
+            id: None,
+            method: "panel_region_write".to_string(),
+            params: Some(json!({"id": "nonexistent", "writes": []})),
+        };
+        let resp = dispatch(&req, &session).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["error"]["code"], "panel_not_found");
+    }
+
+    #[tokio::test]
+    async fn dispatch_batch_update_overlay() {
+        let (session, _rx) = create_test_session();
+        let oid = session.overlays.create(0, 0, None, 80, 5, None, vec![
+            crate::overlay::OverlaySpan {
+                text: "Title".to_string(),
+                id: Some("title".to_string()),
+                fg: None, bg: None, bold: false, italic: false, underline: false,
+            },
+        ], false, crate::overlay::ScreenMode::Normal);
+        let req = WsRequest {
+            id: Some(json!(5)),
+            method: "batch_update".to_string(),
+            params: Some(json!({
+                "id": oid,
+                "type": "overlay",
+                "spans": [{"id": "title", "text": "New Title"}],
+                "writes": [{"row": 2, "col": 0, "text": "Cell"}]
+            })),
+        };
+        let resp = dispatch(&req, &session).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert!(json["result"].is_object());
+        let overlay = session.overlays.get(&oid).unwrap();
+        assert_eq!(overlay.spans[0].text, "New Title");
+        assert_eq!(overlay.region_writes.len(), 1);
+        assert_eq!(overlay.region_writes[0].text, "Cell");
+    }
+
+    #[tokio::test]
+    async fn dispatch_batch_update_panel() {
+        let (session, _rx) = create_test_session();
+        let pid = session.panels.create(
+            crate::panel::Position::Top,
+            3,
+            None,
+            None,
+            vec![crate::overlay::OverlaySpan {
+                text: "Header".to_string(),
+                id: Some("hdr".to_string()),
+                fg: None, bg: None, bold: false, italic: false, underline: false,
+            }],
+            false,
+            crate::overlay::ScreenMode::Normal,
+        );
+        let req = WsRequest {
+            id: Some(json!(6)),
+            method: "batch_update".to_string(),
+            params: Some(json!({
+                "id": pid,
+                "type": "panel",
+                "spans": [{"id": "hdr", "text": "Updated Header"}],
+                "writes": [{"row": 1, "col": 0, "text": "Row data"}]
+            })),
+        };
+        let resp = dispatch(&req, &session).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert!(json["result"].is_object());
+        let panel = session.panels.get(&pid).unwrap();
+        assert_eq!(panel.spans[0].text, "Updated Header");
+        assert_eq!(panel.region_writes.len(), 1);
+        assert_eq!(panel.region_writes[0].text, "Row data");
+    }
+
+    #[tokio::test]
+    async fn dispatch_batch_update_overlay_not_found() {
+        let (session, _rx) = create_test_session();
+        let req = WsRequest {
+            id: None,
+            method: "batch_update".to_string(),
+            params: Some(json!({
+                "id": "nonexistent",
+                "type": "overlay",
+                "spans": []
+            })),
+        };
+        let resp = dispatch(&req, &session).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["error"]["code"], "overlay_not_found");
+    }
+
+    #[tokio::test]
+    async fn dispatch_batch_update_panel_not_found() {
+        let (session, _rx) = create_test_session();
+        let req = WsRequest {
+            id: None,
+            method: "batch_update".to_string(),
+            params: Some(json!({
+                "id": "nonexistent",
+                "type": "panel",
+                "spans": []
+            })),
+        };
+        let resp = dispatch(&req, &session).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["error"]["code"], "panel_not_found");
+    }
+
+    #[tokio::test]
+    async fn dispatch_batch_update_spans_only() {
+        let (session, _rx) = create_test_session();
+        let oid = session.overlays.create(0, 0, None, 80, 1, None, vec![
+            crate::overlay::OverlaySpan {
+                text: "A".to_string(),
+                id: Some("a".to_string()),
+                fg: None, bg: None, bold: false, italic: false, underline: false,
+            },
+        ], false, crate::overlay::ScreenMode::Normal);
+        let req = WsRequest {
+            id: None,
+            method: "batch_update".to_string(),
+            params: Some(json!({
+                "id": oid,
+                "type": "overlay",
+                "spans": [{"id": "a", "text": "B"}]
+            })),
+        };
+        let resp = dispatch(&req, &session).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert!(json["result"].is_object());
+        let overlay = session.overlays.get(&oid).unwrap();
+        assert_eq!(overlay.spans[0].text, "B");
+        assert!(overlay.region_writes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn dispatch_batch_update_writes_only() {
+        let (session, _rx) = create_test_session();
+        let oid = session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Normal);
+        let req = WsRequest {
+            id: None,
+            method: "batch_update".to_string(),
+            params: Some(json!({
+                "id": oid,
+                "type": "overlay",
+                "writes": [{"row": 0, "col": 0, "text": "Z"}]
+            })),
+        };
+        let resp = dispatch(&req, &session).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert!(json["result"].is_object());
+        let overlay = session.overlays.get(&oid).unwrap();
+        assert_eq!(overlay.region_writes.len(), 1);
+        assert_eq!(overlay.region_writes[0].text, "Z");
+    }
+
+    // -----------------------------------------------------------------------
+    // Focus dispatch tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn dispatch_get_focus_default_none() {
+        let (session, _rx) = create_test_session();
+        let req = WsRequest {
+            id: None,
+            method: "get_focus".to_string(),
+            params: None,
+        };
+        let resp = dispatch(&req, &session).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert!(json["result"]["focused"].is_null());
+    }
+
+    #[tokio::test]
+    async fn dispatch_focus_focusable_overlay() {
+        let (session, _rx) = create_test_session();
+        let oid = session.overlays.create(0, 0, None, 80, 1, None, vec![], true, crate::overlay::ScreenMode::Normal);
+        let req = WsRequest {
+            id: None,
+            method: "focus".to_string(),
+            params: Some(json!({"id": oid})),
+        };
+        let resp = dispatch(&req, &session).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert!(json["result"].is_object());
+        assert_eq!(session.focus.focused(), Some(oid));
+    }
+
+    #[tokio::test]
+    async fn dispatch_focus_non_focusable_overlay() {
+        let (session, _rx) = create_test_session();
+        let oid = session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Normal);
+        let req = WsRequest {
+            id: None,
+            method: "focus".to_string(),
+            params: Some(json!({"id": oid})),
+        };
+        let resp = dispatch(&req, &session).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["error"]["code"], "not_focusable");
+    }
+
+    #[tokio::test]
+    async fn dispatch_focus_nonexistent_target() {
+        let (session, _rx) = create_test_session();
+        let req = WsRequest {
+            id: None,
+            method: "focus".to_string(),
+            params: Some(json!({"id": "nonexistent"})),
+        };
+        let resp = dispatch(&req, &session).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["error"]["code"], "invalid_request");
+    }
+
+    #[tokio::test]
+    async fn dispatch_focus_focusable_panel() {
+        let (session, _rx) = create_test_session();
+        let pid = session.panels.create(
+            crate::panel::Position::Bottom,
+            1,
+            None,
+            None,
+            vec![],
+            true,
+            crate::overlay::ScreenMode::Normal,
+        );
+        let req = WsRequest {
+            id: None,
+            method: "focus".to_string(),
+            params: Some(json!({"id": pid})),
+        };
+        let resp = dispatch(&req, &session).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert!(json["result"].is_object());
+        assert_eq!(session.focus.focused(), Some(pid));
+    }
+
+    #[tokio::test]
+    async fn dispatch_unfocus() {
+        let (session, _rx) = create_test_session();
+        let oid = session.overlays.create(0, 0, None, 80, 1, None, vec![], true, crate::overlay::ScreenMode::Normal);
+        session.focus.focus(oid.clone());
+        assert_eq!(session.focus.focused(), Some(oid));
+
+        let req = WsRequest {
+            id: None,
+            method: "unfocus".to_string(),
+            params: None,
+        };
+        let resp = dispatch(&req, &session).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert!(json["result"].is_object());
+        assert!(session.focus.focused().is_none());
+    }
+
+    #[tokio::test]
+    async fn dispatch_get_focus_after_focus() {
+        let (session, _rx) = create_test_session();
+        let oid = session.overlays.create(0, 0, None, 80, 1, None, vec![], true, crate::overlay::ScreenMode::Normal);
+        session.focus.focus(oid.clone());
+
+        let req = WsRequest {
+            id: None,
+            method: "get_focus".to_string(),
+            params: None,
+        };
+        let resp = dispatch(&req, &session).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["result"]["focused"], oid);
+    }
+
+    // -----------------------------------------------------------------------
+    // Screen mode dispatch tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn dispatch_get_screen_mode_default_normal() {
+        let (session, _rx) = create_test_session();
+        let req = WsRequest {
+            id: Some(json!(1)),
+            method: "get_screen_mode".to_string(),
+            params: None,
+        };
+        let resp = dispatch(&req, &session).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["result"]["mode"], "normal");
+    }
+
+    #[tokio::test]
+    async fn dispatch_enter_alt_screen() {
+        let (session, _rx) = create_test_session();
+        let req = WsRequest {
+            id: Some(json!(2)),
+            method: "enter_alt_screen".to_string(),
+            params: None,
+        };
+        let resp = dispatch(&req, &session).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert!(json["result"].is_object());
+        assert_eq!(*session.screen_mode.read(), crate::overlay::ScreenMode::Alt);
+    }
+
+    #[tokio::test]
+    async fn dispatch_enter_alt_screen_already_alt() {
+        let (session, _rx) = create_test_session();
+        *session.screen_mode.write() = crate::overlay::ScreenMode::Alt;
+
+        let req = WsRequest {
+            id: Some(json!(3)),
+            method: "enter_alt_screen".to_string(),
+            params: None,
+        };
+        let resp = dispatch(&req, &session).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["error"]["code"], "already_in_alt_screen");
+    }
+
+    #[tokio::test]
+    async fn dispatch_exit_alt_screen() {
+        let (session, _rx) = create_test_session();
+        *session.screen_mode.write() = crate::overlay::ScreenMode::Alt;
+
+        let req = WsRequest {
+            id: Some(json!(4)),
+            method: "exit_alt_screen".to_string(),
+            params: None,
+        };
+        let resp = dispatch(&req, &session).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert!(json["result"].is_object());
+        assert_eq!(*session.screen_mode.read(), crate::overlay::ScreenMode::Normal);
+    }
+
+    #[tokio::test]
+    async fn dispatch_exit_alt_screen_already_normal() {
+        let (session, _rx) = create_test_session();
+
+        let req = WsRequest {
+            id: Some(json!(5)),
+            method: "exit_alt_screen".to_string(),
+            params: None,
+        };
+        let resp = dispatch(&req, &session).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["error"]["code"], "not_in_alt_screen");
+    }
+
+    #[tokio::test]
+    async fn dispatch_screen_mode_round_trip() {
+        let (session, _rx) = create_test_session();
+
+        // Default is normal
+        let req = WsRequest {
+            id: None,
+            method: "get_screen_mode".to_string(),
+            params: None,
+        };
+        let resp = dispatch(&req, &session).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["result"]["mode"], "normal");
+
+        // Enter alt
+        let req = WsRequest {
+            id: None,
+            method: "enter_alt_screen".to_string(),
+            params: None,
+        };
+        let resp = dispatch(&req, &session).await;
+        assert!(serde_json::to_value(&resp).unwrap()["result"].is_object());
+
+        // Verify mode is alt
+        let req = WsRequest {
+            id: None,
+            method: "get_screen_mode".to_string(),
+            params: None,
+        };
+        let resp = dispatch(&req, &session).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["result"]["mode"], "alt");
+
+        // Exit alt
+        let req = WsRequest {
+            id: None,
+            method: "exit_alt_screen".to_string(),
+            params: None,
+        };
+        let resp = dispatch(&req, &session).await;
+        assert!(serde_json::to_value(&resp).unwrap()["result"].is_object());
+
+        // Verify mode is normal again
+        let req = WsRequest {
+            id: None,
+            method: "get_screen_mode".to_string(),
+            params: None,
+        };
+        let resp = dispatch(&req, &session).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["result"]["mode"], "normal");
+    }
+
+    #[tokio::test]
+    async fn dispatch_overlays_created_in_alt_mode_invisible_in_normal() {
+        let (session, _rx) = create_test_session();
+
+        // Create overlay in normal mode
+        session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Normal);
+
+        // Switch to alt mode
+        *session.screen_mode.write() = crate::overlay::ScreenMode::Alt;
+
+        // Create overlay in alt mode
+        session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Alt);
+
+        // list_overlays should only return alt-mode overlays
+        let req = WsRequest {
+            id: None,
+            method: "list_overlays".to_string(),
+            params: None,
+        };
+        let resp = dispatch(&req, &session).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        let overlays = json["result"].as_array().unwrap();
+        assert_eq!(overlays.len(), 1);
+
+        // Switch back to normal
+        *session.screen_mode.write() = crate::overlay::ScreenMode::Normal;
+
+        // list_overlays should only return normal-mode overlays
+        let resp = dispatch(&req, &session).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        let overlays = json["result"].as_array().unwrap();
+        assert_eq!(overlays.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn dispatch_panels_created_in_alt_mode_invisible_in_normal() {
+        let (session, _rx) = create_test_session();
+
+        // Create panel in normal mode
+        session.panels.create(
+            crate::panel::Position::Top,
+            1,
+            None,
+            None,
+            vec![],
+            false,
+            crate::overlay::ScreenMode::Normal,
+        );
+
+        // Switch to alt mode
+        *session.screen_mode.write() = crate::overlay::ScreenMode::Alt;
+
+        // Create panel in alt mode
+        session.panels.create(
+            crate::panel::Position::Bottom,
+            1,
+            None,
+            None,
+            vec![],
+            false,
+            crate::overlay::ScreenMode::Alt,
+        );
+
+        // list_panels should only return alt-mode panels
+        let req = WsRequest {
+            id: None,
+            method: "list_panels".to_string(),
+            params: None,
+        };
+        let resp = dispatch(&req, &session).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        let panels = json["result"].as_array().unwrap();
+        assert_eq!(panels.len(), 1);
+
+        // Switch back to normal
+        *session.screen_mode.write() = crate::overlay::ScreenMode::Normal;
+
+        // list_panels should only return normal-mode panels
+        let resp = dispatch(&req, &session).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        let panels = json["result"].as_array().unwrap();
+        assert_eq!(panels.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn dispatch_create_overlay_tags_with_current_mode() {
+        let (session, _rx) = create_test_session();
+
+        // Enter alt mode
+        *session.screen_mode.write() = crate::overlay::ScreenMode::Alt;
+
+        // Create overlay via dispatch (should auto-tag with Alt)
+        let req = WsRequest {
+            id: None,
+            method: "create_overlay".to_string(),
+            params: Some(json!({
+                "x": 0, "y": 0, "width": 80, "height": 1,
+                "spans": [{"text": "Alt overlay"}]
+            })),
+        };
+        let resp = dispatch(&req, &session).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        let overlay_id = json["result"]["id"].as_str().unwrap().to_string();
+
+        // Verify overlay has alt screen_mode
+        let overlay = session.overlays.get(&overlay_id).unwrap();
+        assert_eq!(overlay.screen_mode, crate::overlay::ScreenMode::Alt);
+    }
+
+    #[tokio::test]
+    async fn dispatch_create_panel_tags_with_current_mode() {
+        let (session, _rx) = create_test_session();
+
+        // Enter alt mode
+        *session.screen_mode.write() = crate::overlay::ScreenMode::Alt;
+
+        // Create panel via dispatch (should auto-tag with Alt)
+        let req = WsRequest {
+            id: None,
+            method: "create_panel".to_string(),
+            params: Some(json!({
+                "position": "top",
+                "height": 1,
+                "spans": [{"text": "Alt panel"}]
+            })),
+        };
+        let resp = dispatch(&req, &session).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        let panel_id = json["result"]["id"].as_str().unwrap().to_string();
+
+        // Verify panel has alt screen_mode
+        let panel = session.panels.get(&panel_id).unwrap();
+        assert_eq!(panel.screen_mode, crate::overlay::ScreenMode::Alt);
+    }
+
+    #[tokio::test]
+    async fn dispatch_exit_alt_screen_deletes_alt_elements() {
+        let (session, _rx) = create_test_session();
+
+        // Enter alt mode
+        *session.screen_mode.write() = crate::overlay::ScreenMode::Alt;
+
+        // Create alt-mode overlay and panel
+        session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Alt);
+        session.panels.create(crate::panel::Position::Bottom, 1, None, None, vec![], false, crate::overlay::ScreenMode::Alt);
+
+        // Also create normal-mode elements (should survive)
+        session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Normal);
+        session.panels.create(crate::panel::Position::Top, 1, None, None, vec![], false, crate::overlay::ScreenMode::Normal);
+
+        assert_eq!(session.overlays.list().len(), 2);
+        assert_eq!(session.panels.list().len(), 2);
+
+        // Exit alt screen
+        let req = WsRequest {
+            id: None,
+            method: "exit_alt_screen".to_string(),
+            params: None,
+        };
+        let resp = dispatch(&req, &session).await;
+        assert!(serde_json::to_value(&resp).unwrap()["result"].is_object());
+
+        // Alt elements should be deleted, normal elements preserved
+        assert_eq!(session.overlays.list().len(), 1);
+        assert_eq!(session.overlays.list()[0].screen_mode, crate::overlay::ScreenMode::Normal);
+        assert_eq!(session.panels.list().len(), 1);
+        assert_eq!(session.panels.list()[0].screen_mode, crate::overlay::ScreenMode::Normal);
     }
 }
