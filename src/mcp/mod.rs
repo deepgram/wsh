@@ -8,8 +8,9 @@ use bytes::Bytes;
 use rmcp::{
     handler::server::router::tool::ToolRouter,
     model::*,
-    tool, tool_router,
+    tool, tool_router, tool_handler,
     handler::server::wrapper::Parameters,
+    ServerHandler,
 };
 
 use crate::api::AppState;
@@ -44,6 +45,39 @@ impl WshMcpServer {
             .sessions
             .get(name)
             .ok_or_else(|| ErrorData::invalid_params(format!("session not found: {name}"), None))
+    }
+}
+
+#[tool_handler(router = self.tool_router)]
+impl ServerHandler for WshMcpServer {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo {
+            protocol_version: ProtocolVersion::V_2024_11_05,
+            capabilities: ServerCapabilities::builder()
+                .enable_tools()
+                .enable_resources()
+                .enable_prompts()
+                .build(),
+            server_info: Implementation {
+                name: "wsh".to_string(),
+                title: None,
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                description: Some(
+                    "An API for your terminal. Exposes terminal sessions as structured, \
+                     programmable interfaces for AI agents and automation."
+                        .to_string(),
+                ),
+                icons: None,
+                website_url: None,
+            },
+            instructions: Some(
+                "wsh exposes terminal sessions as an API. Use wsh_run_command for the common \
+                 send/wait/read loop. Use wsh_create_session to start sessions, \
+                 wsh_list_sessions to discover them, wsh_manage_session to kill/rename/detach. \
+                 Visual feedback via wsh_overlay and wsh_panel. Input capture via wsh_input_mode."
+                    .to_string(),
+            ),
+        }
     }
 }
 
