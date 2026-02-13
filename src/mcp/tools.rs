@@ -216,6 +216,124 @@ pub struct RunCommandParams {
     pub format: ScreenFormat,
 }
 
+// ── Visual feedback parameter types ─────────────────────────────
+
+/// Parameters for the `wsh_overlay` tool (create, update, or list overlays).
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct OverlayParams {
+    /// The name of the target session.
+    #[schemars(description = "The name of the target session.")]
+    pub session: String,
+
+    /// Overlay ID. Omit to create a new overlay; provide to update an existing one.
+    #[schemars(description = "Overlay ID. Omit to create a new overlay; provide to update an existing one.")]
+    pub id: Option<String>,
+
+    /// X position (column) of the overlay. Required for create.
+    #[schemars(description = "X position (column) of the overlay. Required when creating.")]
+    pub x: Option<u16>,
+
+    /// Y position (row) of the overlay. Required for create.
+    #[schemars(description = "Y position (row) of the overlay. Required when creating.")]
+    pub y: Option<u16>,
+
+    /// Z-index for stacking order. Auto-assigned if omitted on create.
+    #[schemars(description = "Z-index for stacking order. Auto-assigned if omitted on create.")]
+    pub z: Option<i32>,
+
+    /// Width in columns. Required for create.
+    #[schemars(description = "Width in columns. Required when creating.")]
+    pub width: Option<u16>,
+
+    /// Height in rows. Required for create.
+    #[schemars(description = "Height in rows. Required when creating.")]
+    pub height: Option<u16>,
+
+    /// Background style as JSON object (e.g. {\"bg\": \"blue\"}).
+    #[schemars(description = "Background style object. Example: {\"bg\": \"blue\"} or {\"bg\": {\"r\":0,\"g\":0,\"b\":128}}.")]
+    pub background: Option<serde_json::Value>,
+
+    /// Styled text spans to render in the overlay.
+    #[schemars(description = "Array of styled text spans. Each span has 'text' (required), and optional 'id', 'fg', 'bg', 'bold', 'italic', 'underline'.")]
+    pub spans: Option<Vec<serde_json::Value>>,
+
+    /// Whether this overlay can receive input focus. Defaults to false.
+    #[serde(default)]
+    #[schemars(description = "Whether this overlay can receive input focus. Defaults to false.")]
+    pub focusable: bool,
+
+    /// If true, list all overlays for the current screen mode instead of creating/updating.
+    #[serde(default)]
+    #[schemars(description = "If true, list all overlays for the current screen mode. All other parameters are ignored.")]
+    pub list: bool,
+}
+
+/// Parameters for the `wsh_remove_overlay` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RemoveOverlayParams {
+    /// The name of the target session.
+    #[schemars(description = "The name of the target session.")]
+    pub session: String,
+
+    /// Overlay ID to remove. If omitted, all overlays are cleared.
+    #[schemars(description = "Overlay ID to remove. If omitted, all overlays are cleared.")]
+    pub id: Option<String>,
+}
+
+/// Parameters for the `wsh_panel` tool (create, update, or list panels).
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct PanelParams {
+    /// The name of the target session.
+    #[schemars(description = "The name of the target session.")]
+    pub session: String,
+
+    /// Panel ID. Omit to create a new panel; provide to update an existing one.
+    #[schemars(description = "Panel ID. Omit to create a new panel; provide to update an existing one.")]
+    pub id: Option<String>,
+
+    /// Panel position: \"top\" or \"bottom\". Required for create.
+    #[schemars(description = "Panel position: 'top' or 'bottom'. Required when creating.")]
+    pub position: Option<String>,
+
+    /// Height in rows. Required for create.
+    #[schemars(description = "Panel height in rows. Required when creating.")]
+    pub height: Option<u16>,
+
+    /// Z-index for stacking order. Auto-assigned if omitted on create.
+    #[schemars(description = "Z-index for stacking order. Auto-assigned if omitted on create.")]
+    pub z: Option<i32>,
+
+    /// Background style as JSON object.
+    #[schemars(description = "Background style object. Example: {\"bg\": \"blue\"}.")]
+    pub background: Option<serde_json::Value>,
+
+    /// Styled text spans to render in the panel.
+    #[schemars(description = "Array of styled text spans. Each span has 'text' (required), and optional 'id', 'fg', 'bg', 'bold', 'italic', 'underline'.")]
+    pub spans: Option<Vec<serde_json::Value>>,
+
+    /// Whether this panel can receive input focus. Defaults to false.
+    #[serde(default)]
+    #[schemars(description = "Whether this panel can receive input focus. Defaults to false.")]
+    pub focusable: bool,
+
+    /// If true, list all panels for the current screen mode instead of creating/updating.
+    #[serde(default)]
+    #[schemars(description = "If true, list all panels for the current screen mode. All other parameters are ignored.")]
+    pub list: bool,
+}
+
+/// Parameters for the `wsh_remove_panel` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RemovePanelParams {
+    /// The name of the target session.
+    #[schemars(description = "The name of the target session.")]
+    pub session: String,
+
+    /// Panel ID to remove. If omitted, all panels are cleared.
+    #[schemars(description = "Panel ID to remove. If omitted, all panels are cleared.")]
+    pub id: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -523,6 +641,200 @@ mod tests {
     fn run_command_params_missing_input() {
         let json = serde_json::json!({"session": "s"});
         let result = serde_json::from_value::<RunCommandParams>(json);
+        assert!(result.is_err());
+    }
+
+    // ── OverlayParams ──────────────────────────────────────────
+
+    #[test]
+    fn overlay_params_create_minimal() {
+        let json = serde_json::json!({
+            "session": "my-session",
+            "x": 0,
+            "y": 0,
+            "width": 40,
+            "height": 5
+        });
+        let params: OverlayParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.session, "my-session");
+        assert!(params.id.is_none());
+        assert_eq!(params.x, Some(0));
+        assert_eq!(params.y, Some(0));
+        assert_eq!(params.width, Some(40));
+        assert_eq!(params.height, Some(5));
+        assert!(params.z.is_none());
+        assert!(params.background.is_none());
+        assert!(params.spans.is_none());
+        assert!(!params.focusable);
+        assert!(!params.list);
+    }
+
+    #[test]
+    fn overlay_params_update_with_id() {
+        let json = serde_json::json!({
+            "session": "s",
+            "id": "overlay-123",
+            "x": 10,
+            "spans": [{"text": "hello", "bold": true}]
+        });
+        let params: OverlayParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.id.as_deref(), Some("overlay-123"));
+        assert_eq!(params.x, Some(10));
+        assert!(params.spans.is_some());
+        assert_eq!(params.spans.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn overlay_params_list_mode() {
+        let json = serde_json::json!({
+            "session": "s",
+            "list": true
+        });
+        let params: OverlayParams = serde_json::from_value(json).unwrap();
+        assert!(params.list);
+    }
+
+    #[test]
+    fn overlay_params_with_background() {
+        let json = serde_json::json!({
+            "session": "s",
+            "x": 0,
+            "y": 0,
+            "width": 20,
+            "height": 3,
+            "background": {"bg": "blue"}
+        });
+        let params: OverlayParams = serde_json::from_value(json).unwrap();
+        assert!(params.background.is_some());
+    }
+
+    #[test]
+    fn overlay_params_missing_session() {
+        let json = serde_json::json!({"x": 0, "y": 0, "width": 10, "height": 1});
+        let result = serde_json::from_value::<OverlayParams>(json);
+        assert!(result.is_err());
+    }
+
+    // ── RemoveOverlayParams ────────────────────────────────────
+
+    #[test]
+    fn remove_overlay_params_with_id() {
+        let json = serde_json::json!({
+            "session": "s",
+            "id": "overlay-abc"
+        });
+        let params: RemoveOverlayParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.session, "s");
+        assert_eq!(params.id.as_deref(), Some("overlay-abc"));
+    }
+
+    #[test]
+    fn remove_overlay_params_clear_all() {
+        let json = serde_json::json!({"session": "s"});
+        let params: RemoveOverlayParams = serde_json::from_value(json).unwrap();
+        assert!(params.id.is_none());
+    }
+
+    #[test]
+    fn remove_overlay_params_missing_session() {
+        let json = serde_json::json!({});
+        let result = serde_json::from_value::<RemoveOverlayParams>(json);
+        assert!(result.is_err());
+    }
+
+    // ── PanelParams ────────────────────────────────────────────
+
+    #[test]
+    fn panel_params_create_minimal() {
+        let json = serde_json::json!({
+            "session": "my-session",
+            "position": "bottom",
+            "height": 2
+        });
+        let params: PanelParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.session, "my-session");
+        assert!(params.id.is_none());
+        assert_eq!(params.position.as_deref(), Some("bottom"));
+        assert_eq!(params.height, Some(2));
+        assert!(!params.focusable);
+        assert!(!params.list);
+    }
+
+    #[test]
+    fn panel_params_update_with_id() {
+        let json = serde_json::json!({
+            "session": "s",
+            "id": "panel-456",
+            "height": 3,
+            "spans": [{"text": "status line"}]
+        });
+        let params: PanelParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.id.as_deref(), Some("panel-456"));
+        assert_eq!(params.height, Some(3));
+        assert!(params.spans.is_some());
+    }
+
+    #[test]
+    fn panel_params_list_mode() {
+        let json = serde_json::json!({
+            "session": "s",
+            "list": true
+        });
+        let params: PanelParams = serde_json::from_value(json).unwrap();
+        assert!(params.list);
+    }
+
+    #[test]
+    fn panel_params_missing_session() {
+        let json = serde_json::json!({"position": "top", "height": 1});
+        let result = serde_json::from_value::<PanelParams>(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn panel_params_with_all_fields() {
+        let json = serde_json::json!({
+            "session": "s",
+            "position": "top",
+            "height": 4,
+            "z": 10,
+            "background": {"bg": {"r": 50, "g": 50, "b": 50}},
+            "spans": [{"text": "hello"}],
+            "focusable": true
+        });
+        let params: PanelParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.position.as_deref(), Some("top"));
+        assert_eq!(params.height, Some(4));
+        assert_eq!(params.z, Some(10));
+        assert!(params.background.is_some());
+        assert!(params.spans.is_some());
+        assert!(params.focusable);
+    }
+
+    // ── RemovePanelParams ──────────────────────────────────────
+
+    #[test]
+    fn remove_panel_params_with_id() {
+        let json = serde_json::json!({
+            "session": "s",
+            "id": "panel-xyz"
+        });
+        let params: RemovePanelParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.session, "s");
+        assert_eq!(params.id.as_deref(), Some("panel-xyz"));
+    }
+
+    #[test]
+    fn remove_panel_params_clear_all() {
+        let json = serde_json::json!({"session": "s"});
+        let params: RemovePanelParams = serde_json::from_value(json).unwrap();
+        assert!(params.id.is_none());
+    }
+
+    #[test]
+    fn remove_panel_params_missing_session() {
+        let json = serde_json::json!({});
+        let result = serde_json::from_value::<RemovePanelParams>(json);
         assert!(result.is_err());
     }
 }

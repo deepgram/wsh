@@ -21,6 +21,7 @@ use tools::{
     CreateSessionParams, ListSessionsParams, ManageSessionParams, ManageAction,
     SendInputParams, Encoding, GetScreenParams, GetScrollbackParams,
     AwaitQuiesceParams, RunCommandParams,
+    OverlayParams, RemoveOverlayParams, PanelParams, RemovePanelParams,
 };
 
 #[derive(Clone)]
@@ -406,6 +407,411 @@ impl WshMcpServer {
                     "screen": screen,
                 });
                 Ok(CallToolResult::error(vec![Content::text(
+                    serde_json::to_string(&result).unwrap_or_default(),
+                )]))
+            }
+        }
+    }
+
+    // ── Visual feedback tools ────────────────────────────────────
+
+    /// Create, update, or list overlays on a terminal session.
+    #[tool(description = "Create, update, or list overlays on a terminal session. Overlays are styled text boxes rendered on top of terminal content. Modes: set list=true to list all overlays; omit id to create a new overlay (x, y, width, height required); provide id to update an existing overlay.")]
+    async fn wsh_overlay(
+        &self,
+        Parameters(params): Parameters<OverlayParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let session = self.get_session(&params.session)?;
+        let current_mode = *session.screen_mode.read();
+
+        // LIST mode
+        if params.list {
+            let overlays = session.overlays.list_by_mode(current_mode);
+            let result = serde_json::json!({
+                "overlays": overlays,
+            });
+            return Ok(CallToolResult::success(vec![Content::text(
+                serde_json::to_string(&result).unwrap_or_default(),
+            )]));
+        }
+
+        // Deserialize spans if provided
+        let spans = match &params.spans {
+            Some(raw) => {
+                let spans: Vec<crate::overlay::OverlaySpan> = raw
+                    .iter()
+                    .map(|v| serde_json::from_value(v.clone()))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| {
+                        ErrorData::invalid_params(format!("invalid span: {e}"), None)
+                    })?;
+                Some(spans)
+            }
+            None => None,
+        };
+
+        // Deserialize background if provided
+        let background = match &params.background {
+            Some(raw) => {
+                let bg: crate::overlay::BackgroundStyle =
+                    serde_json::from_value(raw.clone()).map_err(|e| {
+                        ErrorData::invalid_params(format!("invalid background: {e}"), None)
+                    })?;
+                Some(bg)
+            }
+            None => None,
+        };
+
+        match params.id {
+            // UPDATE existing overlay
+            Some(id) => {
+                // Patch position/size if any fields provided
+                let has_position_fields = params.x.is_some()
+                    || params.y.is_some()
+                    || params.z.is_some()
+                    || params.width.is_some()
+                    || params.height.is_some()
+                    || background.is_some();
+
+                if has_position_fields {
+                    let found = session.overlays.move_to(
+                        &id,
+                        params.x,
+                        params.y,
+                        params.z,
+                        params.width,
+                        params.height,
+                        background,
+                    );
+                    if !found {
+                        return Err(ErrorData::invalid_params(
+                            format!("overlay not found: {id}"),
+                            None,
+                        ));
+                    }
+                }
+
+                // Replace spans if provided
+                if let Some(spans) = spans {
+                    let found = session.overlays.update(&id, spans);
+                    if !found {
+                        return Err(ErrorData::invalid_params(
+                            format!("overlay not found: {id}"),
+                            None,
+                        ));
+                    }
+                }
+
+                let _ = session
+                    .visual_update_tx
+                    .send(crate::protocol::VisualUpdate::OverlaysChanged);
+
+                let result = serde_json::json!({
+                    "status": "updated",
+                    "id": id,
+                });
+                Ok(CallToolResult::success(vec![Content::text(
+                    serde_json::to_string(&result).unwrap_or_default(),
+                )]))
+            }
+
+            // CREATE new overlay
+            None => {
+                let x = params.x.ok_or_else(|| {
+                    ErrorData::invalid_params("x is required when creating an overlay", None)
+                })?;
+                let y = params.y.ok_or_else(|| {
+                    ErrorData::invalid_params("y is required when creating an overlay", None)
+                })?;
+                let width = params.width.ok_or_else(|| {
+                    ErrorData::invalid_params("width is required when creating an overlay", None)
+                })?;
+                let height = params.height.ok_or_else(|| {
+                    ErrorData::invalid_params("height is required when creating an overlay", None)
+                })?;
+
+                let id = session.overlays.create(
+                    x,
+                    y,
+                    params.z,
+                    width,
+                    height,
+                    background,
+                    spans.unwrap_or_default(),
+                    params.focusable,
+                    current_mode,
+                );
+
+                let _ = session
+                    .visual_update_tx
+                    .send(crate::protocol::VisualUpdate::OverlaysChanged);
+
+                let result = serde_json::json!({
+                    "status": "created",
+                    "id": id,
+                });
+                Ok(CallToolResult::success(vec![Content::text(
+                    serde_json::to_string(&result).unwrap_or_default(),
+                )]))
+            }
+        }
+    }
+
+    /// Remove an overlay or clear all overlays from a terminal session.
+    #[tool(description = "Remove an overlay by ID, or clear all overlays from a terminal session. If id is omitted, all overlays are removed.")]
+    async fn wsh_remove_overlay(
+        &self,
+        Parameters(params): Parameters<RemoveOverlayParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let session = self.get_session(&params.session)?;
+
+        match params.id {
+            Some(id) => {
+                let found = session.overlays.delete(&id);
+                if !found {
+                    return Err(ErrorData::invalid_params(
+                        format!("overlay not found: {id}"),
+                        None,
+                    ));
+                }
+                session.focus.clear_if_focused(&id);
+                let _ = session
+                    .visual_update_tx
+                    .send(crate::protocol::VisualUpdate::OverlaysChanged);
+
+                let result = serde_json::json!({
+                    "status": "removed",
+                    "id": id,
+                });
+                Ok(CallToolResult::success(vec![Content::text(
+                    serde_json::to_string(&result).unwrap_or_default(),
+                )]))
+            }
+            None => {
+                session.overlays.clear();
+                session.focus.unfocus();
+                let _ = session
+                    .visual_update_tx
+                    .send(crate::protocol::VisualUpdate::OverlaysChanged);
+
+                let result = serde_json::json!({
+                    "status": "cleared",
+                });
+                Ok(CallToolResult::success(vec![Content::text(
+                    serde_json::to_string(&result).unwrap_or_default(),
+                )]))
+            }
+        }
+    }
+
+    /// Create, update, or list panels on a terminal session.
+    #[tool(description = "Create, update, or list panels on a terminal session. Panels carve out dedicated rows at the top or bottom of the terminal, shrinking the PTY viewport. Modes: set list=true to list all panels; omit id to create (position and height required); provide id to update.")]
+    async fn wsh_panel(
+        &self,
+        Parameters(params): Parameters<PanelParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let session = self.get_session(&params.session)?;
+        let current_mode = *session.screen_mode.read();
+
+        // LIST mode
+        if params.list {
+            let panels = session.panels.list_by_mode(current_mode);
+            let result = serde_json::json!({
+                "panels": panels,
+            });
+            return Ok(CallToolResult::success(vec![Content::text(
+                serde_json::to_string(&result).unwrap_or_default(),
+            )]));
+        }
+
+        // Deserialize spans if provided
+        let spans = match &params.spans {
+            Some(raw) => {
+                let spans: Vec<crate::overlay::OverlaySpan> = raw
+                    .iter()
+                    .map(|v| serde_json::from_value(v.clone()))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| {
+                        ErrorData::invalid_params(format!("invalid span: {e}"), None)
+                    })?;
+                Some(spans)
+            }
+            None => None,
+        };
+
+        // Deserialize background if provided
+        let background = match &params.background {
+            Some(raw) => {
+                let bg: crate::overlay::BackgroundStyle =
+                    serde_json::from_value(raw.clone()).map_err(|e| {
+                        ErrorData::invalid_params(format!("invalid background: {e}"), None)
+                    })?;
+                Some(bg)
+            }
+            None => None,
+        };
+
+        // Parse position string to Position enum
+        let position = match &params.position {
+            Some(s) => {
+                let pos: crate::panel::Position = match s.as_str() {
+                    "top" => crate::panel::Position::Top,
+                    "bottom" => crate::panel::Position::Bottom,
+                    other => {
+                        return Err(ErrorData::invalid_params(
+                            format!("invalid position: '{other}', must be 'top' or 'bottom'"),
+                            None,
+                        ));
+                    }
+                };
+                Some(pos)
+            }
+            None => None,
+        };
+
+        match params.id {
+            // UPDATE existing panel
+            Some(id) => {
+                let found = session.panels.patch(
+                    &id,
+                    position,
+                    params.height,
+                    params.z,
+                    background,
+                    spans,
+                );
+                if !found {
+                    return Err(ErrorData::invalid_params(
+                        format!("panel not found: {id}"),
+                        None,
+                    ));
+                }
+
+                crate::panel::reconfigure_layout(
+                    &session.panels,
+                    &session.terminal_size,
+                    &session.pty,
+                    &session.parser,
+                )
+                .await;
+
+                let _ = session
+                    .visual_update_tx
+                    .send(crate::protocol::VisualUpdate::PanelsChanged);
+
+                let result = serde_json::json!({
+                    "status": "updated",
+                    "id": id,
+                });
+                Ok(CallToolResult::success(vec![Content::text(
+                    serde_json::to_string(&result).unwrap_or_default(),
+                )]))
+            }
+
+            // CREATE new panel
+            None => {
+                let position = position.ok_or_else(|| {
+                    ErrorData::invalid_params(
+                        "position is required when creating a panel ('top' or 'bottom')",
+                        None,
+                    )
+                })?;
+                let height = params.height.ok_or_else(|| {
+                    ErrorData::invalid_params("height is required when creating a panel", None)
+                })?;
+
+                let id = session.panels.create(
+                    position,
+                    height,
+                    params.z,
+                    background,
+                    spans.unwrap_or_default(),
+                    params.focusable,
+                    current_mode,
+                );
+
+                crate::panel::reconfigure_layout(
+                    &session.panels,
+                    &session.terminal_size,
+                    &session.pty,
+                    &session.parser,
+                )
+                .await;
+
+                let _ = session
+                    .visual_update_tx
+                    .send(crate::protocol::VisualUpdate::PanelsChanged);
+
+                let result = serde_json::json!({
+                    "status": "created",
+                    "id": id,
+                });
+                Ok(CallToolResult::success(vec![Content::text(
+                    serde_json::to_string(&result).unwrap_or_default(),
+                )]))
+            }
+        }
+    }
+
+    /// Remove a panel or clear all panels from a terminal session.
+    #[tool(description = "Remove a panel by ID, or clear all panels from a terminal session. If id is omitted, all panels are removed. The PTY viewport is resized to reclaim panel space.")]
+    async fn wsh_remove_panel(
+        &self,
+        Parameters(params): Parameters<RemovePanelParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let session = self.get_session(&params.session)?;
+
+        match params.id {
+            Some(id) => {
+                let found = session.panels.delete(&id);
+                if !found {
+                    return Err(ErrorData::invalid_params(
+                        format!("panel not found: {id}"),
+                        None,
+                    ));
+                }
+                session.focus.clear_if_focused(&id);
+
+                crate::panel::reconfigure_layout(
+                    &session.panels,
+                    &session.terminal_size,
+                    &session.pty,
+                    &session.parser,
+                )
+                .await;
+
+                let _ = session
+                    .visual_update_tx
+                    .send(crate::protocol::VisualUpdate::PanelsChanged);
+
+                let result = serde_json::json!({
+                    "status": "removed",
+                    "id": id,
+                });
+                Ok(CallToolResult::success(vec![Content::text(
+                    serde_json::to_string(&result).unwrap_or_default(),
+                )]))
+            }
+            None => {
+                session.panels.clear();
+                session.focus.unfocus();
+
+                crate::panel::reconfigure_layout(
+                    &session.panels,
+                    &session.terminal_size,
+                    &session.pty,
+                    &session.parser,
+                )
+                .await;
+
+                let _ = session
+                    .visual_update_tx
+                    .send(crate::protocol::VisualUpdate::PanelsChanged);
+
+                let result = serde_json::json!({
+                    "status": "cleared",
+                });
+                Ok(CallToolResult::success(vec![Content::text(
                     serde_json::to_string(&result).unwrap_or_default(),
                 )]))
             }
