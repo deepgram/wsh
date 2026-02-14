@@ -484,20 +484,19 @@ tests/
 
 ## Building
 
-This project uses Nix for development. All cargo commands must be wrapped:
+You need a Rust toolchain to build the project:
 
 ```bash
-nix develop -c sh -c "cargo build"
-nix develop -c sh -c "cargo build --release"
-nix develop -c sh -c "cargo check"
+cargo build
+cargo build --release
 ```
 
 ## Running Tests
 
 ```bash
-nix develop -c sh -c "cargo test"
-nix develop -c sh -c "cargo test -- --nocapture"
-nix develop -c sh -c "cargo test --test api_integration"
+cargo test
+cargo test -- --nocapture
+cargo test --test api_integration
 ```
 
 ### Lifecycle Stress Tests
@@ -506,16 +505,16 @@ Stress tests for client/server lifecycle interactions (detach, reattach, alt scr
 
 ```bash
 # Run all lifecycle stress tests
-nix develop -c sh -c "cargo test --test lifecycle_stress -- --ignored --nocapture"
+cargo test --test lifecycle_stress -- --ignored --nocapture
 
 # Run a single scenario
-nix develop -c sh -c "cargo test --test lifecycle_stress scenario_1 -- --ignored --nocapture"
+cargo test --test lifecycle_stress scenario_1 -- --ignored --nocapture
 
 # Run just the random walk
-nix develop -c sh -c "cargo test --test lifecycle_stress scenario_6 -- --ignored --nocapture"
+cargo test --test lifecycle_stress scenario_6 -- --ignored --nocapture
 
 # Run repeated random walks (scenario 7) with custom iteration count and step range
-nix develop -c sh -c "WSH_STRESS_RUNS=20 WSH_STRESS_STEPS=50..100 cargo test --test lifecycle_stress scenario_7 -- --ignored --nocapture"
+WSH_STRESS_RUNS=20 WSH_STRESS_STEPS=50..100 cargo test --test lifecycle_stress scenario_7 -- --ignored --nocapture
 ```
 
 | Env Var | Default | Description |
