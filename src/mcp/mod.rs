@@ -155,8 +155,8 @@ impl WshMcpServer {
                     )
                 })?;
 
-        let assigned_name =
-            self.state.sessions.insert(params.name, session).map_err(
+        let (assigned_name, session) =
+            self.state.sessions.insert_and_get(params.name, session).map_err(
                 |e| match e {
                     RegistryError::NameExists(n) => ErrorData::invalid_params(
                         format!("session name already exists: {n}"),
@@ -174,8 +174,6 @@ impl WshMcpServer {
             .sessions
             .monitor_child_exit(assigned_name.clone(), child_exit_rx);
 
-        let session = self.state.sessions.get(&assigned_name)
-            .expect("just inserted session");
         let result = serde_json::json!({
             "name": assigned_name,
             "pid": session.pid,

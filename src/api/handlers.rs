@@ -1016,7 +1016,7 @@ async fn handle_server_ws_request(
             };
 
             match state.sessions.rename(&params.name, &params.new_name) {
-                Ok(()) => {
+                Ok(_session) => {
                     // Update subscription key if it exists
                     if let Some(handle) = sub_handles.remove(&params.name) {
                         sub_handles.insert(params.new_name.clone(), handle);
@@ -1933,9 +1933,9 @@ pub(super) async fn session_create(
         Session::spawn_with_options("".to_string(), command, rows, cols, req.cwd, req.env)
             .map_err(|e| ApiError::SessionCreateFailed(e.to_string()))?;
 
-    let assigned_name = state
+    let (assigned_name, session) = state
         .sessions
-        .insert(req.name, session)
+        .insert_and_get(req.name, session)
         .map_err(|e| match e {
             RegistryError::NameExists(n) => ApiError::SessionNameConflict(n),
             RegistryError::NotFound(n) => ApiError::SessionNotFound(n),
@@ -1944,8 +1944,6 @@ pub(super) async fn session_create(
     // Monitor child exit so the session is auto-removed when the process dies.
     state.sessions.monitor_child_exit(assigned_name.clone(), child_exit_rx);
 
-    let session = state.sessions.get(&assigned_name)
-        .expect("just inserted session");
     Ok((
         StatusCode::CREATED,
         Json(build_session_info(&session)),
@@ -1965,13 +1963,11 @@ pub(super) async fn session_rename(
     Path(name): Path<String>,
     Json(req): Json<RenameSessionRequest>,
 ) -> Result<Json<SessionInfo>, ApiError> {
-    state.sessions.rename(&name, &req.name).map_err(|e| match e {
+    let session = state.sessions.rename(&name, &req.name).map_err(|e| match e {
         RegistryError::NameExists(n) => ApiError::SessionNameConflict(n),
         RegistryError::NotFound(n) => ApiError::SessionNotFound(n),
     })?;
 
-    let session = state.sessions.get(&req.name)
-        .expect("just renamed session");
     Ok(Json(build_session_info(&session)))
 }
 
