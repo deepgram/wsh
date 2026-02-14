@@ -1123,7 +1123,7 @@ mod tests {
                         event,
                         crate::session::SessionEvent::Destroyed { .. }
                     );
-                    if is_removal && !config.is_persistent() && sessions.len() == 0 {
+                    if is_removal && !config.is_persistent() && sessions.is_empty() {
                         return true;
                     }
                 }

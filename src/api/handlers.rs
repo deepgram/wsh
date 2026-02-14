@@ -28,6 +28,13 @@ use crate::session::{RegistryError, Session};
 use super::error::ApiError;
 use super::{get_session, AppState};
 
+/// Pending await_quiesce state: (request_id, format, future resolving to generation or None on timeout)
+type PendingQuiesce = (
+    Option<serde_json::Value>,
+    crate::parser::state::Format,
+    std::pin::Pin<Box<dyn std::future::Future<Output = Option<u64>> + Send>>,
+);
+
 #[derive(Serialize)]
 pub(super) struct HealthResponse {
     status: &'static str,
@@ -213,12 +220,7 @@ async fn handle_ws_json(
     // Input subscription (lazily created when EventType::Input is subscribed)
     let mut input_rx: Option<tokio::sync::broadcast::Receiver<crate::input::InputEvent>> = None;
 
-    // Pending await_quiesce: (request_id, format, future resolving to Some(generation) or None on timeout)
-    let mut pending_quiesce: Option<(
-        Option<serde_json::Value>,
-        crate::parser::state::Format,
-        std::pin::Pin<Box<dyn std::future::Future<Output = Option<u64>> + Send>>,
-    )> = None;
+    let mut pending_quiesce: Option<PendingQuiesce> = None;
 
     // Quiescence subscription: background task signals through this channel
     let mut quiesce_sub_rx: Option<tokio::sync::mpsc::Receiver<()>> = None;
@@ -1448,7 +1450,7 @@ pub(super) async fn quiesce_any(
     // Race all futures under the overall deadline.
     let race = async {
         // select_all requires pinned futures
-        let pinned: Vec<_> = futs.into_iter().map(|f| Box::pin(f)).collect();
+        let pinned: Vec<_> = futs.into_iter().map(Box::pin).collect();
         let (result, _index, _remaining) = futures::future::select_all(pinned).await;
         result
     };
@@ -2147,7 +2149,7 @@ pub(super) async fn session_kill(
     let session = state
         .sessions
         .remove(&name)
-        .ok_or_else(|| ApiError::SessionNotFound(name))?;
+        .ok_or(ApiError::SessionNotFound(name))?;
     session.detach();
     Ok(StatusCode::NO_CONTENT)
 }
@@ -2159,7 +2161,7 @@ pub(super) async fn session_detach(
     let session = state
         .sessions
         .get(&name)
-        .ok_or_else(|| ApiError::SessionNotFound(name))?;
+        .ok_or(ApiError::SessionNotFound(name))?;
     session.detach();
     Ok(StatusCode::NO_CONTENT)
 }

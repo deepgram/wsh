@@ -2,7 +2,6 @@ pub mod tools;
 pub mod resources;
 pub mod prompts;
 
-use std::future::Future;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -83,44 +82,44 @@ impl ServerHandler for WshMcpServer {
         }
     }
 
-    fn list_resources(
+    async fn list_resources(
         &self,
         _request: Option<PaginatedRequestParams>,
         _: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<ListResourcesResult, ErrorData>> + Send + '_ {
-        async { resources::list_resources(&self.state).await }
+    ) -> Result<ListResourcesResult, ErrorData> {
+        resources::list_resources(&self.state).await
     }
 
-    fn list_resource_templates(
+    async fn list_resource_templates(
         &self,
         _request: Option<PaginatedRequestParams>,
         _: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<ListResourceTemplatesResult, ErrorData>> + Send + '_ {
-        async { resources::list_resource_templates().await }
+    ) -> Result<ListResourceTemplatesResult, ErrorData> {
+        resources::list_resource_templates().await
     }
 
-    fn read_resource(
+    async fn read_resource(
         &self,
         request: ReadResourceRequestParams,
         _: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<ReadResourceResult, ErrorData>> + Send + '_ {
-        async move { resources::read_resource(&self.state, request).await }
+    ) -> Result<ReadResourceResult, ErrorData> {
+        resources::read_resource(&self.state, request).await
     }
 
-    fn list_prompts(
+    async fn list_prompts(
         &self,
         _request: Option<PaginatedRequestParams>,
         _: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<ListPromptsResult, ErrorData>> + Send + '_ {
-        async { prompts::list_prompts().await }
+    ) -> Result<ListPromptsResult, ErrorData> {
+        prompts::list_prompts().await
     }
 
-    fn get_prompt(
+    async fn get_prompt(
         &self,
         request: GetPromptRequestParams,
         _: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<GetPromptResult, ErrorData>> + Send + '_ {
-        async move { prompts::get_prompt(&request.name).await }
+    ) -> Result<GetPromptResult, ErrorData> {
+        prompts::get_prompt(&request.name).await
     }
 }
 

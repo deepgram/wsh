@@ -669,20 +669,18 @@ async fn test_websocket_line_event_includes_total_lines() {
     let mut found_total_lines = false;
 
     while tokio::time::Instant::now() < deadline {
-        if let Ok(Some(Ok(msg))) =
+        if let Ok(Some(Ok(Message::Text(text)))) =
             tokio::time::timeout(Duration::from_millis(200), ws_stream.next()).await
         {
-            if let Message::Text(text) = msg {
-                let json: serde_json::Value = serde_json::from_str(&text).unwrap();
-                if json.get("event") == Some(&serde_json::json!("line")) {
-                    assert!(
-                        json.get("total_lines").is_some(),
-                        "line event should have total_lines"
-                    );
-                    assert!(json.get("index").is_some(), "line event should have index");
-                    found_total_lines = true;
-                    break;
-                }
+            let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+            if json.get("event") == Some(&serde_json::json!("line")) {
+                assert!(
+                    json.get("total_lines").is_some(),
+                    "line event should have total_lines"
+                );
+                assert!(json.get("index").is_some(), "line event should have index");
+                found_total_lines = true;
+                break;
             }
         }
     }

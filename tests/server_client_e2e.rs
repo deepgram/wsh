@@ -278,18 +278,13 @@ async fn test_multiple_clients_same_session() {
     // Client 2 should receive PtyOutput with the echoed text
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
     let mut found = false;
-    loop {
-        match tokio::time::timeout_at(deadline, Frame::read_from(&mut stream2)).await {
-            Ok(Ok(frame)) => {
-                if frame.frame_type == FrameType::PtyOutput {
-                    let output = String::from_utf8_lossy(&frame.payload);
-                    if output.contains("multi") {
-                        found = true;
-                        break;
-                    }
-                }
+    while let Ok(Ok(frame)) = tokio::time::timeout_at(deadline, Frame::read_from(&mut stream2)).await {
+        if frame.frame_type == FrameType::PtyOutput {
+            let output = String::from_utf8_lossy(&frame.payload);
+            if output.contains("multi") {
+                found = true;
+                break;
             }
-            _ => break,
         }
     }
 
@@ -346,18 +341,13 @@ async fn test_session_input_output_round_trip() {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
     let mut collected = String::new();
     let mut found = false;
-    loop {
-        match tokio::time::timeout_at(deadline, Frame::read_from(&mut stream)).await {
-            Ok(Ok(frame)) => {
-                if frame.frame_type == FrameType::PtyOutput {
-                    collected.push_str(&String::from_utf8_lossy(&frame.payload));
-                    if collected.contains("roundtrip_test_marker") {
-                        found = true;
-                        break;
-                    }
-                }
+    while let Ok(Ok(frame)) = tokio::time::timeout_at(deadline, Frame::read_from(&mut stream)).await {
+        if frame.frame_type == FrameType::PtyOutput {
+            collected.push_str(&String::from_utf8_lossy(&frame.payload));
+            if collected.contains("roundtrip_test_marker") {
+                found = true;
+                break;
             }
-            _ => break,
         }
     }
 

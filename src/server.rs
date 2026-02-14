@@ -151,7 +151,7 @@ async fn handle_client<S: AsyncRead + AsyncWrite + Unpin>(
                 ),
             };
             let frame = Frame::control(FrameType::Error, &err)
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                .map_err(io::Error::other)?;
             frame.write_to(&mut stream).await?;
             Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -187,7 +187,7 @@ async fn handle_create_session<S: AsyncRead + AsyncWrite + Unpin>(
         msg.cwd,
         msg.env,
     )
-    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    .map_err(io::Error::other)?;
 
     let name = match sessions.insert(msg.name, session.clone()) {
         Ok(name) => name,
@@ -207,7 +207,7 @@ async fn handle_create_session<S: AsyncRead + AsyncWrite + Unpin>(
         cols: msg.cols,
     };
     let resp_frame = Frame::control(FrameType::CreateSessionResponse, &resp)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        .map_err(io::Error::other)?;
     resp_frame.write_to(stream).await?;
 
     tracing::info!(session = %name, "client created session");
@@ -314,7 +314,7 @@ async fn handle_attach_session<S: AsyncRead + AsyncWrite + Unpin>(
         focused_id: session.focus.focused(),
     };
     let resp_frame = Frame::control(FrameType::AttachSessionResponse, &resp)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        .map_err(io::Error::other)?;
     resp_frame.write_to(stream).await?;
 
     tracing::info!(session = %msg.name, "client attached to session");
@@ -350,7 +350,7 @@ async fn handle_list_sessions<S: AsyncRead + AsyncWrite + Unpin>(
             .collect(),
     };
     let resp_frame = Frame::control(FrameType::ListSessionsResponse, &resp)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        .map_err(io::Error::other)?;
     resp_frame.write_to(stream).await?;
     Ok(())
 }
@@ -367,7 +367,7 @@ async fn handle_kill_session<S: AsyncRead + AsyncWrite + Unpin>(
             tracing::info!(session = %msg.name, "session killed via socket");
             let resp = KillSessionResponseMsg { name: msg.name };
             let resp_frame = Frame::control(FrameType::KillSessionResponse, &resp)
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                .map_err(io::Error::other)?;
             resp_frame.write_to(stream).await?;
             Ok(())
         }
@@ -377,7 +377,7 @@ async fn handle_kill_session<S: AsyncRead + AsyncWrite + Unpin>(
                 message: format!("session not found: {}", msg.name),
             };
             let err_frame = Frame::control(FrameType::Error, &err)
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                .map_err(io::Error::other)?;
             err_frame.write_to(stream).await?;
             Err(io::Error::new(
                 io::ErrorKind::NotFound,
@@ -399,7 +399,7 @@ async fn handle_detach_session<S: AsyncRead + AsyncWrite + Unpin>(
             tracing::info!(session = %msg.name, "session detached via socket");
             let resp = DetachSessionResponseMsg { name: msg.name };
             let resp_frame = Frame::control(FrameType::DetachSessionResponse, &resp)
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                .map_err(io::Error::other)?;
             resp_frame.write_to(stream).await?;
             Ok(())
         }
@@ -409,7 +409,7 @@ async fn handle_detach_session<S: AsyncRead + AsyncWrite + Unpin>(
                 message: format!("session not found: {}", msg.name),
             };
             let err_frame = Frame::control(FrameType::Error, &err)
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                .map_err(io::Error::other)?;
             err_frame.write_to(stream).await?;
             Err(io::Error::new(
                 io::ErrorKind::NotFound,
@@ -437,7 +437,7 @@ async fn send_initial_visual_state<S: AsyncWrite + Unpin>(
     if !overlays.is_empty() {
         let msg = OverlaySyncMsg { overlays };
         let frame = Frame::control(FrameType::OverlaySync, &msg)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            .map_err(io::Error::other)?;
         frame.write_to(stream).await?;
     }
 
@@ -452,7 +452,7 @@ async fn send_initial_visual_state<S: AsyncWrite + Unpin>(
             scroll_region_bottom: layout.scroll_region_bottom,
         };
         let frame = Frame::control(FrameType::PanelSync, &msg)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            .map_err(io::Error::other)?;
         frame.write_to(stream).await?;
     }
 
@@ -790,18 +790,13 @@ mod tests {
         // We should receive PtyOutput frames
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
         let mut received_output = false;
-        loop {
-            match tokio::time::timeout_at(deadline, Frame::read_from(&mut stream)).await {
-                Ok(Ok(frame)) => {
-                    if frame.frame_type == FrameType::PtyOutput {
-                        received_output = true;
-                        let output = String::from_utf8_lossy(&frame.payload);
-                        if output.contains("hello") {
-                            break;
-                        }
-                    }
+        while let Ok(Ok(frame)) = tokio::time::timeout_at(deadline, Frame::read_from(&mut stream)).await {
+            if frame.frame_type == FrameType::PtyOutput {
+                received_output = true;
+                let output = String::from_utf8_lossy(&frame.payload);
+                if output.contains("hello") {
+                    break;
                 }
-                _ => break,
             }
         }
         assert!(received_output, "should have received PTY output");
@@ -1079,12 +1074,7 @@ mod tests {
 
         // Drain output frames from the creator stream so it doesn't block
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(500);
-        loop {
-            match tokio::time::timeout_at(deadline, Frame::read_from(&mut stream)).await {
-                Ok(Ok(_)) => continue,
-                _ => break,
-            }
-        }
+        while let Ok(Ok(_)) = tokio::time::timeout_at(deadline, Frame::read_from(&mut stream)).await {}
 
         stream
     }
@@ -1209,12 +1199,7 @@ mod tests {
 
         // Drain creator stream
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(500);
-        loop {
-            match tokio::time::timeout_at(deadline, Frame::read_from(&mut stream)).await {
-                Ok(Ok(_)) => continue,
-                _ => break,
-            }
-        }
+        while let Ok(Ok(_)) = tokio::time::timeout_at(deadline, Frame::read_from(&mut stream)).await {}
 
         // Attach with ScrollbackRequest::Lines(5)
         let mut stream2 = UnixStream::connect(&path).await.unwrap();

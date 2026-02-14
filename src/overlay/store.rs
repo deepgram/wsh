@@ -30,6 +30,7 @@ impl OverlayStore {
     }
 
     /// Create a new overlay, returns its ID or an error if limits are exceeded.
+    #[allow(clippy::too_many_arguments)]
     pub fn create(
         &self,
         x: u16,
@@ -102,6 +103,7 @@ impl OverlayStore {
     }
 
     /// Patch an overlay's position, dimensions, or background
+    #[allow(clippy::too_many_arguments)]
     pub fn move_to(
         &self,
         id: &str,

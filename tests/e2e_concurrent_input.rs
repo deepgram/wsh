@@ -124,7 +124,6 @@ async fn test_concurrent_input_from_multiple_sources() {
     };
 
     let http_fut = {
-        let addr = addr;
         async move {
             let cmd = format!("echo {}\n", http_marker);
             let stream = tokio::net::TcpStream::connect(addr).await.expect("connect failed");

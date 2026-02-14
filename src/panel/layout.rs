@@ -19,14 +19,10 @@ pub struct Layout {
     pub pty_cols: u16,
 }
 
-/// Minimum number of rows reserved for the PTY viewport.
-const MIN_PTY_ROWS: u16 = 0;
-
 /// Compute the screen layout given all panels and the terminal dimensions.
 ///
 /// Panels are allocated greedily by z-index (highest first = highest priority).
-/// If there isn't enough room for all panels plus the minimum PTY height,
-/// the lowest-priority panels are hidden.
+/// Panels that don't fit in the remaining space are hidden.
 pub fn compute_layout(panels: &[Panel], terminal_rows: u16, terminal_cols: u16) -> Layout {
     let mut top_panels: Vec<Panel> = panels
         .iter()
@@ -58,13 +54,12 @@ pub fn compute_layout(panels: &[Panel], terminal_rows: u16, terminal_cols: u16) 
     all_panels.sort_by(|a, b| b.z.cmp(&a.z));
 
     for panel in &all_panels {
-        if remaining_rows <= MIN_PTY_ROWS {
+        if remaining_rows == 0 {
             hidden.push(panel.id.clone());
             continue;
         }
 
-        let available_for_panel = remaining_rows - MIN_PTY_ROWS;
-        if panel.height <= available_for_panel {
+        if panel.height <= remaining_rows {
             remaining_rows -= panel.height;
             let mut visible_panel = panel.clone();
             visible_panel.visible = true;
@@ -213,7 +208,7 @@ mod tests {
     fn test_terminal_one_row_panels_consume_all() {
         let panels = vec![make_panel("a", Position::Top, 1, 0)];
         let layout = compute_layout(&panels, 1, 80);
-        // With MIN_PTY_ROWS=0, the panel can consume the last row
+        // Panels can consume all rows, leaving zero for the PTY
         assert_eq!(layout.pty_rows, 0);
         assert_eq!(layout.top_panels.len(), 1);
         assert!(layout.hidden_panels.is_empty());

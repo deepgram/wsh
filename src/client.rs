@@ -109,10 +109,7 @@ impl Client {
                 let err: ErrorMsg = resp_frame
                     .parse_json()
                     .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-                Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("{}: {}", err.code, err.message),
-                ))
+                Err(io::Error::other(format!("{}: {}", err.code, err.message)))
             }
             other => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -141,10 +138,7 @@ impl Client {
                 let err: ErrorMsg = resp_frame
                     .parse_json()
                     .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-                Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("{}: {}", err.code, err.message),
-                ))
+                Err(io::Error::other(format!("{}: {}", err.code, err.message)))
             }
             other => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -172,10 +166,7 @@ impl Client {
                 let err: ErrorMsg = resp_frame
                     .parse_json()
                     .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-                Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("{}: {}", err.code, err.message),
-                ))
+                Err(io::Error::other(format!("{}: {}", err.code, err.message)))
             }
             other => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -198,10 +189,7 @@ impl Client {
                 let err: ErrorMsg = resp_frame
                     .parse_json()
                     .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-                Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("{}: {}", err.code, err.message),
-                ))
+                Err(io::Error::other(format!("{}: {}", err.code, err.message)))
             }
             other => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -227,10 +215,7 @@ impl Client {
                 let err: ErrorMsg = resp_frame
                     .parse_json()
                     .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-                Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("{}: {}", err.code, err.message),
-                ))
+                Err(io::Error::other(format!("{}: {}", err.code, err.message)))
             }
             other => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -719,18 +704,13 @@ mod tests {
         // Read PtyOutput frames until we see our echo
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
         let mut received_output = false;
-        loop {
-            match tokio::time::timeout_at(deadline, Frame::read_from(&mut client.stream)).await {
-                Ok(Ok(frame)) => {
-                    if frame.frame_type == FrameType::PtyOutput {
-                        received_output = true;
-                        let output = String::from_utf8_lossy(&frame.payload);
-                        if output.contains("test") {
-                            break;
-                        }
-                    }
+        while let Ok(Ok(frame)) = tokio::time::timeout_at(deadline, Frame::read_from(&mut client.stream)).await {
+            if frame.frame_type == FrameType::PtyOutput {
+                received_output = true;
+                let output = String::from_utf8_lossy(&frame.payload);
+                if output.contains("test") {
+                    break;
                 }
-                _ => break,
             }
         }
         assert!(received_output, "should have received PTY output");

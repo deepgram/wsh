@@ -309,7 +309,7 @@ async fn run_server(
 
     let listener = tokio::net::TcpListener::bind(bind)
         .await
-        .map_err(|e| WshError::Io(e))?;
+        .map_err(WshError::Io)?;
     tracing::info!(addr = %bind, "HTTP/WS server listening");
 
     let http_handle = tokio::spawn(async move {
@@ -353,22 +353,20 @@ async fn run_server(
             tokio::pin!(idle_timeout);
 
             // Wait for either the first event or the idle timeout
-            loop {
-                tokio::select! {
-                    result = events.recv() => {
-                        match result {
-                            Ok(_) => break, // Got an event, enter normal monitoring
-                            Err(tokio::sync::broadcast::error::RecvError::Closed) => return false,
-                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => break,
-                        }
+            tokio::select! {
+                result = events.recv() => {
+                    match result {
+                        Ok(_) => {} // Got an event, enter normal monitoring
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => return false,
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {} // Lost events, enter normal monitoring
                     }
-                    _ = &mut idle_timeout => {
-                        if sessions_for_monitor.len() == 0 {
-                            tracing::info!("no sessions created within idle timeout, ephemeral server shutting down");
-                            return true;
-                        }
-                        break; // Sessions exist somehow, enter normal monitoring
+                }
+                _ = &mut idle_timeout => {
+                    if sessions_for_monitor.is_empty() {
+                        tracing::info!("no sessions created within idle timeout, ephemeral server shutting down");
+                        return true;
                     }
+                    // Sessions exist somehow, enter normal monitoring
                 }
             }
         }
@@ -383,7 +381,7 @@ async fn run_server(
                     );
                     if is_removal
                         && !config_for_monitor.is_persistent()
-                        && sessions_for_monitor.len() == 0
+                        && sessions_for_monitor.is_empty()
                     {
                         tracing::info!(
                             "last session ended, ephemeral server shutting down"
@@ -408,11 +406,8 @@ async fn run_server(
             tracing::info!("received SIGTERM");
         }
         result = ephemeral_handle => {
-            match result {
-                Ok(true) => {
-                    tracing::debug!("ephemeral shutdown triggered");
-                }
-                _ => {}
+            if let Ok(true) = result {
+                tracing::debug!("ephemeral shutdown triggered");
             }
         }
     }
@@ -886,8 +881,8 @@ async fn run_list(socket: Option<PathBuf>) -> Result<(), WshError> {
         println!("No active sessions.");
     } else {
         println!(
-            "{:<20} {:<8} {:<20} {:<12} {}",
-            "NAME", "PID", "COMMAND", "SIZE", "CLIENTS"
+            "{:<20} {:<8} {:<20} {:<12} CLIENTS",
+            "NAME", "PID", "COMMAND", "SIZE"
         );
         for s in &sessions {
             let pid_str = match s.pid {

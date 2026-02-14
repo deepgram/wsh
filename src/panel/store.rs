@@ -32,6 +32,7 @@ impl PanelStore {
     }
 
     /// Create a new panel, returns its ID or an error if limits are exceeded.
+    #[allow(clippy::too_many_arguments)]
     pub fn create(
         &self,
         position: Position,

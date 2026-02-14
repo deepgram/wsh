@@ -84,10 +84,8 @@ fn setup_mcp_test(test_name: &str) -> McpTestHarness {
                 socket_path.display()
             );
         }
-        if socket_path.exists() {
-            if std::os::unix::net::UnixStream::connect(&socket_path).is_ok() {
-                break;
-            }
+        if socket_path.exists() && std::os::unix::net::UnixStream::connect(&socket_path).is_ok() {
+            break;
         }
         std::thread::sleep(Duration::from_millis(50));
     }

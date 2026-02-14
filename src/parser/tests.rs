@@ -366,10 +366,8 @@ async fn test_alternate_screen_emits_mode_event() {
     // Collect events until we find a Mode event
     let mode_event = tokio::time::timeout(tokio::time::Duration::from_millis(200), async {
         loop {
-            if let Some(event) = events.next().await {
-                if let Event::Mode { alternate_active, .. } = event {
-                    return alternate_active;
-                }
+            if let Some(Event::Mode { alternate_active, .. }) = events.next().await {
+                return alternate_active;
             }
         }
     })
@@ -383,10 +381,8 @@ async fn test_alternate_screen_emits_mode_event() {
 
     let mode_event = tokio::time::timeout(tokio::time::Duration::from_millis(200), async {
         loop {
-            if let Some(event) = events.next().await {
-                if let Event::Mode { alternate_active, .. } = event {
-                    return alternate_active;
-                }
+            if let Some(Event::Mode { alternate_active, .. }) = events.next().await {
+                return alternate_active;
             }
         }
     })

@@ -17,6 +17,12 @@ pub struct ActivityTracker {
     generation: Arc<AtomicU64>,
 }
 
+impl Default for ActivityTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ActivityTracker {
     /// Create a new tracker seeded with the current instant.
     pub fn new() -> Self {
@@ -63,10 +69,8 @@ impl ActivityTracker {
         // before entering the quiescence loop.
         if let Some(seen) = last_seen {
             let current = self.generation.load(Ordering::Acquire);
-            if current == seen {
-                if rx.changed().await.is_err() {
-                    return self.generation.load(Ordering::Acquire);
-                }
+            if current == seen && rx.changed().await.is_err() {
+                return self.generation.load(Ordering::Acquire);
             }
         }
 

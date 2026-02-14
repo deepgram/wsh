@@ -287,7 +287,7 @@ impl AlternateScreenDetector {
                 }
 
                 ScanState::DecParams => {
-                    if byte >= 0x30 && byte <= 0x3f {
+                    if (0x30..=0x3f).contains(&byte) {
                         // Parameter byte (digits, semicolons, etc.)
                         self.partial.push(byte);
                     } else if byte == b'h' || byte == b'l' {
@@ -344,8 +344,8 @@ impl AlternateScreenDetector {
             return ScanState::Ground;
         }
 
-        // Check if we have the '?' yet
-        let after_csi = if p[0] == 0x1b { 2 } else { 2 };
+        // Both ESC [ and C1 CSI (0xC2 0x9B) have 2-byte prefixes
+        let after_csi = 2;
         if p.len() <= after_csi {
             return ScanState::CsiEntry;
         }
@@ -360,12 +360,8 @@ impl AlternateScreenDetector {
     /// Extract params from partial buffer and check for alternate screen modes.
     /// Returns Some(bool) if an alternate screen mode was found.
     fn process_params(&self, entering: bool) -> Option<bool> {
-        // Find where params start (after the '?')
-        let params_start = if self.partial[0] == 0x1b {
-            3 // ESC [ ?
-        } else {
-            3 // 0xC2 0x9B ?
-        };
+        // Params start after the 3-byte prefix: ESC [ ? or 0xC2 0x9B ?
+        let params_start = 3;
 
         if params_start > self.partial.len() {
             return None;

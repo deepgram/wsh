@@ -349,6 +349,12 @@ pub struct SessionRegistry {
     events_tx: tokio_broadcast::Sender<SessionEvent>,
 }
 
+impl Default for SessionRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SessionRegistry {
     /// Create an empty registry with a broadcast channel for lifecycle events.
     pub fn new() -> Self {
@@ -532,6 +538,11 @@ impl SessionRegistry {
     pub fn len(&self) -> usize {
         let inner = self.inner.read();
         inner.sessions.len()
+    }
+
+    /// Return true if the registry contains no sessions.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     /// Check if a given name is available (not already in use).
@@ -931,15 +942,10 @@ mod tests {
 
         let mut collected = Vec::new();
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-        loop {
-            match tokio::time::timeout_at(deadline, output_rx.recv()).await {
-                Ok(Ok(data)) => {
-                    collected.extend_from_slice(&data);
-                    if String::from_utf8_lossy(&collected).contains("hello_wsh") {
-                        break;
-                    }
-                }
-                _ => break,
+        while let Ok(Ok(data)) = tokio::time::timeout_at(deadline, output_rx.recv()).await {
+            collected.extend_from_slice(&data);
+            if String::from_utf8_lossy(&collected).contains("hello_wsh") {
+                break;
             }
         }
         let output = String::from_utf8_lossy(&collected);
