@@ -4,7 +4,8 @@
 //! goes to the PTY (passthrough mode) or only to API subscribers (capture mode).
 
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use parking_lot::RwLock;
 
 /// The current input routing mode.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,7 +38,7 @@ impl InputMode {
 
     /// Gets the current mode.
     pub fn get(&self) -> Mode {
-        *self.inner.read().unwrap()
+        *self.inner.read()
     }
 
     /// Sets the mode to Capture.
@@ -45,21 +46,21 @@ impl InputMode {
     /// In capture mode, input is only sent to API subscribers and
     /// is not forwarded to the PTY.
     pub fn capture(&self) {
-        *self.inner.write().unwrap() = Mode::Capture;
+        *self.inner.write() = Mode::Capture;
     }
 
     /// Sets the mode to Passthrough.
     ///
     /// In passthrough mode, input goes to both API subscribers and the PTY.
     pub fn release(&self) {
-        *self.inner.write().unwrap() = Mode::Passthrough;
+        *self.inner.write() = Mode::Passthrough;
     }
 
     /// Toggles the mode: Passthrough → Capture, Capture → Passthrough.
     ///
     /// Returns the new mode after toggling.
     pub fn toggle(&self) -> Mode {
-        let mut guard = self.inner.write().unwrap();
+        let mut guard = self.inner.write();
         let new_mode = match *guard {
             Mode::Passthrough => Mode::Capture,
             Mode::Capture => Mode::Passthrough,

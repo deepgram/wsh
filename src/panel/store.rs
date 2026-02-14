@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use parking_lot::RwLock;
 use uuid::Uuid;
 
 use crate::overlay::{BackgroundStyle, OverlaySpan, RegionWrite, ScreenMode};
@@ -38,7 +39,7 @@ impl PanelStore {
         focusable: bool,
         screen_mode: ScreenMode,
     ) -> PanelId {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write();
         let id = Uuid::new_v4().to_string();
         let z = z.unwrap_or_else(|| {
             let z = inner.next_z;
@@ -66,13 +67,13 @@ impl PanelStore {
 
     /// Get a panel by ID
     pub fn get(&self, id: &str) -> Option<Panel> {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read();
         inner.panels.get(id).cloned()
     }
 
     /// List all panels, sorted by position (Top first) then z descending
     pub fn list(&self) -> Vec<Panel> {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read();
         let mut panels: Vec<_> = inner.panels.values().cloned().collect();
         panels.sort_by(|a, b| {
             let pos_ord = match (&a.position, &b.position) {
@@ -87,7 +88,7 @@ impl PanelStore {
 
     /// Update a panel's spans (full replacement)
     pub fn update(&self, id: &str, spans: Vec<OverlaySpan>) -> bool {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write();
         if let Some(panel) = inner.panels.get_mut(id) {
             panel.spans = spans;
             true
@@ -108,7 +109,7 @@ impl PanelStore {
         background: Option<BackgroundStyle>,
         spans: Option<Vec<OverlaySpan>>,
     ) -> bool {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write();
         if !inner.panels.contains_key(id) {
             return false;
         }
@@ -141,7 +142,7 @@ impl PanelStore {
     /// For each span in `updates`, find the span with matching `id` in the panel
     /// and replace its text, colors, and attributes. Returns false if panel not found.
     pub fn update_spans(&self, panel_id: &str, updates: &[OverlaySpan]) -> bool {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write();
         if let Some(panel) = inner.panels.get_mut(panel_id) {
             for update in updates {
                 if let Some(ref update_id) = update.id {
@@ -167,7 +168,7 @@ impl PanelStore {
     ///
     /// Returns false if the panel does not exist.
     pub fn region_write(&self, id: &str, writes: Vec<RegionWrite>) -> bool {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write();
         if let Some(panel) = inner.panels.get_mut(id) {
             panel.region_writes = writes;
             true
@@ -178,7 +179,7 @@ impl PanelStore {
 
     /// Set visibility for a panel (called by layout engine)
     pub fn set_visible(&self, id: &str, visible: bool) {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write();
         if let Some(panel) = inner.panels.get_mut(id) {
             panel.visible = visible;
         }
@@ -186,13 +187,13 @@ impl PanelStore {
 
     /// Delete a panel by ID, returns true if it existed
     pub fn delete(&self, id: &str) -> bool {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write();
         inner.panels.remove(id).is_some()
     }
 
     /// List panels for a specific screen mode, sorted by position then z descending
     pub fn list_by_mode(&self, mode: ScreenMode) -> Vec<Panel> {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read();
         let mut panels: Vec<_> = inner
             .panels
             .values()
@@ -212,13 +213,13 @@ impl PanelStore {
 
     /// Delete all panels for a specific screen mode
     pub fn delete_by_mode(&self, mode: ScreenMode) {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write();
         inner.panels.retain(|_, p| p.screen_mode != mode);
     }
 
     /// Clear all panels
     pub fn clear(&self) {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write();
         inner.panels.clear();
     }
 }

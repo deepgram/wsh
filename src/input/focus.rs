@@ -1,4 +1,5 @@
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use parking_lot::RwLock;
 
 /// Tracks which overlay/panel currently has input focus.
 ///
@@ -19,26 +20,26 @@ impl FocusTracker {
 
     /// Set focus to a specific element by ID.
     pub fn focus(&self, id: String) {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write();
         *inner = Some(id);
     }
 
     /// Remove focus from any element.
     pub fn unfocus(&self) {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write();
         *inner = None;
     }
 
     /// Get the currently focused element's ID, if any.
     pub fn focused(&self) -> Option<String> {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read();
         inner.clone()
     }
 
     /// Clear focus only if the given ID currently has focus.
     /// Used when an element is deleted -- only unfocus if it was the focused one.
     pub fn clear_if_focused(&self, id: &str) {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write();
         if inner.as_deref() == Some(id) {
             *inner = None;
         }

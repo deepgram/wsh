@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use parking_lot::RwLock;
 use uuid::Uuid;
 
 use super::types::{BackgroundStyle, Overlay, OverlayId, OverlaySpan, RegionWrite, ScreenMode};
@@ -38,7 +39,7 @@ impl OverlayStore {
         focusable: bool,
         screen_mode: ScreenMode,
     ) -> OverlayId {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write();
         let id = Uuid::new_v4().to_string();
         let z = z.unwrap_or_else(|| {
             let z = inner.next_z;
@@ -68,13 +69,13 @@ impl OverlayStore {
 
     /// Get an overlay by ID
     pub fn get(&self, id: &str) -> Option<Overlay> {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read();
         inner.overlays.get(id).cloned()
     }
 
     /// List all overlays, sorted by z-index (ascending)
     pub fn list(&self) -> Vec<Overlay> {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read();
         let mut overlays: Vec<_> = inner.overlays.values().cloned().collect();
         overlays.sort_by_key(|o| o.z);
         overlays
@@ -82,7 +83,7 @@ impl OverlayStore {
 
     /// Update an overlay's spans (full replacement)
     pub fn update(&self, id: &str, spans: Vec<OverlaySpan>) -> bool {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write();
         if let Some(overlay) = inner.overlays.get_mut(id) {
             overlay.spans = spans;
             true
@@ -102,7 +103,7 @@ impl OverlayStore {
         height: Option<u16>,
         background: Option<BackgroundStyle>,
     ) -> bool {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write();
         if let Some(overlay) = inner.overlays.get_mut(id) {
             if let Some(x) = x {
                 overlay.x = x;
@@ -140,7 +141,7 @@ impl OverlayStore {
     /// For each span in `updates`, find the span with matching `id` in the overlay
     /// and replace its text, colors, and attributes. Returns false if overlay not found.
     pub fn update_spans(&self, overlay_id: &str, updates: &[OverlaySpan]) -> bool {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write();
         if let Some(overlay) = inner.overlays.get_mut(overlay_id) {
             for update in updates {
                 if let Some(ref update_id) = update.id {
@@ -166,7 +167,7 @@ impl OverlayStore {
     ///
     /// Returns false if the overlay does not exist.
     pub fn region_write(&self, id: &str, writes: Vec<RegionWrite>) -> bool {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write();
         if let Some(overlay) = inner.overlays.get_mut(id) {
             overlay.region_writes = writes;
             true
@@ -177,13 +178,13 @@ impl OverlayStore {
 
     /// Delete an overlay by ID, returns true if it existed
     pub fn delete(&self, id: &str) -> bool {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write();
         inner.overlays.remove(id).is_some()
     }
 
     /// List overlays for a specific screen mode, sorted by z-index (ascending)
     pub fn list_by_mode(&self, mode: ScreenMode) -> Vec<Overlay> {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read();
         let mut overlays: Vec<_> = inner
             .overlays
             .values()
@@ -196,13 +197,13 @@ impl OverlayStore {
 
     /// Delete all overlays for a specific screen mode
     pub fn delete_by_mode(&self, mode: ScreenMode) {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write();
         inner.overlays.retain(|_, o| o.screen_mode != mode);
     }
 
     /// Clear all overlays
     pub fn clear(&self) {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write();
         inner.overlays.clear();
     }
 }
