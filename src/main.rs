@@ -328,11 +328,42 @@ async fn run_server(
     tracing::info!("wsh server ready");
 
     // Ephemeral shutdown monitor: when the last session exits in non-persistent
-    // mode, shut down the server automatically.
+    // mode, shut down the server automatically.  Also includes an idle timeout
+    // so that an orphaned ephemeral server (client crashed before creating a
+    // session) doesn't run forever.
     let config_for_monitor = server_config.clone();
     let sessions_for_monitor = sessions.clone();
     let ephemeral_handle = tokio::spawn(async move {
         let mut events = sessions_for_monitor.subscribe_events();
+
+        if !config_for_monitor.is_persistent() {
+            // Give the client 30 seconds to create its first session.
+            // If nothing happens, the daemon was likely orphaned.
+            let idle_timeout = tokio::time::sleep(std::time::Duration::from_secs(30));
+            tokio::pin!(idle_timeout);
+
+            // Wait for either the first event or the idle timeout
+            loop {
+                tokio::select! {
+                    result = events.recv() => {
+                        match result {
+                            Ok(_) => break, // Got an event, enter normal monitoring
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => return false,
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => break,
+                        }
+                    }
+                    _ = &mut idle_timeout => {
+                        if sessions_for_monitor.len() == 0 {
+                            tracing::info!("no sessions created within idle timeout, ephemeral server shutting down");
+                            return true;
+                        }
+                        break; // Sessions exist somehow, enter normal monitoring
+                    }
+                }
+            }
+        }
+
+        // Normal monitoring: wait for all sessions to end
         loop {
             match events.recv().await {
                 Ok(event) => {
