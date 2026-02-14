@@ -36,5 +36,5 @@ tokio-tungstenite = "0.24"
 hyper = { version = "1", features = ["full"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "blocking"] }
 tempfile = "3"

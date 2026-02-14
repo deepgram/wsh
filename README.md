@@ -473,6 +473,7 @@ tests/
 ├── quiesce_integration.rs      # Quiescence integration tests
 ├── server_client_e2e.rs        # Server/client end-to-end tests
 ├── session_management.rs       # Session management tests
+├── lifecycle_stress.rs          # Lifecycle stress tests (detach/reattach/exit)
 ├── ws_json_methods.rs          # WebSocket JSON method tests
 └── ws_server_integration.rs    # Server-level WebSocket tests
 ```
@@ -494,6 +495,31 @@ nix develop -c sh -c "cargo test"
 nix develop -c sh -c "cargo test -- --nocapture"
 nix develop -c sh -c "cargo test --test api_integration"
 ```
+
+### Lifecycle Stress Tests
+
+Stress tests for client/server lifecycle interactions (detach, reattach, alt screen, overlays, exit). These spawn real `wsh` processes inside PTYs and exercise realistic user interaction sequences. They're `#[ignore]` by default since they're slow and designed for bug hunting.
+
+```bash
+# Run all lifecycle stress tests
+nix develop -c sh -c "cargo test --test lifecycle_stress -- --ignored --nocapture"
+
+# Run a single scenario
+nix develop -c sh -c "cargo test --test lifecycle_stress scenario_1 -- --ignored --nocapture"
+
+# Run just the random walk
+nix develop -c sh -c "cargo test --test lifecycle_stress scenario_6 -- --ignored --nocapture"
+
+# Run repeated random walks (scenario 7) with custom iteration count and step range
+nix develop -c sh -c "WSH_STRESS_RUNS=20 WSH_STRESS_STEPS=50..100 cargo test --test lifecycle_stress scenario_7 -- --ignored --nocapture"
+```
+
+| Env Var | Default | Description |
+|---------|---------|-------------|
+| `WSH_STRESS_RUNS` | `5` | Number of random walk iterations (scenario 7) |
+| `WSH_STRESS_STEPS` | `20..50` | Steps per walk: `N` (exact) or `N..M` (range) |
+
+On failure, each test logs the full action sequence and RNG seed for reproduction.
 
 ## License
 
