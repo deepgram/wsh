@@ -415,7 +415,8 @@ impl SessionRegistry {
     /// Monitor a session's child process exit and remove it from the registry.
     ///
     /// Spawns a background task that waits on `child_exit_rx`. When the child
-    /// exits, the session is removed from the registry (emitting a
+    /// exits, all streaming clients are detached (so their I/O loops exit
+    /// promptly), then the session is removed from the registry (emitting a
     /// `SessionEvent::Destroyed` event). This should be called for
     /// API-created sessions where the caller would otherwise discard the
     /// exit receiver.
@@ -428,6 +429,13 @@ impl SessionRegistry {
         tokio::spawn(async move {
             let _ = child_exit_rx.await;
             tracing::info!(session = %name, "session child process exited");
+            // Signal all attached streaming clients to detach before removing
+            // the session. Without this, socket streaming loops would block
+            // forever on output_rx.recv() because the Session holds a
+            // broadcast::Sender clone that keeps the channel open.
+            if let Some(session) = registry.get(&name) {
+                session.detach();
+            }
             registry.remove(&name);
         });
     }
