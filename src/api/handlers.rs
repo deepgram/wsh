@@ -177,6 +177,13 @@ async fn handle_ws_json(
     let mut quiesce_sub_handle: Option<tokio::task::JoinHandle<()>> = None;
     let mut quiesce_sub_format = crate::parser::state::Format::default();
 
+    // Track whether this connection activated input capture (for auto-release on disconnect)
+    let mut this_connection_captured = false;
+
+    // Track overlay/panel IDs created by this connection (for cleanup on disconnect)
+    let mut owned_overlay_ids: Vec<String> = Vec::new();
+    let mut owned_panel_ids: Vec<String> = Vec::new();
+
     // Main event loop
     loop {
         tokio::select! {
@@ -483,6 +490,17 @@ async fn handle_ws_json(
                         } else {
                             // Dispatch all other methods
                             let resp = super::ws_methods::dispatch(&req, &session).await;
+
+                            // Track input capture state for auto-release on disconnect.
+                            if resp.error.is_none() {
+                                if req.method == "capture_input" {
+                                    this_connection_captured = true;
+                                }
+                                if req.method == "release_input" {
+                                    this_connection_captured = false;
+                                }
+                            }
+
                             if let Ok(json) = serde_json::to_string(&resp) {
                                 if ws_tx.send(Message::Text(json)).await.is_err() {
                                     break;
@@ -502,6 +520,13 @@ async fn handle_ws_json(
                 }
             }
         }
+    }
+
+    // Auto-release input capture if this connection activated it.
+    if this_connection_captured {
+        session.input_mode.release();
+        session.focus.unfocus();
+        tracing::debug!("auto-released input capture on WS disconnect");
     }
 
     // Send close frame on any exit path
