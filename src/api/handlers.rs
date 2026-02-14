@@ -43,7 +43,13 @@ pub(super) async fn input(
     body: Bytes,
 ) -> Result<StatusCode, ApiError> {
     let session = get_session(&state.sessions, &name)?;
-    session.input_tx.send(body).await.map_err(|e| {
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        session.input_tx.send(body),
+    )
+    .await
+    .map_err(|_| ApiError::InputSendFailed)?
+    .map_err(|e| {
         tracing::error!("Failed to send input to PTY: {}", e);
         ApiError::InputSendFailed
     })?;
@@ -74,6 +80,12 @@ async fn handle_ws_raw(
     let mut output_rx = session.output_rx.subscribe();
     let input_tx = session.input_tx.clone();
 
+    // Ping/pong keepalive
+    let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
+    ping_interval.reset(); // don't fire immediately
+    let mut last_pong = tokio::time::Instant::now();
+    const PONG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
     // Main loop: handle PTY output, WebSocket input, and shutdown signal
     loop {
         tokio::select! {
@@ -86,7 +98,17 @@ async fn handle_ws_raw(
                         }
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(skipped = n, "ws_raw client lagged, closing for re-sync");
+                        let _ = tokio::time::timeout(
+                            std::time::Duration::from_secs(2),
+                            ws_tx.send(Message::Close(Some(CloseFrame {
+                                code: 1013, // Try Again Later
+                                reason: "output lagged, reconnect to re-sync".into(),
+                            }))),
+                        ).await;
+                        break;
+                    }
                 }
             }
 
@@ -103,27 +125,51 @@ async fn handle_ws_raw(
                             break;
                         }
                     }
+                    Some(Ok(Message::Pong(_))) => {
+                        last_pong = tokio::time::Instant::now();
+                    }
                     Some(Ok(Message::Close(_))) | None => break,
-                    Some(Ok(_)) => continue, // Ping/Pong handled automatically
+                    Some(Ok(_)) => continue,
                     Some(Err(_)) => break,
                 }
+            }
+
+            // Ping keepalive
+            _ = ping_interval.tick() => {
+                if last_pong.elapsed() > PONG_TIMEOUT {
+                    tracing::debug!("ws_raw client unresponsive (no pong), closing");
+                    break;
+                }
+                if ws_tx.send(Message::Ping(vec![])).await.is_err() {
+                    break;
+                }
+            }
+
+            // Session was killed/removed
+            _ = session.cancelled.cancelled() => {
+                tracing::debug!("session was killed, closing WebSocket");
+                break;
             }
 
             // Shutdown signal
             _ = shutdown_rx.changed() => {
                 if *shutdown_rx.borrow() {
                     tracing::debug!("WebSocket received shutdown signal, closing");
-                    let close_frame = CloseFrame {
-                        code: axum::extract::ws::close_code::NORMAL,
-                        reason: "server shutting down".into(),
-                    };
-                    let _ = ws_tx.send(Message::Close(Some(close_frame))).await;
-                    let _ = ws_tx.flush().await;
                     break;
                 }
             }
         }
     }
+
+    // Send close frame with timeout (Phase 2c)
+    let close_frame = CloseFrame {
+        code: axum::extract::ws::close_code::NORMAL,
+        reason: "session ended".into(),
+    };
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        ws_tx.send(Message::Close(Some(close_frame))),
+    ).await;
 
     // _guard is dropped here, decrementing active connection count
 }
@@ -177,12 +223,18 @@ async fn handle_ws_json(
     let mut quiesce_sub_handle: Option<tokio::task::JoinHandle<()>> = None;
     let mut quiesce_sub_format = crate::parser::state::Format::default();
 
-    // Track whether this connection activated input capture (for auto-release on disconnect)
-    let mut this_connection_captured = false;
+    // Connection ID for input capture ownership tracking
+    let connection_id = uuid::Uuid::new_v4().to_string();
 
     // Track overlay/panel IDs created by this connection (for cleanup on disconnect)
     let mut owned_overlay_ids: Vec<String> = Vec::new();
     let mut owned_panel_ids: Vec<String> = Vec::new();
+
+    // Ping/pong keepalive
+    let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
+    ping_interval.reset();
+    let mut last_pong = tokio::time::Instant::now();
+    const PONG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
     // Main event loop
     loop {
@@ -323,8 +375,22 @@ async fn handle_ws_json(
                 }
             }
 
+            // Ping keepalive
+            _ = ping_interval.tick() => {
+                if last_pong.elapsed() > PONG_TIMEOUT {
+                    tracing::debug!("ws_json client unresponsive (no pong), closing");
+                    break;
+                }
+                if ws_tx.send(Message::Ping(vec![])).await.is_err() {
+                    break;
+                }
+            }
+
             msg = ws_rx.next() => {
                 match msg {
+                    Some(Ok(Message::Pong(_))) => {
+                        last_pong = tokio::time::Instant::now();
+                    }
                     Some(Ok(Message::Text(text))) => {
                         // Parse as WsRequest
                         let req = match serde_json::from_str::<super::ws_methods::WsRequest>(&text) {
@@ -489,17 +555,7 @@ async fn handle_ws_json(
                             }
                         } else {
                             // Dispatch all other methods
-                            let resp = super::ws_methods::dispatch(&req, &session).await;
-
-                            // Track input capture state for auto-release on disconnect.
-                            if resp.error.is_none() {
-                                if req.method == "capture_input" {
-                                    this_connection_captured = true;
-                                }
-                                if req.method == "release_input" {
-                                    this_connection_captured = false;
-                                }
-                            }
+                            let resp = super::ws_methods::dispatch(&req, &session, &connection_id).await;
 
                             // Track overlay/panel ownership for cleanup on disconnect.
                             if resp.error.is_none() {
@@ -542,6 +598,12 @@ async fn handle_ws_json(
                 }
             }
 
+            // Session was killed/removed
+            _ = session.cancelled.cancelled() => {
+                tracing::debug!("session was killed, closing WebSocket");
+                break;
+            }
+
             _ = shutdown_rx.changed() => {
                 if *shutdown_rx.borrow() {
                     tracing::debug!("WebSocket handler received shutdown signal");
@@ -551,11 +613,13 @@ async fn handle_ws_json(
         }
     }
 
-    // Auto-release input capture if this connection activated it.
-    if this_connection_captured {
-        session.input_mode.release();
-        session.focus.unfocus();
-        tracing::debug!("auto-released input capture on WS disconnect");
+    // Auto-release input capture if this connection holds it.
+    if session.input_mode.is_capture() {
+        session.input_mode.release_if_owner(&connection_id);
+        if !session.input_mode.is_capture() {
+            session.focus.unfocus();
+            tracing::debug!("auto-released input capture on WS disconnect");
+        }
     }
 
     // Clean up overlays and panels created by this connection.
@@ -575,13 +639,15 @@ async fn handle_ws_json(
         let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::PanelsChanged);
     }
 
-    // Send close frame on any exit path
+    // Send close frame on any exit path (with timeout to avoid blocking on dead connections)
     let close_frame = CloseFrame {
         code: axum::extract::ws::close_code::NORMAL,
         reason: "session ended".into(),
     };
-    let _ = ws_tx.send(Message::Close(Some(close_frame))).await;
-    let _ = ws_tx.flush().await;
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        ws_tx.send(Message::Close(Some(close_frame))),
+    ).await;
 
     // Clean up quiescence subscription task
     if let Some(handle) = quiesce_sub_handle {
@@ -691,9 +757,18 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
     let (sub_tx, mut sub_rx) =
         tokio::sync::mpsc::channel::<TaggedSessionEvent>(256);
 
+    // Connection ID for input capture ownership tracking
+    let server_connection_id = uuid::Uuid::new_v4().to_string();
+
     // Track active subscription tasks by session name
     let mut sub_handles: std::collections::HashMap<String, SubHandle> =
         std::collections::HashMap::new();
+
+    // Ping/pong keepalive
+    let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
+    ping_interval.reset();
+    let mut last_pong = tokio::time::Instant::now();
+    const PONG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
     // Main event loop
     loop {
@@ -724,6 +799,7 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
                             &state,
                             &mut sub_handles,
                             &sub_tx,
+                            &server_connection_id,
                         )
                         .await;
 
@@ -773,8 +849,22 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
                             }
                         }
                     }
+                    Some(Ok(Message::Pong(_))) => {
+                        last_pong = tokio::time::Instant::now();
+                    }
                     Some(Ok(Message::Close(_))) | None => break,
                     _ => continue,
+                }
+            }
+
+            // Ping keepalive
+            _ = ping_interval.tick() => {
+                if last_pong.elapsed() > PONG_TIMEOUT {
+                    tracing::debug!("server ws_json client unresponsive (no pong), closing");
+                    break;
+                }
+                if ws_tx.send(Message::Ping(vec![])).await.is_err() {
+                    break;
                 }
             }
 
@@ -790,7 +880,10 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
                         }
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(skipped = n, "server WS client lagged on registry events");
+                        continue;
+                    }
                 }
             }
 
@@ -825,13 +918,15 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
         }
     }
 
-    // Send close frame on any exit path
+    // Send close frame on any exit path (with timeout to avoid blocking on dead connections)
     let close_frame = CloseFrame {
         code: axum::extract::ws::close_code::NORMAL,
         reason: "session ended".into(),
     };
-    let _ = ws_tx.send(Message::Close(Some(close_frame))).await;
-    let _ = ws_tx.flush().await;
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        ws_tx.send(Message::Close(Some(close_frame))),
+    ).await;
 
     // Clean up all subscription tasks
     for (_, handle) in sub_handles {
@@ -847,6 +942,7 @@ async fn handle_server_ws_request(
     state: &AppState,
     sub_handles: &mut std::collections::HashMap<String, SubHandle>,
     sub_tx: &tokio::sync::mpsc::Sender<TaggedSessionEvent>,
+    connection_id: &str,
 ) -> Option<super::ws_methods::WsResponse> {
     let id = req.id.clone();
     let method = req.method.as_str();
@@ -915,6 +1011,12 @@ async fn handle_server_ws_request(
                         "session_not_found",
                         &format!("Session not found: {}.", n),
                     ),
+                    RegistryError::MaxSessionsReached => super::ws_methods::WsResponse::error(
+                        id,
+                        method,
+                        "max_sessions_reached",
+                        "Maximum number of sessions reached.",
+                    ),
                 });
             }
 
@@ -955,6 +1057,14 @@ async fn handle_server_ws_request(
                         method,
                         "session_not_found",
                         &format!("Session not found: {}.", n),
+                    ));
+                }
+                Err(RegistryError::MaxSessionsReached) => {
+                    return Some(super::ws_methods::WsResponse::error(
+                        id,
+                        method,
+                        "max_sessions_reached",
+                        "Maximum number of sessions reached.",
                     ));
                 }
             }
@@ -1138,6 +1248,14 @@ async fn handle_server_ws_request(
                         &format!("Session not found: {}.", n),
                     ));
                 }
+                Err(RegistryError::MaxSessionsReached) => {
+                    return Some(super::ws_methods::WsResponse::error(
+                        id,
+                        method,
+                        "max_sessions_reached",
+                        "Maximum number of sessions reached.",
+                    ));
+                }
             }
         }
 
@@ -1256,7 +1374,7 @@ async fn handle_server_ws_request(
         params: req.params.clone(),
     };
 
-    Some(super::ws_methods::dispatch(&ws_req, &session).await)
+    Some(super::ws_methods::dispatch(&ws_req, &session, connection_id).await)
 }
 
 // Quiescence query parameters
@@ -1464,12 +1582,13 @@ pub(super) async fn scrollback(
     axum::extract::Query(params): axum::extract::Query<ScrollbackQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     let session = get_session(&state.sessions, &name)?;
+    let limit = params.limit.min(10_000);
     let response = session
         .parser
         .query(Query::Scrollback {
             format: params.format,
             offset: params.offset,
-            limit: params.limit,
+            limit,
         })
         .await
         .map_err(|_| ApiError::ParserUnavailable)?;
@@ -1859,21 +1978,36 @@ pub(super) async fn input_mode_get(
     }))
 }
 
+#[derive(Deserialize)]
+pub(super) struct InputCaptureParams {
+    pub owner: Option<String>,
+}
+
 pub(super) async fn input_capture(
     State(state): State<AppState>,
     Path(name): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<InputCaptureParams>,
 ) -> Result<StatusCode, ApiError> {
     let session = get_session(&state.sessions, &name)?;
-    session.input_mode.capture();
+    let owner = params.owner.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    session
+        .input_mode
+        .capture(&owner)
+        .map_err(|e| ApiError::InputCaptureFailed(e.to_string()))?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 pub(super) async fn input_release(
     State(state): State<AppState>,
     Path(name): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<InputCaptureParams>,
 ) -> Result<StatusCode, ApiError> {
     let session = get_session(&state.sessions, &name)?;
-    session.input_mode.release();
+    let owner = params.owner.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    session
+        .input_mode
+        .release(&owner)
+        .map_err(|e| ApiError::InputCaptureFailed(e.to_string()))?;
     session.focus.unfocus();
     Ok(StatusCode::NO_CONTENT)
 }
@@ -2030,6 +2164,7 @@ pub(super) async fn session_create(
     state.sessions.name_available(&req.name).map_err(|e| match e {
         RegistryError::NameExists(n) => ApiError::SessionNameConflict(n),
         RegistryError::NotFound(n) => ApiError::SessionNotFound(n),
+        RegistryError::MaxSessionsReached => ApiError::MaxSessionsReached,
     })?;
 
     // Use a placeholder name for spawn; registry.insert will assign the real name.
@@ -2043,6 +2178,7 @@ pub(super) async fn session_create(
         .map_err(|e| match e {
             RegistryError::NameExists(n) => ApiError::SessionNameConflict(n),
             RegistryError::NotFound(n) => ApiError::SessionNotFound(n),
+            RegistryError::MaxSessionsReached => ApiError::MaxSessionsReached,
         })?;
 
     // Monitor child exit so the session is auto-removed when the process dies.
@@ -2070,6 +2206,7 @@ pub(super) async fn session_rename(
     let session = state.sessions.rename(&name, &req.name).map_err(|e| match e {
         RegistryError::NameExists(n) => ApiError::SessionNameConflict(n),
         RegistryError::NotFound(n) => ApiError::SessionNotFound(n),
+        RegistryError::MaxSessionsReached => ApiError::MaxSessionsReached,
     })?;
 
     Ok(Json(build_session_info(&session)))

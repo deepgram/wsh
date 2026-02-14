@@ -47,7 +47,7 @@ async fn test_input_capture_flow() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/sessions/test/input/capture")
+                .uri("/sessions/test/input/capture?owner=test-agent")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -82,7 +82,7 @@ async fn test_input_capture_flow() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/sessions/test/input/release")
+                .uri("/sessions/test/input/release?owner=test-agent")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -123,7 +123,7 @@ async fn test_input_capture_idempotent() {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/sessions/test/input/capture")
+                    .uri("/sessions/test/input/capture?owner=test-agent")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -158,7 +158,7 @@ async fn test_input_capture_idempotent() {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/sessions/test/input/release")
+                    .uri("/sessions/test/input/release?owner=test-agent")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -212,7 +212,7 @@ async fn test_input_mode_wrong_method() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/sessions/test/input/capture")
+                .uri("/sessions/test/input/capture?owner=test-agent")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -226,7 +226,7 @@ async fn test_input_mode_wrong_method() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/sessions/test/input/release")
+                .uri("/sessions/test/input/release?owner=test-agent")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -248,7 +248,7 @@ async fn test_input_mode_state_shared_across_requests() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/sessions/test/input/capture")
+                .uri("/sessions/test/input/capture?owner=test-agent")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -441,7 +441,7 @@ async fn test_focus_cleared_on_input_release() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/sessions/test/input/capture")
+                .uri("/sessions/test/input/capture?owner=test-agent")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -486,7 +486,7 @@ async fn test_focus_cleared_on_input_release() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/sessions/test/input/release")
+                .uri("/sessions/test/input/release?owner=test-agent")
                 .body(Body::empty())
                 .unwrap(),
         )

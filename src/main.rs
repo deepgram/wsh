@@ -86,6 +86,10 @@ enum Commands {
         /// By default, `wsh server` runs in persistent mode.
         #[arg(long)]
         ephemeral: bool,
+
+        /// Maximum number of concurrent sessions (no limit if omitted)
+        #[arg(long)]
+        max_sessions: Option<usize>,
     },
 
     /// Attach to an existing session on the server
@@ -219,8 +223,8 @@ async fn main() -> Result<(), WshError> {
     }
 
     match cli.command {
-        Some(Commands::Server { bind, token, socket, ephemeral }) => {
-            run_server(bind, token, socket, ephemeral).await
+        Some(Commands::Server { bind, token, socket, ephemeral, max_sessions }) => {
+            run_server(bind, token, socket, ephemeral, max_sessions).await
         }
         Some(Commands::Attach { name, scrollback, socket, alt_screen }) => {
             run_attach(name, scrollback, socket, alt_screen).await
@@ -276,6 +280,7 @@ async fn run_server(
     token: Option<String>,
     socket: Option<PathBuf>,
     ephemeral: bool,
+    max_sessions: Option<usize>,
 ) -> Result<(), WshError> {
     tracing::info!("wsh server starting");
 
@@ -285,7 +290,10 @@ async fn run_server(
     }
 
     let persistent = !ephemeral;
-    let sessions = SessionRegistry::new();
+    let sessions = SessionRegistry::with_max_sessions(max_sessions);
+    if let Some(max) = max_sessions {
+        tracing::info!(max_sessions = max, "session limit configured");
+    }
     let shutdown = ShutdownCoordinator::new();
     let server_config = std::sync::Arc::new(api::ServerConfig::new(persistent));
     let state = api::AppState {
@@ -319,8 +327,10 @@ async fn run_server(
     let socket_path = socket.unwrap_or_else(server::default_socket_path);
     let socket_path_for_cleanup = socket_path.clone();
     let socket_sessions = sessions.clone();
+    let socket_cancel = tokio_util::sync::CancellationToken::new();
+    let socket_cancel_clone = socket_cancel.clone();
     let socket_handle = tokio::spawn(async move {
-        if let Err(e) = server::serve(socket_sessions, &socket_path).await {
+        if let Err(e) = server::serve(socket_sessions, &socket_path, socket_cancel_clone).await {
             tracing::error!(?e, "Unix socket server error");
         }
     });
@@ -387,10 +397,15 @@ async fn run_server(
         }
     });
 
-    // Wait for either Ctrl+C or ephemeral shutdown
+    // Wait for Ctrl+C, SIGTERM, or ephemeral shutdown
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .expect("failed to register SIGTERM handler");
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {
-            tracing::info!("received Ctrl+C");
+            tracing::info!("received SIGINT");
+        }
+        _ = sigterm.recv() => {
+            tracing::info!("received SIGTERM");
         }
         result = ephemeral_handle => {
             match result {
@@ -404,8 +419,21 @@ async fn run_server(
 
     // Signal WebSocket handlers to send close frames
     shutdown.shutdown();
-    // Give handlers a moment to flush close frames before stopping the server
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Wait for all WS connections to close (with a timeout so we don't hang).
+    // Also enforce a minimum grace period to allow in-flight HTTP requests to
+    // complete before we tear down sessions and stop the server.
+    let shutdown_result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        async {
+            shutdown.wait_for_all_closed().await;
+            // Minimum grace period for non-WS connections (MCP HTTP, etc.)
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        },
+    ).await;
+    if shutdown_result.is_err() {
+        tracing::warn!("shutdown timed out waiting for connections to close");
+    }
 
     // Detach all streaming clients and clean up sessions. Dropping
     // sessions closes PTY handles, which sends SIGHUP to children.
@@ -418,8 +446,11 @@ async fn run_server(
         tracing::warn!(?e, "HTTP server task panicked");
     }
 
-    // Clean up
-    socket_handle.abort();
+    // Gracefully stop the socket server
+    socket_cancel.cancel();
+    if let Err(e) = socket_handle.await {
+        tracing::warn!(?e, "socket server task panicked");
+    }
 
     // Remove the socket file so a subsequent server can bind
     if socket_path_for_cleanup.exists() {
@@ -552,8 +583,9 @@ async fn run_mcp(
             continue;
         }
 
-        // Parse SSE response: look for `data:` lines in event-stream format
-        // The response may be plain JSON or SSE depending on content type
+        // Parse SSE response: look for `data:` lines in event-stream format.
+        // Check both content-type and body heuristic because some MCP servers
+        // may return SSE-formatted responses without the proper content-type.
         if content_type.contains("text/event-stream") || body.contains("data:") {
             // Parse as SSE
             for event in body.split("\n\n") {

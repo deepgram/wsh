@@ -19,11 +19,12 @@ use crate::session::{Session, SessionRegistry};
 
 /// Start the Unix socket server, listening for CLI client connections.
 ///
-/// This function runs until the listener is shut down (e.g. by dropping the
-/// `UnixListener` or receiving a shutdown signal).
+/// Runs until the `cancel` token is cancelled, then stops accepting new
+/// connections but lets in-flight handlers finish (they exit when sessions drain).
 pub async fn serve(
     sessions: SessionRegistry,
     socket_path: &Path,
+    cancel: tokio_util::sync::CancellationToken,
 ) -> io::Result<()> {
     // Remove stale socket file if it exists, but check for active server first
     if socket_path.exists() {
@@ -58,20 +59,29 @@ pub async fn serve(
     tracing::info!(path = %socket_path.display(), "Unix socket server listening");
 
     loop {
-        match listener.accept().await {
-            Ok((stream, _addr)) => {
-                let sessions = sessions.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = handle_client(stream, sessions).await {
-                        tracing::debug!(?e, "client connection ended");
-                    }
-                });
+        tokio::select! {
+            _ = cancel.cancelled() => {
+                tracing::debug!("socket server received cancel signal, stopping accept loop");
+                break;
             }
-            Err(e) => {
-                tracing::error!(?e, "failed to accept Unix socket connection");
+            result = listener.accept() => {
+                match result {
+                    Ok((stream, _addr)) => {
+                        let sessions = sessions.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = handle_client(stream, sessions).await {
+                                tracing::debug!(?e, "client connection ended");
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        tracing::error!(?e, "failed to accept Unix socket connection");
+                    }
+                }
             }
         }
     }
+    Ok(())
 }
 
 /// Compute the default Unix socket path for this user.
@@ -92,8 +102,14 @@ async fn handle_client<S: AsyncRead + AsyncWrite + Unpin>(
     mut stream: S,
     sessions: SessionRegistry,
 ) -> io::Result<()> {
-    // Read initial control frame
-    let frame = Frame::read_from(&mut stream).await?;
+    // Read initial control frame (with timeout to reject idle connections)
+    let frame = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        Frame::read_from(&mut stream),
+    )
+    .await
+    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "initial frame timeout"))?
+    ?;
 
     match frame.frame_type {
         FrameType::CreateSession => {
@@ -547,8 +563,16 @@ async fn run_streaming<S: AsyncRead + AsyncWrite + Unpin>(
                                     continue;
                                 }
 
-                                if input_tx.send(f.payload).await.is_err() {
-                                    break;
+                                match tokio::time::timeout(
+                                    std::time::Duration::from_secs(5),
+                                    input_tx.send(f.payload),
+                                ).await {
+                                    Ok(Ok(())) => {}
+                                    Ok(Err(_)) => break, // channel closed
+                                    Err(_) => {
+                                        tracing::warn!("input_tx.send timed out in socket streaming");
+                                        break;
+                                    }
                                 }
                             }
                             FrameType::Resize => {
@@ -599,8 +623,9 @@ mod tests {
         std::mem::forget(dir);
         let path = socket_path.clone();
 
+        let cancel = tokio_util::sync::CancellationToken::new();
         tokio::spawn(async move {
-            serve(sessions, &socket_path).await.unwrap();
+            serve(sessions, &socket_path, cancel).await.unwrap();
         });
 
         // Wait for socket to appear

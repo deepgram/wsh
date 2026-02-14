@@ -55,6 +55,10 @@ pub struct Session {
     /// filter list results. Protected by a `parking_lot::RwLock` for cheap
     /// cloning across threads.
     pub screen_mode: Arc<RwLock<ScreenMode>>,
+    /// Cancellation token that fires when this session is killed/removed.
+    /// WS handlers add this to their `select!` loop to detect session death
+    /// immediately rather than operating on ghost state.
+    pub cancelled: tokio_util::sync::CancellationToken,
 }
 
 impl std::fmt::Debug for Session {
@@ -98,6 +102,19 @@ impl Session {
     /// The session remains alive — only the streaming connections are closed.
     pub fn detach(&self) {
         let _ = self.detach_signal.send(());
+    }
+
+    /// Send SIGKILL to the child process if we have a PID.
+    ///
+    /// Used as an escalation path when the child ignores SIGHUP during
+    /// shutdown/drain.
+    pub fn kill_child(&self) {
+        if let Some(pid) = self.pid {
+            #[cfg(unix)]
+            unsafe {
+                libc::kill(pid as i32, libc::SIGKILL);
+            }
+        }
     }
 
     /// Spawn a new session with a PTY and all associated I/O tasks.
@@ -230,6 +247,7 @@ impl Session {
             detach_signal: broadcast::channel::<()>(1).0,
             visual_update_tx: broadcast::channel::<VisualUpdate>(16).0,
             screen_mode: Arc::new(RwLock::new(ScreenMode::Normal)),
+            cancelled: tokio_util::sync::CancellationToken::new(),
         };
 
         // Watch for alternate screen mode changes from the parser and
@@ -285,11 +303,14 @@ pub enum RegistryError {
     NameExists(String),
     #[error("session not found: {0}")]
     NotFound(String),
+    #[error("maximum number of sessions reached")]
+    MaxSessionsReached,
 }
 
 struct RegistryInner {
     sessions: HashMap<String, Session>,
     next_id: u64,
+    max_sessions: Option<usize>,
 }
 
 /// Manages multiple sessions by name.
@@ -302,11 +323,17 @@ pub struct SessionRegistry {
 impl SessionRegistry {
     /// Create an empty registry with a broadcast channel for lifecycle events.
     pub fn new() -> Self {
+        Self::with_max_sessions(None)
+    }
+
+    /// Create an empty registry with an optional maximum session count.
+    pub fn with_max_sessions(max_sessions: Option<usize>) -> Self {
         let (events_tx, _) = tokio_broadcast::channel(64);
         Self {
             inner: Arc::new(RwLock::new(RegistryInner {
                 sessions: HashMap::new(),
                 next_id: 0,
+                max_sessions,
             })),
             events_tx,
         }
@@ -326,6 +353,12 @@ impl SessionRegistry {
         mut session: Session,
     ) -> Result<String, RegistryError> {
         let mut inner = self.inner.write();
+
+        if let Some(max) = inner.max_sessions {
+            if inner.sessions.len() >= max {
+                return Err(RegistryError::MaxSessionsReached);
+            }
+        }
 
         let assigned_name = match name {
             Some(n) => {
@@ -371,6 +404,12 @@ impl SessionRegistry {
     ) -> Result<(String, Session), RegistryError> {
         let mut inner = self.inner.write();
 
+        if let Some(max) = inner.max_sessions {
+            if inner.sessions.len() >= max {
+                return Err(RegistryError::MaxSessionsReached);
+            }
+        }
+
         let assigned_name = match name {
             Some(n) => {
                 if inner.sessions.contains_key(&n) {
@@ -414,7 +453,8 @@ impl SessionRegistry {
     pub fn remove(&self, name: &str) -> Option<Session> {
         let mut inner = self.inner.write();
         let removed = inner.sessions.remove(name);
-        if removed.is_some() {
+        if let Some(ref session) = removed {
+            session.cancelled.cancel();
             let _ = self.events_tx.send(SessionEvent::Destroyed {
                 name: name.to_string(),
             });
@@ -486,10 +526,21 @@ impl SessionRegistry {
     /// to the child).
     pub fn drain(&self) {
         let names = self.list();
+        let mut sessions = Vec::new();
         for name in names {
             if let Some(session) = self.remove(&name) {
                 session.detach();
+                sessions.push(session);
             }
+        }
+        // Give children 3 seconds to exit from SIGHUP, then escalate to SIGKILL
+        if !sessions.is_empty() {
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                for session in &sessions {
+                    session.kill_child();
+                }
+            });
         }
     }
 
@@ -560,6 +611,7 @@ mod tests {
             detach_signal: broadcast::channel::<()>(1).0,
             visual_update_tx: broadcast::channel::<VisualUpdate>(16).0,
             screen_mode: Arc::new(RwLock::new(ScreenMode::Normal)),
+            cancelled: tokio_util::sync::CancellationToken::new(),
         };
         (session, input_rx)
     }

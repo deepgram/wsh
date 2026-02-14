@@ -52,6 +52,7 @@ fn create_test_app() -> (axum::Router, mpsc::Receiver<Bytes>, broadcast::Sender<
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
         visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
+        cancelled: tokio_util::sync::CancellationToken::new(),
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
@@ -150,6 +151,7 @@ async fn test_api_input_multiple_requests() {
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
         visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
+        cancelled: tokio_util::sync::CancellationToken::new(),
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
@@ -241,6 +243,7 @@ async fn test_websocket_receives_pty_output() {
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
         visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
+        cancelled: tokio_util::sync::CancellationToken::new(),
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
@@ -304,6 +307,7 @@ async fn test_websocket_sends_input_to_pty() {
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
         visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
+        cancelled: tokio_util::sync::CancellationToken::new(),
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
@@ -363,6 +367,7 @@ async fn test_websocket_text_input_to_pty() {
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
         visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
+        cancelled: tokio_util::sync::CancellationToken::new(),
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
@@ -421,6 +426,7 @@ async fn test_websocket_bidirectional_communication() {
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
         visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
+        cancelled: tokio_util::sync::CancellationToken::new(),
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
@@ -498,6 +504,7 @@ async fn test_websocket_multiple_outputs() {
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
         visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
+        cancelled: tokio_util::sync::CancellationToken::new(),
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
@@ -622,6 +629,7 @@ async fn test_websocket_line_event_includes_total_lines() {
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
         visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
+        cancelled: tokio_util::sync::CancellationToken::new(),
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
@@ -711,6 +719,7 @@ async fn test_scrollback_endpoint() {
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
         visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
+        cancelled: tokio_util::sync::CancellationToken::new(),
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
@@ -778,6 +787,7 @@ async fn test_scrollback_initial_state() {
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
         visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
+        cancelled: tokio_util::sync::CancellationToken::new(),
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();

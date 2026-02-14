@@ -37,7 +37,7 @@ curl http://localhost:8080/input/mode
 ## Switching to Capture Mode
 
 ```
-POST /input/capture
+POST /input/capture?owner=<owner-id>
 ```
 
 **Response:** `204 No Content`
@@ -46,30 +46,54 @@ After this call, keyboard input from the local terminal is broadcast to API
 subscribers but **not** forwarded to the PTY. The terminal program (shell,
 vim, etc.) sees no input until you release.
 
-This is idempotent -- calling it multiple times has no additional effect.
+**Query parameters:**
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `owner` | string | (auto-generated UUID) | Identifier for the capturing client |
+
+The `owner` parameter prevents one client from accidentally releasing another
+client's capture. If omitted, a random UUID is assigned. If another owner
+already holds the capture, the request returns `409 Conflict` with error code
+`input_capture_failed`.
+
+Calling capture multiple times with the **same** owner is idempotent.
 
 **Example:**
 
 ```bash
-curl -X POST http://localhost:8080/input/capture
+curl -X POST 'http://localhost:8080/sessions/default/input/capture?owner=my-agent'
+```
+
+**Error (already captured by another owner):**
+
+```json
+{"error": {"code": "input_capture_failed", "message": "Input capture failed: input already captured by other-agent."}}
 ```
 
 ## Releasing Back to Passthrough
 
 ```
-POST /input/release
+POST /input/release?owner=<owner-id>
 ```
 
 **Response:** `204 No Content`
 
 Restores normal input flow. The PTY receives keystrokes again.
 
-This is idempotent.
+**Query parameters:**
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `owner` | string | (auto-generated UUID) | Must match the owner that captured |
+
+Only the owner that captured input can release it. If the caller is not the
+current owner, the request returns `409 Conflict`.
 
 **Example:**
 
 ```bash
-curl -X POST http://localhost:8080/input/release
+curl -X POST 'http://localhost:8080/sessions/default/input/release?owner=my-agent'
 ```
 
 ## Subscribing to Input Events
@@ -291,3 +315,13 @@ Focus is automatically cleared when:
   events.
 - Focus requires an overlay or panel with `focusable: true`. Non-focusable
   elements cannot receive focus.
+- **Ownership:** Each capture has an owner. Only the owner can release it.
+  WebSocket clients use their connection ID as the owner automatically. HTTP
+  clients should pass `?owner=` explicitly to maintain consistent identity
+  across requests.
+- **Auto-release on disconnect:** When a WebSocket client disconnects, its
+  input capture is automatically released if it was the owner. This prevents
+  orphaned captures from blocking the terminal.
+- **Ctrl+\\ override:** The local keyboard toggle (`Ctrl+\\`) uses the owner
+  `"local"` and can always toggle capture mode regardless of which API client
+  owns the capture.

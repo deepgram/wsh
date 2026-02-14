@@ -35,6 +35,12 @@ pub enum ApiError {
     ChannelFull,
     /// 503 - Terminal parser actor is unavailable.
     ParserUnavailable,
+    /// 504 - Terminal parser query timed out.
+    ParserTimeout,
+    /// 503 - Maximum number of sessions reached.
+    MaxSessionsReached,
+    /// 409 - Input capture is held by another connection.
+    InputCaptureFailed(String),
     /// 500 - Failed to write input to the PTY.
     InputSendFailed,
     /// 408 - Quiescence wait exceeded max_wait_ms deadline.
@@ -71,6 +77,9 @@ impl ApiError {
             ApiError::SessionNotFound(_) => StatusCode::NOT_FOUND,
             ApiError::ChannelFull => StatusCode::SERVICE_UNAVAILABLE,
             ApiError::ParserUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+            ApiError::ParserTimeout => StatusCode::GATEWAY_TIMEOUT,
+            ApiError::MaxSessionsReached => StatusCode::SERVICE_UNAVAILABLE,
+            ApiError::InputCaptureFailed(_) => StatusCode::CONFLICT,
             ApiError::InputSendFailed => StatusCode::INTERNAL_SERVER_ERROR,
             ApiError::QuiesceTimeout => StatusCode::REQUEST_TIMEOUT,
             ApiError::SessionCreateFailed(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -98,6 +107,9 @@ impl ApiError {
             ApiError::SessionNotFound(_) => "session_not_found",
             ApiError::ChannelFull => "channel_full",
             ApiError::ParserUnavailable => "parser_unavailable",
+            ApiError::ParserTimeout => "parser_timeout",
+            ApiError::MaxSessionsReached => "max_sessions_reached",
+            ApiError::InputCaptureFailed(_) => "input_capture_failed",
             ApiError::InputSendFailed => "input_send_failed",
             ApiError::QuiesceTimeout => "quiesce_timeout",
             ApiError::SessionCreateFailed(_) => "session_create_failed",
@@ -127,6 +139,13 @@ impl ApiError {
             ApiError::SessionNotFound(name) => format!("Session not found: {}.", name),
             ApiError::ChannelFull => "Server is overloaded. Try again shortly.".to_string(),
             ApiError::ParserUnavailable => "Terminal parser is unavailable.".to_string(),
+            ApiError::ParserTimeout => "Terminal parser query timed out.".to_string(),
+            ApiError::MaxSessionsReached => {
+                "Maximum number of sessions reached.".to_string()
+            }
+            ApiError::InputCaptureFailed(detail) => {
+                format!("Input capture failed: {}.", detail)
+            }
             ApiError::InputSendFailed => "Failed to send input to terminal.".to_string(),
             ApiError::QuiesceTimeout => {
                 "Terminal did not become quiescent within the deadline.".to_string()

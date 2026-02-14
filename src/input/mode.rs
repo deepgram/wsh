@@ -2,6 +2,8 @@
 //!
 //! Provides thread-safe state for controlling whether keyboard input
 //! goes to the PTY (passthrough mode) or only to API subscribers (capture mode).
+//! Tracks the owner of a capture to prevent one client from stealing
+//! another client's capture.
 
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -18,6 +20,37 @@ pub enum Mode {
     Capture,
 }
 
+/// Error returned when a capture/release operation is rejected.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InputModeError {
+    /// Another owner already holds the capture.
+    AlreadyCaptured { owner: String },
+    /// The caller is not the current capture owner.
+    NotOwner,
+}
+
+impl std::fmt::Display for InputModeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InputModeError::AlreadyCaptured { owner } => {
+                write!(f, "input already captured by {owner}")
+            }
+            InputModeError::NotOwner => {
+                write!(f, "caller is not the current capture owner")
+            }
+        }
+    }
+}
+
+impl std::error::Error for InputModeError {}
+
+/// Internal state for InputMode.
+struct ModeState {
+    mode: Mode,
+    /// Connection ID of the client that activated capture, if any.
+    owner: Option<String>,
+}
+
 /// Thread-safe input mode state.
 ///
 /// This struct provides a way to control input routing from multiple threads.
@@ -25,53 +58,98 @@ pub enum Mode {
 /// and the PTY.
 #[derive(Clone)]
 pub struct InputMode {
-    inner: Arc<RwLock<Mode>>,
+    inner: Arc<RwLock<ModeState>>,
 }
 
 impl InputMode {
     /// Creates a new InputMode in the default Passthrough state.
     pub fn new() -> Self {
         Self {
-            inner: Arc::new(RwLock::new(Mode::default())),
+            inner: Arc::new(RwLock::new(ModeState {
+                mode: Mode::default(),
+                owner: None,
+            })),
         }
     }
 
     /// Gets the current mode.
     pub fn get(&self) -> Mode {
-        *self.inner.read()
+        self.inner.read().mode
     }
 
-    /// Sets the mode to Capture.
+    /// Sets the mode to Capture with the given owner.
     ///
-    /// In capture mode, input is only sent to API subscribers and
-    /// is not forwarded to the PTY.
-    pub fn capture(&self) {
-        *self.inner.write() = Mode::Capture;
+    /// Returns `Err` if already captured by a different owner.
+    pub fn capture(&self, owner: &str) -> Result<(), InputModeError> {
+        let mut guard = self.inner.write();
+        if let Some(ref existing) = guard.owner {
+            if existing != owner {
+                return Err(InputModeError::AlreadyCaptured {
+                    owner: existing.clone(),
+                });
+            }
+        }
+        guard.mode = Mode::Capture;
+        guard.owner = Some(owner.to_string());
+        Ok(())
     }
 
-    /// Sets the mode to Passthrough.
+    /// Sets the mode to Passthrough, releasing the capture.
     ///
-    /// In passthrough mode, input goes to both API subscribers and the PTY.
-    pub fn release(&self) {
-        *self.inner.write() = Mode::Passthrough;
+    /// Only succeeds if the caller is the current owner (or if there is no owner,
+    /// for backward compatibility).
+    pub fn release(&self, owner: &str) -> Result<(), InputModeError> {
+        let mut guard = self.inner.write();
+        if let Some(ref existing) = guard.owner {
+            if existing != owner {
+                return Err(InputModeError::NotOwner);
+            }
+        }
+        guard.mode = Mode::Passthrough;
+        guard.owner = None;
+        Ok(())
+    }
+
+    /// Unconditionally releases the capture if the given owner holds it.
+    ///
+    /// Does nothing if someone else holds the capture or if already in passthrough.
+    /// Used for auto-release on disconnect.
+    pub fn release_if_owner(&self, owner: &str) {
+        let mut guard = self.inner.write();
+        if guard.owner.as_deref() == Some(owner) {
+            guard.mode = Mode::Passthrough;
+            guard.owner = None;
+        }
     }
 
     /// Toggles the mode: Passthrough → Capture, Capture → Passthrough.
     ///
+    /// Used by the local terminal user (Ctrl+\). Sets owner to "local".
     /// Returns the new mode after toggling.
     pub fn toggle(&self) -> Mode {
         let mut guard = self.inner.write();
-        let new_mode = match *guard {
-            Mode::Passthrough => Mode::Capture,
-            Mode::Capture => Mode::Passthrough,
+        let new_mode = match guard.mode {
+            Mode::Passthrough => {
+                guard.owner = Some("local".to_string());
+                Mode::Capture
+            }
+            Mode::Capture => {
+                guard.owner = None;
+                Mode::Passthrough
+            }
         };
-        *guard = new_mode;
+        guard.mode = new_mode;
         new_mode
     }
 
     /// Returns true if the current mode is Capture.
     pub fn is_capture(&self) -> bool {
         self.get() == Mode::Capture
+    }
+
+    /// Returns the current capture owner, if any.
+    pub fn owner(&self) -> Option<String> {
+        self.inner.read().owner.clone()
     }
 }
 
@@ -94,16 +172,59 @@ mod tests {
     #[test]
     fn test_capture_mode() {
         let input_mode = InputMode::new();
-        input_mode.capture();
+        input_mode.capture("agent-1").unwrap();
         assert_eq!(input_mode.get(), Mode::Capture);
     }
 
     #[test]
     fn test_release_mode() {
         let input_mode = InputMode::new();
-        input_mode.capture();
+        input_mode.capture("agent-1").unwrap();
         assert_eq!(input_mode.get(), Mode::Capture);
-        input_mode.release();
+        input_mode.release("agent-1").unwrap();
+        assert_eq!(input_mode.get(), Mode::Passthrough);
+    }
+
+    #[test]
+    fn test_capture_rejected_if_different_owner() {
+        let input_mode = InputMode::new();
+        input_mode.capture("agent-1").unwrap();
+        let err = input_mode.capture("agent-2").unwrap_err();
+        assert_eq!(
+            err,
+            InputModeError::AlreadyCaptured {
+                owner: "agent-1".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_same_owner_can_recapture() {
+        let input_mode = InputMode::new();
+        input_mode.capture("agent-1").unwrap();
+        input_mode.capture("agent-1").unwrap(); // should succeed
+        assert_eq!(input_mode.get(), Mode::Capture);
+    }
+
+    #[test]
+    fn test_release_rejected_if_not_owner() {
+        let input_mode = InputMode::new();
+        input_mode.capture("agent-1").unwrap();
+        let err = input_mode.release("agent-2").unwrap_err();
+        assert_eq!(err, InputModeError::NotOwner);
+    }
+
+    #[test]
+    fn test_release_if_owner() {
+        let input_mode = InputMode::new();
+        input_mode.capture("agent-1").unwrap();
+
+        // Different owner: no effect
+        input_mode.release_if_owner("agent-2");
+        assert_eq!(input_mode.get(), Mode::Capture);
+
+        // Correct owner: releases
+        input_mode.release_if_owner("agent-1");
         assert_eq!(input_mode.get(), Mode::Passthrough);
     }
 
@@ -115,19 +236,21 @@ mod tests {
         let new_mode = input_mode.toggle();
         assert_eq!(new_mode, Mode::Capture);
         assert_eq!(input_mode.get(), Mode::Capture);
+        assert_eq!(input_mode.owner(), Some("local".to_string()));
 
         let new_mode = input_mode.toggle();
         assert_eq!(new_mode, Mode::Passthrough);
         assert_eq!(input_mode.get(), Mode::Passthrough);
+        assert_eq!(input_mode.owner(), None);
     }
 
     #[test]
     fn test_is_capture() {
         let input_mode = InputMode::new();
         assert!(!input_mode.is_capture());
-        input_mode.capture();
+        input_mode.capture("test").unwrap();
         assert!(input_mode.is_capture());
-        input_mode.release();
+        input_mode.release("test").unwrap();
         assert!(!input_mode.is_capture());
     }
 
@@ -136,10 +259,10 @@ mod tests {
         let input_mode1 = InputMode::new();
         let input_mode2 = input_mode1.clone();
 
-        input_mode1.capture();
+        input_mode1.capture("agent-1").unwrap();
         assert_eq!(input_mode2.get(), Mode::Capture);
 
-        input_mode2.release();
+        input_mode2.release("agent-1").unwrap();
         assert_eq!(input_mode1.get(), Mode::Passthrough);
     }
 

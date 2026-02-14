@@ -48,6 +48,7 @@ change between versions.
 | Status | Code | Message | When |
 |--------|------|---------|------|
 | `409` | `session_name_conflict` | Session name already exists: {name}. | Session name already in use |
+| `409` | `input_capture_failed` | Input capture failed: {detail}. | Input capture/release rejected (another owner holds the capture) |
 
 ### Not Found Errors (Sessions)
 
@@ -60,6 +61,7 @@ change between versions.
 | Status | Code | Message | When |
 |--------|------|---------|------|
 | `408` | `quiesce_timeout` | Terminal did not become quiescent within the deadline. | `max_wait_ms` exceeded on `GET /quiesce` or `await_quiesce` WS method |
+| `504` | `parser_timeout` | Terminal parser query timed out. | Parser query did not respond within 5 seconds |
 
 ### Server Errors
 
@@ -67,6 +69,7 @@ change between versions.
 |--------|------|---------|------|
 | `503` | `channel_full` | Server is overloaded. Try again shortly. | Internal channel backpressure |
 | `503` | `parser_unavailable` | Terminal parser is unavailable. | Parser actor is down or unreachable |
+| `503` | `max_sessions_reached` | Maximum number of sessions reached. | Server-configured session limit exceeded (see `--max-sessions`) |
 | `500` | `input_send_failed` | Failed to send input to terminal. | PTY input channel is broken |
 | `500` | `session_create_failed` | Failed to create session: {detail}. | PTY spawn or session creation error |
 | `500` | `internal_error` | Internal error: {detail}. | Unexpected server error |

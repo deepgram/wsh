@@ -197,6 +197,7 @@ mod tests {
             detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
             visual_update_tx: tokio::sync::broadcast::channel::<crate::protocol::VisualUpdate>(16).0,
             screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(crate::overlay::ScreenMode::Normal)),
+            cancelled: tokio_util::sync::CancellationToken::new(),
         };
         let registry = crate::session::SessionRegistry::new();
         registry.insert(Some("test".into()), session).unwrap();
@@ -468,13 +469,13 @@ mod tests {
         let (state, _input_rx, _name) = create_test_state();
         let app = router(state, None);
 
-        // Switch to capture mode
+        // Switch to capture mode (with explicit owner so release can match)
         let response = app
             .clone()
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/sessions/test/input/capture")
+                    .uri("/sessions/test/input/capture?owner=test-agent")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -501,13 +502,13 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["mode"], "capture");
 
-        // Switch back to passthrough mode
+        // Switch back to passthrough mode (same owner)
         let response = app
             .clone()
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/sessions/test/input/release")
+                    .uri("/sessions/test/input/release?owner=test-agent")
                     .body(Body::empty())
                     .unwrap(),
             )

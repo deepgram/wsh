@@ -527,7 +527,8 @@ mod tests {
         let path = socket_path.clone();
 
         tokio::spawn(async move {
-            server::serve(sessions, &socket_path).await.unwrap();
+            let cancel = tokio_util::sync::CancellationToken::new();
+            server::serve(sessions, &socket_path, cancel).await.unwrap();
         });
 
         // Wait for socket to appear

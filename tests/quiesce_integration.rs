@@ -51,6 +51,7 @@ fn create_test_state() -> (api::AppState, mpsc::Receiver<Bytes>, ActivityTracker
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
         visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
+        cancelled: tokio_util::sync::CancellationToken::new(),
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
@@ -720,6 +721,7 @@ fn create_multi_session_state() -> (api::AppState, ActivityTracker, ActivityTrac
             detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
             visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
             screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
+            cancelled: tokio_util::sync::CancellationToken::new(),
         };
         (session, activity)
     };

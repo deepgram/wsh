@@ -155,6 +155,10 @@ impl WshMcpServer {
                 format!("unexpected registry error: {n}"),
                 None,
             ),
+            RegistryError::MaxSessionsReached => ErrorData::internal_error(
+                "maximum number of sessions reached".to_string(),
+                None,
+            ),
         })?;
 
         let (session, child_exit_rx) =
@@ -175,6 +179,10 @@ impl WshMcpServer {
                     ),
                     RegistryError::NotFound(n) => ErrorData::internal_error(
                         format!("unexpected registry error: {n}"),
+                        None,
+                    ),
+                    RegistryError::MaxSessionsReached => ErrorData::internal_error(
+                        "maximum number of sessions reached".to_string(),
                         None,
                     ),
                 },
@@ -291,6 +299,10 @@ impl WshMcpServer {
                             format!("session not found: {n}"),
                             None,
                         ),
+                        RegistryError::MaxSessionsReached => ErrorData::internal_error(
+                            "maximum number of sessions reached".to_string(),
+                            None,
+                        ),
                     })?;
 
                 let result = serde_json::json!({
@@ -345,7 +357,13 @@ impl WshMcpServer {
         };
 
         let len = data.len();
-        session.input_tx.send(data).await.map_err(|e| {
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            session.input_tx.send(data),
+        )
+        .await
+        .map_err(|_| ErrorData::internal_error("input send timed out", None))?
+        .map_err(|e| {
             ErrorData::internal_error(
                 format!("failed to send input: {e}"),
                 None,
@@ -392,13 +410,14 @@ impl WshMcpServer {
     ) -> Result<CallToolResult, ErrorData> {
         let session = self.get_session(&params.session)?;
         let format = params.format.into_parser_format();
+        let limit = params.limit.min(10_000);
 
         let response = session
             .parser
             .query(Query::Scrollback {
                 format,
                 offset: params.offset,
-                limit: params.limit,
+                limit,
             })
             .await
             .map_err(|e| {
@@ -459,7 +478,13 @@ impl WshMcpServer {
 
         // 1. Send input
         let data = Bytes::from(params.input.into_bytes());
-        session.input_tx.send(data).await.map_err(|e| {
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            session.input_tx.send(data),
+        )
+        .await
+        .map_err(|_| ErrorData::internal_error("input send timed out", None))?
+        .map_err(|e| {
             ErrorData::internal_error(
                 format!("failed to send input: {e}"),
                 None,
@@ -928,10 +953,14 @@ impl WshMcpServer {
         if let Some(ref action) = params.mode {
             match action {
                 InputModeAction::Capture => {
-                    session.input_mode.capture();
+                    session.input_mode.capture("mcp").map_err(|e| {
+                        ErrorData::invalid_params(e.to_string(), None)
+                    })?;
                 }
                 InputModeAction::Release => {
-                    session.input_mode.release();
+                    session.input_mode.release("mcp").map_err(|e| {
+                        ErrorData::invalid_params(e.to_string(), None)
+                    })?;
                     session.focus.unfocus();
                 }
             }

@@ -733,7 +733,17 @@ paths:
       tags: [input]
       description: >
         In capture mode, keyboard input is broadcast to API subscribers
-        but not forwarded to the PTY. Idempotent.
+        but not forwarded to the PTY. Idempotent for the same owner.
+        Returns 409 if another owner holds the capture.
+      parameters:
+        - name: owner
+          in: query
+          required: false
+          description: >
+            Owner identifier for this capture. If omitted, a random UUID is
+            assigned. Only the owner can release the capture.
+          schema:
+            type: string
       responses:
         "204":
           description: Mode switched to capture.
@@ -741,6 +751,12 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "409":
+          description: Input already captured by another owner.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /input/release:
     post:
@@ -749,7 +765,17 @@ paths:
       tags: [input]
       description: >
         In passthrough mode, keyboard input goes to both API subscribers
-        and the PTY. Idempotent. Also clears input focus.
+        and the PTY. Also clears input focus. Only the current capture
+        owner can release. Returns 409 if caller is not the owner.
+      parameters:
+        - name: owner
+          in: query
+          required: false
+          description: >
+            Must match the owner that captured input. If omitted, a random
+            UUID is used (which will likely not match).
+          schema:
+            type: string
       responses:
         "204":
           description: Mode switched to passthrough.
@@ -757,6 +783,12 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "409":
+          description: Caller is not the capture owner.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /input/focus:
     get:
@@ -951,6 +983,12 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "500":
           description: Failed to create session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Maximum number of sessions reached.
           content:
             application/json:
               schema:
@@ -1946,8 +1984,11 @@ components:
                 - channel_full
                 - parser_unavailable
                 - input_send_failed
+                - input_capture_failed
                 - quiesce_timeout
+                - parser_timeout
                 - no_sessions
+                - max_sessions_reached
                 - session_create_failed
                 - session_name_conflict
                 - not_focusable

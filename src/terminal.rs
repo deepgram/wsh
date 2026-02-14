@@ -1,6 +1,7 @@
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, size};
 use std::io::Write;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use parking_lot::RwLock;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -134,11 +135,11 @@ impl TerminalSize {
 
     /// Get the current terminal size as (rows, cols).
     pub fn get(&self) -> (u16, u16) {
-        *self.inner.read().unwrap()
+        *self.inner.read()
     }
 
     /// Update the terminal size.
     pub fn set(&self, rows: u16, cols: u16) {
-        *self.inner.write().unwrap() = (rows, cols);
+        *self.inner.write() = (rows, cols);
     }
 }

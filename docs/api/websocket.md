@@ -994,11 +994,35 @@ by sending multiple subscribe requests with different session names.
 
 ---
 
+## Connection Health
+
+### Ping/Pong Keepalive
+
+wsh sends WebSocket Ping frames every 30 seconds to detect dead connections.
+If no Pong is received within 10 seconds after a Ping, the server closes the
+connection. Clients should respond to Ping frames (most WebSocket libraries
+do this automatically).
+
+### Broadcast Lag (Raw WebSocket)
+
+If a `/ws/raw` client falls behind on reading output (e.g., a slow network
+connection), the server closes the connection with close code `1013`
+(Try Again Later) and reason `"output lagged, reconnect to re-sync"`.
+The client should reconnect and fetch fresh state.
+
+### Session Killed
+
+If the session a WebSocket is connected to is killed (via `DELETE /sessions/:name`
+or the server-level `kill_session` method), all WebSocket connections to that
+session receive a close frame and are terminated. Clients should handle this
+by checking whether the session still exists before reconnecting.
+
 ## Graceful Shutdown
 
 When wsh shuts down, it sends a WebSocket close frame with code `1000`
 (normal closure) and reason `"server shutting down"` before terminating
-the connection.
+the connection. Close frame sends have a 2-second timeout to prevent dead
+connections from blocking shutdown.
 
 ## Reconnection
 

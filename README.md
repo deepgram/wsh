@@ -159,6 +159,7 @@ Once installed, the skills are available automatically. Claude Code will load th
 | `--bind` | | `127.0.0.1:8080` | Address to bind the API server |
 | `--token` | `WSH_TOKEN` | (auto-generated) | Authentication token |
 | `--socket` | | `$XDG_RUNTIME_DIR/wsh.sock` | Path to the Unix domain socket |
+| `--max-sessions` | | (no limit) | Maximum number of concurrent sessions |
 
 #### `attach` Flags
 
@@ -478,6 +479,7 @@ tests/
 ├── server_client_e2e.rs        # Server/client end-to-end tests
 ├── session_management.rs       # Session management tests
 ├── lifecycle_stress.rs          # Lifecycle stress tests (detach/reattach/exit)
+├── reliability_hardening.rs     # Reliability hardening tests (timeouts, limits, ownership)
 ├── ws_json_methods.rs          # WebSocket JSON method tests
 └── ws_server_integration.rs    # Server-level WebSocket tests
 ```

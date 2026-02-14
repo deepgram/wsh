@@ -24,6 +24,9 @@ pub enum ParserError {
     #[error("query channel full")]
     ChannelFull,
 
+    #[error("parser query timed out")]
+    QueryTimeout,
+
     #[error("invalid query parameters: {0}")]
     InvalidQuery(String),
 }
@@ -63,14 +66,21 @@ impl Parser {
         }
     }
 
-    /// Query current state (hides channel creation)
+    /// Query current state (hides channel creation).
+    ///
+    /// Returns `ParserError::QueryTimeout` if the parser task doesn't respond
+    /// within 5 seconds. This prevents callers from blocking indefinitely if
+    /// the parser task is stalled.
     pub async fn query(&self, query: Query) -> Result<QueryResponse, ParserError> {
         let (tx, rx) = oneshot::channel();
         self.query_tx
             .send((query, tx))
             .await
             .map_err(|_| ParserError::TaskDied)?;
-        rx.await.map_err(|_| ParserError::TaskDied)
+        tokio::time::timeout(std::time::Duration::from_secs(5), rx)
+            .await
+            .map_err(|_| ParserError::QueryTimeout)?
+            .map_err(|_| ParserError::TaskDied)
     }
 
     /// Notify parser of terminal resize
