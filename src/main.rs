@@ -295,19 +295,24 @@ async fn run_server(
     };
 
     let app = api::router(state, token);
-    tracing::info!(addr = %bind, "HTTP/WS server listening");
 
     // Oneshot channel for server shutdown (Ctrl+C or ephemeral exit)
     let (server_shutdown_tx, server_shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
+    let listener = tokio::net::TcpListener::bind(bind)
+        .await
+        .map_err(|e| WshError::Io(e))?;
+    tracing::info!(addr = %bind, "HTTP/WS server listening");
+
     let http_handle = tokio::spawn(async move {
-        let listener = tokio::net::TcpListener::bind(bind).await.unwrap();
-        axum::serve(listener, app)
+        if let Err(e) = axum::serve(listener, app)
             .with_graceful_shutdown(async {
                 server_shutdown_rx.await.ok();
             })
             .await
-            .unwrap();
+        {
+            tracing::error!(?e, "HTTP server error");
+        }
     });
 
     // Start Unix socket server

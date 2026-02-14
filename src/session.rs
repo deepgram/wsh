@@ -57,6 +57,16 @@ pub struct Session {
     pub screen_mode: Arc<RwLock<ScreenMode>>,
 }
 
+impl std::fmt::Debug for Session {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Session")
+            .field("name", &self.name)
+            .field("pid", &self.pid)
+            .field("command", &self.command)
+            .finish_non_exhaustive()
+    }
+}
+
 /// RAII guard that decrements the session client count on drop.
 pub struct ClientGuard {
     counter: Arc<AtomicUsize>,
@@ -348,6 +358,50 @@ impl SessionRegistry {
         Ok(assigned_name)
     }
 
+    /// Insert a session and return both the assigned name and a clone of the
+    /// session, atomically under the write lock.
+    ///
+    /// This avoids a TOCTOU race where a separate `get()` after `insert()`
+    /// could fail if a background task (e.g. `monitor_child_exit`) removes the
+    /// session between the two calls.
+    pub fn insert_and_get(
+        &self,
+        name: Option<String>,
+        mut session: Session,
+    ) -> Result<(String, Session), RegistryError> {
+        let mut inner = self.inner.write();
+
+        let assigned_name = match name {
+            Some(n) => {
+                if inner.sessions.contains_key(&n) {
+                    return Err(RegistryError::NameExists(n));
+                }
+                n
+            }
+            None => {
+                let mut id = inner.next_id;
+                loop {
+                    let candidate = id.to_string();
+                    if !inner.sessions.contains_key(&candidate) {
+                        inner.next_id = id + 1;
+                        break candidate;
+                    }
+                    id += 1;
+                }
+            }
+        };
+
+        session.name = assigned_name.clone();
+        let cloned = session.clone();
+        inner.sessions.insert(assigned_name.clone(), session);
+
+        let _ = self.events_tx.send(SessionEvent::Created {
+            name: assigned_name.clone(),
+        });
+
+        Ok((assigned_name, cloned))
+    }
+
     /// Look up a session by name, returning a clone if found.
     pub fn get(&self, name: &str) -> Option<Session> {
         let inner = self.inner.read();
@@ -368,12 +422,15 @@ impl SessionRegistry {
         removed
     }
 
-    /// Rename a session.
+    /// Rename a session, returning a clone of the renamed session.
     ///
     /// Returns `RegistryError::NotFound` if `old_name` does not exist, or
     /// `RegistryError::NameExists` if `new_name` is already taken.
     /// Updates the session's `name` field to `new_name`.
-    pub fn rename(&self, old_name: &str, new_name: &str) -> Result<(), RegistryError> {
+    ///
+    /// The clone is returned atomically under the write lock, avoiding a
+    /// TOCTOU race with background tasks that may remove the session.
+    pub fn rename(&self, old_name: &str, new_name: &str) -> Result<Session, RegistryError> {
         let mut inner = self.inner.write();
 
         if !inner.sessions.contains_key(old_name) {
@@ -385,6 +442,7 @@ impl SessionRegistry {
 
         let mut session = inner.sessions.remove(old_name).unwrap();
         session.name = new_name.to_string();
+        let cloned = session.clone();
         inner.sessions.insert(new_name.to_string(), session);
 
         let _ = self.events_tx.send(SessionEvent::Renamed {
@@ -392,7 +450,7 @@ impl SessionRegistry {
             new_name: new_name.to_string(),
         });
 
-        Ok(())
+        Ok(cloned)
     }
 
     /// Return all session names.
@@ -576,8 +634,9 @@ mod tests {
             .insert(Some("old".to_string()), make_test_session("x"))
             .unwrap();
 
-        registry.rename("old", "new").unwrap();
+        let session = registry.rename("old", "new").unwrap();
 
+        assert_eq!(session.name, "new");
         assert!(registry.get("old").is_none(), "old name should be gone");
         let session = registry.get("new").expect("new name should exist");
         assert_eq!(session.name, "new");
@@ -593,7 +652,9 @@ mod tests {
             .insert(Some("b".to_string()), make_test_session("x"))
             .unwrap();
 
-        let err = registry.rename("a", "b").unwrap_err();
+        let result = registry.rename("a", "b");
+        assert!(result.is_err(), "rename to existing name should fail");
+        let err = result.err().unwrap();
         assert!(
             matches!(err, RegistryError::NameExists(ref n) if n == "b"),
             "expected NameExists(\"b\"), got: {err:?}"
@@ -603,7 +664,9 @@ mod tests {
     #[tokio::test]
     async fn registry_rename_nonexistent_fails() {
         let registry = SessionRegistry::new();
-        let err = registry.rename("nope", "whatever").unwrap_err();
+        let result = registry.rename("nope", "whatever");
+        assert!(result.is_err(), "rename of nonexistent session should fail");
+        let err = result.err().unwrap();
         assert!(
             matches!(err, RegistryError::NotFound(ref n) if n == "nope"),
             "expected NotFound(\"nope\"), got: {err:?}"
