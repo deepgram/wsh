@@ -109,8 +109,16 @@ impl Frame {
     }
 
     /// Read a frame from an async reader.
+    ///
+    /// The 5-byte header (type + length) is read in a single `read_exact`
+    /// call, making this method cancellation-safe for use in `select!` loops:
+    /// if the future is dropped before the header is fully read, no partial
+    /// state has been consumed from the reader.
     pub async fn read_from<R: AsyncReadExt + Unpin>(reader: &mut R) -> io::Result<Self> {
-        let type_byte = reader.read_u8().await?;
+        let mut header = [0u8; 5];
+        reader.read_exact(&mut header).await?;
+
+        let type_byte = header[0];
         let frame_type = FrameType::from_u8(type_byte).ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -118,7 +126,7 @@ impl Frame {
             )
         })?;
 
-        let length = reader.read_u32().await?;
+        let length = u32::from_be_bytes([header[1], header[2], header[3], header[4]]);
         if length > MAX_PAYLOAD_SIZE {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
