@@ -1,8 +1,12 @@
 # wsh: An API for Your Terminal
 
-An API that lets AI agents *interact* with terminal programs -- not just run commands, but use them the way a human does. Send keystrokes, read the screen, wait for output, react to prompts. The terminal is the fundamental interface of the modern computer. `wsh` makes it programmable.
+**The AI revolution has reached your desktop. Now it has reached your terminal.**
 
-`wsh` sits transparently between your terminal emulator and your shell, capturing all I/O, maintaining structured terminal state, and exposing everything via HTTP/WebSocket API. Your terminal works exactly as before -- but now AI agents, automation tools, and other clients can tap into the same session.
+AI agents are crossing the line from assistants to coworkers — managing files, automating browsers, writing and shipping code. But the revolution can only move as fast as the tools allow, and every human interface that hasn't been AI-enabled is lost productivity at scale. The biggest gap is the terminal. It's a fundamental impedance mismatch: the most universal interface in computing, and agents have never been able to simply sit at one and drive it the way a human does.
+
+`wsh` fixes this. It sits transparently between your terminal and your shell, maintains a full terminal state machine, and exposes everything — screen contents, cursor state, input injection, idle detection, real-time events — as both a structured API and via an MCP server. An agent sees what you see. Types what's needed. Waits for the right moment. Reads the screen. Decides what to do next. Your terminal works exactly as before. But now any program a human can operate through a terminal, an agent can operate through `wsh`.
+
+The implications land fast: orchestrator agents that launch fleets of AI coding tools in parallel terminal sessions, feed them tasks, and collect results. End-to-end automation that doesn't choke the moment a program asks a question. Live copilots that watch your session and render contextual help as overlays directly in your workflow -- true generative UI in the terminal. The terminal protocol survived fifty years because it's simple, universal, and composable. `wsh` doesn't replace it — it teaches AI to speak it, and makes every shell session AI-native.
 
 See [docs/VISION.md](docs/VISION.md) for the full project vision.
 
