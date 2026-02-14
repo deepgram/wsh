@@ -10,6 +10,8 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::{Stream, StreamExt};
 
+use bytes::Bytes;
+
 use crate::broker::Broker;
 use events::Event;
 use state::{Query, QueryResponse};
@@ -30,6 +32,10 @@ pub enum ParserError {
 pub struct Parser {
     query_tx: mpsc::Sender<(Query, oneshot::Sender<QueryResponse>)>,
     event_tx: broadcast::Sender<Event>,
+    /// Holds the parser's dedicated mpsc sender alive. As long as
+    /// the `Parser` (or any clone) exists, the channel stays open
+    /// and the parser task will not exit due to a closed channel.
+    _raw_tx: mpsc::UnboundedSender<Bytes>,
 }
 
 impl Parser {
@@ -38,7 +44,7 @@ impl Parser {
         let (query_tx, query_rx) = mpsc::channel(32);
         let (event_tx, _) = broadcast::channel(256);
 
-        let raw_rx = raw_broker.subscribe();
+        let (raw_tx, raw_rx) = raw_broker.subscribe_parser();
         let event_tx_clone = event_tx.clone();
 
         tokio::spawn(task::run(
@@ -50,7 +56,11 @@ impl Parser {
             scrollback_limit,
         ));
 
-        Self { query_tx, event_tx }
+        Self {
+            query_tx,
+            event_tx,
+            _raw_tx: raw_tx,
+        }
     }
 
     /// Query current state (hides channel creation)

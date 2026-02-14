@@ -601,7 +601,6 @@ async fn test_websocket_line_event_includes_total_lines() {
     // Setup similar to other WebSocket tests
     let (input_tx, _input_rx) = mpsc::channel(64);
     let broker = Broker::new();
-    let output_tx = broker.sender();
     let parser = Parser::spawn(&broker, 80, 24, 1000);
     let session = Session {
         name: "test".to_string(),
@@ -609,7 +608,7 @@ async fn test_websocket_line_event_includes_total_lines() {
         command: "test".to_string(),
         client_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         input_tx,
-        output_rx: output_tx.clone(),
+        output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),
         parser,
         overlays: OverlayStore::new(),
@@ -654,10 +653,8 @@ async fn test_websocket_line_event_includes_total_lines() {
     // Read sync event
     let _ = ws_stream.next().await;
 
-    // Publish text to trigger line events
-    output_tx
-        .send(bytes::Bytes::from("Hello test\r\n"))
-        .unwrap();
+    // Publish text via broker.publish() to reach both broadcast and parser channels
+    broker.publish(bytes::Bytes::from("Hello test\r\n"));
 
     // Look for a line event with total_lines field
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
@@ -693,7 +690,6 @@ async fn test_websocket_line_event_includes_total_lines() {
 async fn test_scrollback_endpoint() {
     let (input_tx, _input_rx) = mpsc::channel(64);
     let broker = Broker::new();
-    let output_tx = broker.sender();
     let parser = Parser::spawn(&broker, 80, 5, 1000); // 5-row screen to get scrollback quickly
     let session = Session {
         name: "test".to_string(),
@@ -701,7 +697,7 @@ async fn test_scrollback_endpoint() {
         command: "test".to_string(),
         client_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         input_tx,
-        output_rx: output_tx.clone(),
+        output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),
         parser,
         overlays: OverlayStore::new(),
@@ -722,10 +718,9 @@ async fn test_scrollback_endpoint() {
     let app = router(state, None);
 
     // Send enough lines to create scrollback (more than 5 rows)
+    // Use broker.publish() to reach both broadcast and parser channels
     for i in 0..20 {
-        output_tx
-            .send(bytes::Bytes::from(format!("Line {}\r\n", i)))
-            .expect("Failed to send");
+        broker.publish(bytes::Bytes::from(format!("Line {}\r\n", i)));
     }
 
     // Wait for parser to process

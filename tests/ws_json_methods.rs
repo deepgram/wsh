@@ -170,7 +170,6 @@ async fn test_ws_method_send_input() {
 async fn test_ws_subscribe_then_events() {
     let (input_tx, _input_rx) = mpsc::channel(64);
     let broker = Broker::new();
-    let broker_tx = broker.sender();
     let parser = Parser::spawn(&broker, 80, 24, 1000);
     let session = Session {
         name: "test".to_string(),
@@ -230,8 +229,8 @@ async fn test_ws_subscribe_then_events() {
     let sync = recv_json(&mut rx).await;
     assert_eq!(sync["event"], "sync");
 
-    // Now push data and expect line events
-    broker_tx.send(Bytes::from("Hello\r\n")).unwrap();
+    // Now push data via broker.publish() to reach both broadcast and parser channels
+    broker.publish(Bytes::from("Hello\r\n"));
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     let mut found_line = false;
@@ -300,7 +299,6 @@ async fn test_ws_malformed_request() {
 async fn test_ws_methods_interleaved_with_events() {
     let (input_tx, _input_rx) = mpsc::channel(64);
     let broker = Broker::new();
-    let broker_tx = broker.sender();
     let parser = Parser::spawn(&broker, 80, 24, 1000);
     let session = Session {
         name: "test".to_string(),
@@ -355,7 +353,8 @@ async fn test_ws_methods_interleaved_with_events() {
     let _ = recv_json(&mut rx).await; // sync event
 
     // Now send a method call WHILE events could be flowing
-    broker_tx.send(Bytes::from("data\r\n")).unwrap();
+    // Use broker.publish() to reach both broadcast and parser channels
+    broker.publish(Bytes::from("data\r\n"));
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     tx.send(Message::Text(

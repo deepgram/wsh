@@ -8,7 +8,7 @@ use super::state::{
 };
 
 pub async fn run(
-    mut raw_rx: broadcast::Receiver<Bytes>,
+    mut raw_rx: mpsc::UnboundedReceiver<Bytes>,
     mut query_rx: mpsc::Receiver<(Query, oneshot::Sender<QueryResponse>)>,
     event_tx: broadcast::Sender<Event>,
     cols: usize,
@@ -30,7 +30,7 @@ pub async fn run(
         tokio::select! {
             result = raw_rx.recv() => {
                 match result {
-                    Ok(bytes) => {
+                    Some(bytes) => {
                         let text = String::from_utf8_lossy(&bytes);
 
                         // Detect alternate screen transitions before feeding to avt
@@ -92,11 +92,7 @@ pub async fn run(
                             last_cursor = cursor;
                         }
                     }
-                    Err(broadcast::error::RecvError::Closed) => break,
-                    Err(broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!(n, "parser lagged, some output may be lost");
-                        continue;
-                    }
+                    None => break,
                 }
             }
 
