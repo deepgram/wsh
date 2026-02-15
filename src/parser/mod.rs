@@ -19,6 +19,15 @@ use crate::broker::Broker;
 use events::Event;
 use state::{Query, QueryResponse};
 
+/// Wrapper for parser subscription events that includes lag notifications.
+#[derive(Debug, Clone)]
+pub enum SubscriptionEvent {
+    /// A normal parser event.
+    Event(Event),
+    /// The subscriber fell behind and `skipped` events were dropped.
+    Lagged(u64),
+}
+
 #[derive(Error, Debug)]
 pub enum ParserError {
     #[error("parser task died unexpectedly")]
@@ -41,7 +50,7 @@ pub struct Parser {
     /// Holds the parser's dedicated mpsc sender alive. As long as
     /// the `Parser` (or any clone) exists, the channel stays open
     /// and the parser task will not exit due to a closed channel.
-    _raw_tx: mpsc::UnboundedSender<Bytes>,
+    _raw_tx: mpsc::Sender<Bytes>,
 }
 
 impl Parser {
@@ -100,9 +109,18 @@ impl Parser {
         Ok(())
     }
 
-    /// Subscribe to events (returns async Stream)
-    pub fn subscribe(&self) -> impl Stream<Item = Event> {
-        BroadcastStream::new(self.event_tx.subscribe()).filter_map(|result| result.ok())
+    /// Subscribe to events (returns async Stream).
+    ///
+    /// The stream yields `SubscriptionEvent::Event` for normal events and
+    /// `SubscriptionEvent::Lagged(n)` when the subscriber falls behind,
+    /// allowing consumers to detect data loss and re-query state.
+    pub fn subscribe(&self) -> impl Stream<Item = SubscriptionEvent> {
+        BroadcastStream::new(self.event_tx.subscribe()).filter_map(|result| match result {
+            Ok(event) => Some(SubscriptionEvent::Event(event)),
+            Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(n)) => {
+                Some(SubscriptionEvent::Lagged(n))
+            }
+        })
     }
 }
 

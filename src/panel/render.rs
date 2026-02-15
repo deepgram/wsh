@@ -34,7 +34,7 @@ pub fn render_panel(panel: &Panel, start_row: u16, terminal_cols: u16) -> String
     if let Some(ref background) = panel.background {
         let bg_code = render_color(&background.bg, true);
         for row_offset in 0..panel.height {
-            let row = start_row + row_offset;
+            let row = start_row.saturating_add(row_offset);
             result.push_str(&overlay::cursor_position(row, 0));
             result.push_str(&bg_code);
             for _ in 0..terminal_cols {
@@ -67,7 +67,7 @@ pub fn render_panel(panel: &Panel, start_row: u16, terminal_cols: u16) -> String
             break; // Don't render beyond panel height
         }
 
-        let row = start_row + row_offset as u16;
+        let row = start_row.saturating_add(row_offset as u16);
         result.push_str(&overlay::cursor_position(row, 0));
 
         let mut col = 0u16;
@@ -75,7 +75,7 @@ pub fn render_panel(panel: &Panel, start_row: u16, terminal_cols: u16) -> String
             result.push_str(&render_span_style(seg.span));
             result.push_str(seg.text);
             result.push_str(overlay::reset());
-            col += seg.text.len() as u16;
+            col = col.saturating_add(seg.text.len().min(u16::MAX as usize) as u16);
         }
 
         // Clear remaining columns
@@ -90,7 +90,7 @@ pub fn render_panel(panel: &Panel, start_row: u16, terminal_cols: u16) -> String
     // Clear any panel rows that had no content
     let rendered_rows = text_lines.len().min(panel.height as usize);
     for row_offset in rendered_rows..panel.height as usize {
-        let row = start_row + row_offset as u16;
+        let row = start_row.saturating_add(row_offset as u16);
         result.push_str(&overlay::cursor_position(row, 0));
         for _ in 0..terminal_cols {
             result.push(' ');
@@ -99,7 +99,7 @@ pub fn render_panel(panel: &Panel, start_row: u16, terminal_cols: u16) -> String
 
     // Step 3: Render region writes
     for write in &panel.region_writes {
-        let abs_row = start_row + write.row;
+        let abs_row = start_row.saturating_add(write.row);
         let abs_col = write.col;
         result.push_str(&overlay::cursor_position(abs_row, abs_col));
         result.push_str(&render_region_write_style(write));
@@ -204,7 +204,7 @@ pub fn render_all_panels(layout: &Layout, terminal_cols: u16) -> String {
     let mut row = 0u16;
     for panel in &layout.top_panels {
         result.push_str(&render_panel(panel, row, terminal_cols));
-        row += panel.height;
+        row = row.saturating_add(panel.height);
     }
 
     // Bottom panels: highest z is closest to bottom edge
@@ -212,7 +212,7 @@ pub fn render_all_panels(layout: &Layout, terminal_cols: u16) -> String {
     let mut row = layout.scroll_region_bottom; // already 1-indexed, this is the 0-indexed next row
     for panel in &layout.bottom_panels {
         result.push_str(&render_panel(panel, row, terminal_cols));
-        row += panel.height;
+        row = row.saturating_add(panel.height);
     }
 
     result.push_str(overlay::restore_cursor());
@@ -238,7 +238,7 @@ pub fn erase_all_panels(layout: &Layout, terminal_cols: u16) -> String {
     // Erase bottom panel rows
     let bottom_height: u16 = layout.bottom_panels.iter().map(|p| p.height).sum();
     let bottom_start = layout.scroll_region_bottom; // 0-indexed start of bottom panels
-    for row in bottom_start..(bottom_start + bottom_height) {
+    for row in bottom_start..bottom_start.saturating_add(bottom_height) {
         result.push_str(&overlay::cursor_position(row, 0));
         for _ in 0..terminal_cols {
             result.push(' ');

@@ -206,7 +206,7 @@ async fn test_line_event_includes_total_lines() {
     broker.publish(bytes::Bytes::from("Hello"));
 
     // Get the line event
-    let event = tokio::time::timeout(
+    let sub_event = tokio::time::timeout(
         tokio::time::Duration::from_millis(100),
         events.next(),
     )
@@ -214,11 +214,11 @@ async fn test_line_event_includes_total_lines() {
     .expect("should receive event")
     .expect("stream should have item");
 
-    match event {
-        Event::Line { total_lines, .. } => {
+    match sub_event {
+        SubscriptionEvent::Event(Event::Line { total_lines, .. }) => {
             assert!(total_lines >= 24, "total_lines should be at least screen height");
         }
-        _ => panic!("expected Line event, got {:?}", event),
+        other => panic!("expected Line event, got {:?}", other),
     }
 }
 
@@ -366,7 +366,7 @@ async fn test_alternate_screen_emits_mode_event() {
     // Collect events until we find a Mode event
     let mode_event = tokio::time::timeout(tokio::time::Duration::from_millis(200), async {
         loop {
-            if let Some(Event::Mode { alternate_active, .. }) = events.next().await {
+            if let Some(SubscriptionEvent::Event(Event::Mode { alternate_active, .. })) = events.next().await {
                 return alternate_active;
             }
         }
@@ -381,7 +381,7 @@ async fn test_alternate_screen_emits_mode_event() {
 
     let mode_event = tokio::time::timeout(tokio::time::Duration::from_millis(200), async {
         loop {
-            if let Some(Event::Mode { alternate_active, .. }) = events.next().await {
+            if let Some(SubscriptionEvent::Event(Event::Mode { alternate_active, .. })) = events.next().await {
                 return alternate_active;
             }
         }

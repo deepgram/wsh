@@ -37,7 +37,7 @@ pub struct Session {
     pub parser: Parser,
     pub overlays: OverlayStore,
     pub panels: PanelStore,
-    pub pty: Arc<Pty>,
+    pub pty: Arc<parking_lot::Mutex<Pty>>,
     pub terminal_size: TerminalSize,
     pub input_mode: InputMode,
     pub input_broadcaster: InputBroadcaster,
@@ -114,6 +114,18 @@ impl Session {
         self.detach();
     }
 
+    /// Forcefully kill this session: cancel all watchers, detach all
+    /// streaming clients, and send SIGKILL to the child process.
+    ///
+    /// Used when a session is explicitly killed via API/socket/MCP.
+    /// Unlike relying on `Arc<Pty>` drop (SIGHUP), this ensures the
+    /// child is terminated immediately regardless of outstanding references.
+    pub fn force_kill(&self) {
+        self.cancelled.cancel();
+        self.detach();
+        self.kill_child();
+    }
+
     /// Send SIGKILL to the child process if we have a PID.
     ///
     /// Used as an escalation path when the child ignores SIGHUP during
@@ -179,7 +191,7 @@ impl Session {
         let pty_writer = pty.take_writer()?;
         let pty_child = pty.take_child();
         let pid = pty_child.as_ref().and_then(|c| c.process_id());
-        let pty = Arc::new(pty);
+        let pty = Arc::new(parking_lot::Mutex::new(pty));
 
         // Monitor child exit via a oneshot channel.
         let (child_exit_tx, child_exit_rx) = tokio::sync::oneshot::channel::<()>();
@@ -289,8 +301,10 @@ impl Session {
             tokio::spawn(async move {
                 use tokio_stream::StreamExt;
                 let mut events = std::pin::pin!(parser.subscribe());
-                while let Some(event) = events.next().await {
-                    if let crate::parser::events::Event::Mode { alternate_active, .. } = event {
+                while let Some(sub_event) = events.next().await {
+                    if let crate::parser::SubscriptionEvent::Event(
+                        crate::parser::events::Event::Mode { alternate_active, .. }
+                    ) = sub_event {
                         let new_mode = if alternate_active {
                             ScreenMode::Alt
                         } else {
@@ -644,7 +658,7 @@ mod tests {
             parser,
             overlays: OverlayStore::new(),
             panels: PanelStore::new(),
-            pty: Arc::new(pty),
+            pty: Arc::new(parking_lot::Mutex::new(pty)),
             terminal_size: TerminalSize::new(24, 80),
             input_mode: InputMode::new(),
             input_broadcaster: InputBroadcaster::new(),

@@ -28,9 +28,9 @@ async fn start_server(app: axum::Router) -> SocketAddr {
 /// Full E2E test: WebSocket input -> PTY -> output broadcast back via WebSocket
 #[tokio::test(flavor = "multi_thread")]
 async fn test_websocket_input_reaches_pty_and_output_returns() {
-    let pty = Arc::new(Pty::spawn(24, 80, SpawnCommand::default()).expect("Failed to spawn PTY"));
-    let mut pty_reader = pty.take_reader().expect("Failed to get reader");
-    let mut pty_writer = pty.take_writer().expect("Failed to get writer");
+    let pty = Arc::new(parking_lot::Mutex::new(Pty::spawn(24, 80, SpawnCommand::default()).expect("Failed to spawn PTY")));
+    let mut pty_reader = pty.lock().take_reader().expect("Failed to get reader");
+    let mut pty_writer = pty.lock().take_writer().expect("Failed to get writer");
 
     let broker = Broker::new();
     let broker_clone = broker.clone();
@@ -172,9 +172,9 @@ async fn test_websocket_input_reaches_pty_and_output_returns() {
 /// Test sending Text message (like websocat does by default)
 #[tokio::test(flavor = "multi_thread")]
 async fn test_websocket_text_input_reaches_pty() {
-    let pty = Arc::new(Pty::spawn(24, 80, SpawnCommand::default()).expect("Failed to spawn PTY"));
-    let mut pty_reader = pty.take_reader().expect("Failed to get reader");
-    let mut pty_writer = pty.take_writer().expect("Failed to get writer");
+    let pty = Arc::new(parking_lot::Mutex::new(Pty::spawn(24, 80, SpawnCommand::default()).expect("Failed to spawn PTY")));
+    let mut pty_reader = pty.lock().take_reader().expect("Failed to get reader");
+    let mut pty_writer = pty.lock().take_writer().expect("Failed to get writer");
 
     let broker = Broker::new();
     let broker_clone = broker.clone();

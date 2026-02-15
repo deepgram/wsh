@@ -8,7 +8,7 @@ use super::state::{
 };
 
 pub async fn run(
-    mut raw_rx: mpsc::UnboundedReceiver<Bytes>,
+    mut raw_rx: mpsc::Receiver<Bytes>,
     mut query_rx: mpsc::Receiver<(Query, oneshot::Sender<QueryResponse>)>,
     event_tx: broadcast::Sender<Event>,
     cols: usize,
@@ -62,10 +62,13 @@ pub async fn run(
                             });
                         }
 
-                        // Emit line events for changed lines
-                        let total_lines = vt.lines().count();
+                        // Emit line events for changed lines.
+                        // Collect lines once into a Vec for O(1) indexed access
+                        // instead of O(n) per `.nth()` call.
+                        let all_lines: Vec<_> = vt.lines().collect();
+                        let total_lines = all_lines.len();
                         for line_idx in changed_lines {
-                            if let Some(line) = vt.lines().nth(line_idx) {
+                            if let Some(line) = all_lines.get(line_idx) {
                                 seq = seq.wrapping_add(1);
                                 let _ = event_tx.send(Event::Line {
                                     seq,

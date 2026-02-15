@@ -185,10 +185,10 @@ mod tests {
             parser,
             overlays: OverlayStore::new(),
             panels: crate::panel::PanelStore::new(),
-            pty: std::sync::Arc::new(
+            pty: std::sync::Arc::new(parking_lot::Mutex::new(
                 crate::pty::Pty::spawn(24, 80, crate::pty::SpawnCommand::default())
                     .expect("failed to spawn PTY for test"),
-            ),
+            )),
             terminal_size: crate::terminal::TerminalSize::new(24, 80),
             input_mode: InputMode::new(),
             input_broadcaster: crate::input::InputBroadcaster::new(),

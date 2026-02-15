@@ -263,7 +263,7 @@ impl WshMcpServer {
     ) -> Result<CallToolResult, ErrorData> {
         match params.action {
             ManageAction::Kill => {
-                self.state
+                let session = self.state
                     .sessions
                     .remove(&params.session)
                     .ok_or_else(|| {
@@ -272,6 +272,7 @@ impl WshMcpServer {
                             None,
                         )
                     })?;
+                session.force_kill();
 
                 let result = serde_json::json!({
                     "status": "killed",

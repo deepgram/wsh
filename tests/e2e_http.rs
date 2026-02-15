@@ -30,9 +30,9 @@ async fn start_server(app: axum::Router) -> SocketAddr {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_http_post_input_reaches_pty_and_produces_output() {
     // === Setup PTY ===
-    let pty = Arc::new(Pty::spawn(24, 80, SpawnCommand::default()).expect("Failed to spawn PTY"));
-    let mut pty_reader = pty.take_reader().expect("Failed to get reader");
-    let mut pty_writer = pty.take_writer().expect("Failed to get writer");
+    let pty = Arc::new(parking_lot::Mutex::new(Pty::spawn(24, 80, SpawnCommand::default()).expect("Failed to spawn PTY")));
+    let mut pty_reader = pty.lock().take_reader().expect("Failed to get reader");
+    let mut pty_writer = pty.lock().take_writer().expect("Failed to get writer");
 
     let broker = Broker::new();
     let broker_clone = broker.clone();
@@ -187,9 +187,9 @@ async fn test_http_post_input_reaches_pty_and_produces_output() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_scrollback_endpoint_with_real_pty() {
     // === Setup PTY ===
-    let pty = Arc::new(Pty::spawn(5, 80, SpawnCommand::default()).expect("Failed to spawn PTY")); // Small screen: 5 rows
-    let mut pty_reader = pty.take_reader().expect("Failed to get reader");
-    let mut pty_writer = pty.take_writer().expect("Failed to get writer");
+    let pty = Arc::new(parking_lot::Mutex::new(Pty::spawn(5, 80, SpawnCommand::default()).expect("Failed to spawn PTY"))); // Small screen: 5 rows
+    let mut pty_reader = pty.lock().take_reader().expect("Failed to get reader");
+    let mut pty_writer = pty.lock().take_writer().expect("Failed to get writer");
 
     let broker = Broker::new();
     let broker_clone = broker.clone();

@@ -43,10 +43,10 @@ pub fn create_test_session_with_size(name: &str, rows: u16, cols: u16) -> TestSe
         input_mode: InputMode::new(),
         input_broadcaster: InputBroadcaster::new(),
         panels: PanelStore::new(),
-        pty: Arc::new(
+        pty: Arc::new(parking_lot::Mutex::new(
             wsh::pty::Pty::spawn(rows, cols, wsh::pty::SpawnCommand::default())
                 .expect("failed to spawn PTY for test"),
-        ),
+        )),
         terminal_size: TerminalSize::new(rows, cols),
         activity: ActivityTracker::new(),
         focus: FocusTracker::new(),

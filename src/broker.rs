@@ -5,17 +5,21 @@ use tokio::sync::{broadcast, mpsc};
 
 pub const BROADCAST_CAPACITY: usize = 64;
 
+/// Capacity for the dedicated parser channel. Each message is typically
+/// a small PTY chunk (~4 KiB), so 4096 messages ≈ 16 MiB max buffered.
+const PARSER_CHANNEL_CAPACITY: usize = 4096;
+
 #[derive(Clone)]
 pub struct Broker {
     tx: broadcast::Sender<Bytes>,
-    parser_tx: mpsc::UnboundedSender<Bytes>,
-    parser_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<Bytes>>>>,
+    parser_tx: mpsc::Sender<Bytes>,
+    parser_rx: Arc<Mutex<Option<mpsc::Receiver<Bytes>>>>,
 }
 
 impl Broker {
     pub fn new() -> Self {
         let (tx, _) = broadcast::channel(BROADCAST_CAPACITY);
-        let (parser_tx, parser_rx) = mpsc::unbounded_channel();
+        let (parser_tx, parser_rx) = mpsc::channel(PARSER_CHANNEL_CAPACITY);
         Self {
             tx,
             parser_tx,
@@ -24,7 +28,15 @@ impl Broker {
     }
 
     pub fn publish(&self, data: Bytes) {
-        let _ = self.parser_tx.send(data.clone());
+        match self.parser_tx.try_send(data.clone()) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                tracing::warn!("parser channel full, dropping data (parser may be stalled)");
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                tracing::debug!("parser channel closed (parser task exited)");
+            }
+        }
         // Ignore error - means no receivers
         let _ = self.tx.send(data);
     }
@@ -36,15 +48,10 @@ impl Broker {
     /// Take the dedicated parser channel out of the broker.
     ///
     /// The parser is singular -- this method panics if called more than once.
-    /// Returns both the sender (so the caller can keep the channel alive) and
-    /// the receiver. The `UnboundedReceiver` never lags; backpressure is
-    /// absorbed in memory, which is acceptable because the parser processes
-    /// faster than the PTY produces in steady state.
-    pub fn subscribe_parser(
-        &self,
-    ) -> (mpsc::UnboundedSender<Bytes>, mpsc::UnboundedReceiver<Bytes>) {
-        let rx = self
-            .parser_rx
+    /// Returns both halves: the sender (so the caller can keep the channel alive)
+    /// and the receiver.
+    pub fn subscribe_parser(&self) -> (mpsc::Sender<Bytes>, mpsc::Receiver<Bytes>) {
+        let rx = self.parser_rx
             .lock()
             .expect("parser_rx mutex poisoned")
             .take()
@@ -196,7 +203,7 @@ mod tests {
     #[should_panic(expected = "subscribe_parser() called more than once")]
     async fn test_subscribe_parser_panics_on_second_call() {
         let broker = Broker::new();
-        let _rx1 = broker.subscribe_parser();
+        let _rx1 = broker.subscribe_parser(); // takes (Sender, Receiver)
         let _rx2 = broker.subscribe_parser(); // should panic
     }
 }

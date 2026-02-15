@@ -93,23 +93,29 @@ impl Frame {
     }
 
     /// Encode this frame into bytes.
-    pub fn encode(&self) -> Bytes {
-        assert!(
-            self.payload.len() <= MAX_PAYLOAD_SIZE as usize,
-            "frame payload exceeds maximum size: {} > {}",
-            self.payload.len(),
-            MAX_PAYLOAD_SIZE
-        );
+    ///
+    /// Returns an error if the payload exceeds `MAX_PAYLOAD_SIZE` (16 MiB).
+    pub fn encode(&self) -> io::Result<Bytes> {
+        if self.payload.len() > MAX_PAYLOAD_SIZE as usize {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "frame payload exceeds maximum size: {} > {}",
+                    self.payload.len(),
+                    MAX_PAYLOAD_SIZE
+                ),
+            ));
+        }
         let mut buf = BytesMut::with_capacity(5 + self.payload.len());
         buf.put_u8(self.frame_type as u8);
         buf.put_u32(self.payload.len() as u32);
         buf.put(self.payload.as_ref());
-        buf.freeze()
+        Ok(buf.freeze())
     }
 
     /// Write this frame to an async writer.
     pub async fn write_to<W: AsyncWriteExt + Unpin>(&self, writer: &mut W) -> io::Result<()> {
-        let encoded = self.encode();
+        let encoded = self.encode()?;
         writer.write_all(&encoded).await?;
         writer.flush().await
     }
@@ -405,7 +411,7 @@ mod tests {
     #[test]
     fn frame_encode_decode_round_trip() {
         let frame = Frame::new(FrameType::StdinInput, Bytes::from("hello world"));
-        let encoded = frame.encode();
+        let encoded = frame.encode().unwrap();
         let decoded = Frame::decode(&encoded).unwrap();
         assert_eq!(decoded.frame_type, FrameType::StdinInput);
         assert_eq!(decoded.payload, Bytes::from("hello world"));
@@ -414,7 +420,7 @@ mod tests {
     #[test]
     fn frame_encode_decode_empty_payload() {
         let frame = Frame::new(FrameType::Detach, Bytes::new());
-        let encoded = frame.encode();
+        let encoded = frame.encode().unwrap();
         let decoded = Frame::decode(&encoded).unwrap();
         assert_eq!(decoded.frame_type, FrameType::Detach);
         assert!(decoded.payload.is_empty());
@@ -424,11 +430,22 @@ mod tests {
     fn frame_encode_decode_large_payload() {
         let data = vec![0xABu8; 65536];
         let frame = Frame::new(FrameType::PtyOutput, Bytes::from(data.clone()));
-        let encoded = frame.encode();
+        let encoded = frame.encode().unwrap();
         let decoded = Frame::decode(&encoded).unwrap();
         assert_eq!(decoded.frame_type, FrameType::PtyOutput);
         assert_eq!(decoded.payload.len(), 65536);
         assert_eq!(decoded.payload.as_ref(), data.as_slice());
+    }
+
+    #[test]
+    fn frame_encode_oversized_payload_returns_error() {
+        let data = vec![0u8; MAX_PAYLOAD_SIZE as usize + 1];
+        let frame = Frame::new(FrameType::PtyOutput, Bytes::from(data));
+        let result = frame.encode();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("exceeds maximum size"));
     }
 
     #[test]

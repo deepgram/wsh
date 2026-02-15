@@ -18,7 +18,7 @@ pub fn restore_cursor() -> &'static str {
 ///
 /// Takes 0-indexed row and column, converts to 1-indexed ANSI format.
 pub fn cursor_position(row: u16, col: u16) -> String {
-    format!("\x1b[{};{}H", row + 1, col + 1)
+    format!("\x1b[{};{}H", row.saturating_add(1), col.saturating_add(1))
 }
 
 /// Returns the ANSI escape sequence to reset all attributes.
@@ -152,7 +152,7 @@ pub fn render_overlay(overlay: &Overlay) -> String {
     if let Some(ref background) = overlay.background {
         let bg_code = render_bg_color(&background.bg);
         for row_offset in 0..overlay.height {
-            result.push_str(&cursor_position(overlay.y + row_offset, overlay.x));
+            result.push_str(&cursor_position(overlay.y.saturating_add(row_offset), overlay.x));
             result.push_str(&bg_code);
             for _ in 0..overlay.width {
                 result.push(' ');
@@ -171,7 +171,7 @@ pub fn render_overlay(overlay: &Overlay) -> String {
         for (i, line) in lines.iter().enumerate() {
             if i > 0 {
                 // Newline encountered, move to next row
-                current_row += 1;
+                current_row = current_row.saturating_add(1);
                 result.push_str(&cursor_position(current_row, overlay.x));
             }
 
@@ -195,8 +195,8 @@ pub fn render_overlay(overlay: &Overlay) -> String {
 
     // Step 3: Render region writes
     for write in &overlay.region_writes {
-        let abs_row = overlay.y + write.row;
-        let abs_col = overlay.x + write.col;
+        let abs_row = overlay.y.saturating_add(write.row);
+        let abs_col = overlay.x.saturating_add(write.col);
         result.push_str(&cursor_position(abs_row, abs_col));
         result.push_str(&render_region_write_style(write));
         result.push_str(&write.text);
@@ -237,12 +237,12 @@ pub fn overlay_line_extents(overlay: &Overlay) -> Vec<(u16, u16, u16)> {
                 if line_started {
                     extents.push((current_row, overlay.x, current_width));
                 }
-                current_row += 1;
+                current_row = current_row.saturating_add(1);
                 current_width = 0;
                 line_started = false;
             }
             if !line.is_empty() {
-                current_width += line.len() as u16;
+                current_width = current_width.saturating_add(line.len().min(u16::MAX as usize) as u16);
                 line_started = true;
             }
         }
@@ -265,7 +265,7 @@ pub fn erase_overlay(overlay: &Overlay) -> String {
     let w = overlay.width as usize;
     let spaces: String = " ".repeat(w);
     for row_offset in 0..overlay.height {
-        result.push_str(&cursor_position(overlay.y + row_offset, overlay.x));
+        result.push_str(&cursor_position(overlay.y.saturating_add(row_offset), overlay.x));
         result.push_str(&spaces);
     }
     result

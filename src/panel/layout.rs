@@ -79,7 +79,14 @@ pub fn compute_layout(panels: &[Panel], terminal_rows: u16, terminal_cols: u16) 
 
     let top_height: u16 = visible_top.iter().map(|p| p.height).sum();
     let bottom_height: u16 = visible_bottom.iter().map(|p| p.height).sum();
-    let pty_rows = terminal_rows - top_height - bottom_height;
+    debug_assert!(
+        top_height + bottom_height <= terminal_rows,
+        "panel heights ({} + {}) exceed terminal rows ({})",
+        top_height,
+        bottom_height,
+        terminal_rows
+    );
+    let pty_rows = terminal_rows.saturating_sub(top_height).saturating_sub(bottom_height);
 
     // DECSTBM uses 1-indexed rows
     let scroll_region_top = top_height + 1;

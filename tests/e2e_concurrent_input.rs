@@ -28,9 +28,9 @@ async fn start_server(app: axum::Router) -> SocketAddr {
 /// Test that input from multiple sources all reach the PTY correctly.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_concurrent_input_from_multiple_sources() {
-    let pty = Arc::new(Pty::spawn(24, 80, SpawnCommand::default()).expect("Failed to spawn PTY"));
-    let mut pty_reader = pty.take_reader().expect("Failed to get reader");
-    let mut pty_writer = pty.take_writer().expect("Failed to get writer");
+    let pty = Arc::new(parking_lot::Mutex::new(Pty::spawn(24, 80, SpawnCommand::default()).expect("Failed to spawn PTY")));
+    let mut pty_reader = pty.lock().take_reader().expect("Failed to get reader");
+    let mut pty_writer = pty.lock().take_writer().expect("Failed to get writer");
 
     let broker = Broker::new();
     let broker_clone = broker.clone();
@@ -192,9 +192,9 @@ async fn test_concurrent_input_from_multiple_sources() {
 /// Test rapid sequential HTTP requests all reach the PTY.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_rapid_http_requests() {
-    let pty = Arc::new(Pty::spawn(24, 80, SpawnCommand::default()).expect("Failed to spawn PTY"));
-    let mut pty_reader = pty.take_reader().expect("Failed to get reader");
-    let mut pty_writer = pty.take_writer().expect("Failed to get writer");
+    let pty = Arc::new(parking_lot::Mutex::new(Pty::spawn(24, 80, SpawnCommand::default()).expect("Failed to spawn PTY")));
+    let mut pty_reader = pty.lock().take_reader().expect("Failed to get reader");
+    let mut pty_writer = pty.lock().take_writer().expect("Failed to get writer");
 
     let broker = Broker::new();
     let broker_clone = broker.clone();

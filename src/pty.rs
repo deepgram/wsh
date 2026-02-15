@@ -46,12 +46,6 @@ pub struct Pty {
     child: Option<Box<dyn portable_pty::Child + Send + Sync>>,
 }
 
-// Safety: Pty is safe to share across threads because:
-// 1. PtyPair's methods that we use (resize, clone_reader) only require &self
-// 2. The child field is Option<Box<dyn Child + Send + Sync>>, which is already Send + Sync
-// 3. We only access Pty through Arc<Pty>, ensuring single ownership of the underlying resources
-// 4. The trait objects (MasterPty, SlavePty) are only accessed immutably through &self methods
-unsafe impl Sync for Pty {}
 
 impl Pty {
     /// Spawn a PTY with the given dimensions and command configuration.

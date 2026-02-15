@@ -28,6 +28,11 @@ use crate::session::{RegistryError, Session};
 use super::error::ApiError;
 use super::{get_session, AppState};
 
+/// WebSocket send timeout. If a send takes longer than this, the client is
+/// considered dead and the connection is closed. Prevents a slow/stalled
+/// client from blocking the handler's select! loop indefinitely.
+const WS_SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Pending await_quiesce state: (request_id, format, future resolving to generation or None on timeout)
 type PendingQuiesce = (
     Option<serde_json::Value>,
@@ -101,8 +106,13 @@ async fn handle_ws_raw(
             result = output_rx.recv() => {
                 match result {
                     Ok(data) => {
-                        if ws_tx.send(Message::Binary(data.to_vec())).await.is_err() {
-                            break;
+                        match tokio::time::timeout(WS_SEND_TIMEOUT, ws_tx.send(Message::Binary(data.to_vec()))).await {
+                            Ok(Ok(())) => {}
+                            Ok(Err(_)) => break,
+                            Err(_) => {
+                                tracing::debug!("ws_raw send timed out, closing");
+                                break;
+                            }
                         }
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
@@ -148,8 +158,9 @@ async fn handle_ws_raw(
                     tracing::debug!("ws_raw client unresponsive (no pong), closing");
                     break;
                 }
-                if ws_tx.send(Message::Ping(vec![])).await.is_err() {
-                    break;
+                match tokio::time::timeout(WS_SEND_TIMEOUT, ws_tx.send(Message::Ping(vec![]))).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(_)) | Err(_) => break,
                 }
                 ping_sent = true;
             }
@@ -234,12 +245,27 @@ async fn handle_ws_json(
     let mut ping_sent = false;
     const PONG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
+    /// Send a WebSocket message with a timeout. Returns false if the send
+    /// failed or timed out (caller should break out of the loop).
+    macro_rules! ws_send {
+        ($tx:expr, $msg:expr) => {
+            match tokio::time::timeout(WS_SEND_TIMEOUT, $tx.send($msg)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(_)) => break,
+                Err(_) => {
+                    tracing::debug!("ws_json send timed out, closing");
+                    break;
+                }
+            }
+        };
+    }
+
     // Main event loop
     loop {
         tokio::select! {
-            event = events.next() => {
-                match event {
-                    Some(event) if !subscribed_types.is_empty() => {
+            sub_event = events.next() => {
+                match sub_event {
+                    Some(crate::parser::SubscriptionEvent::Event(event)) if !subscribed_types.is_empty() => {
                         let should_send = match &event {
                             crate::parser::events::Event::Line { .. } => {
                                 subscribed_types.contains(&EventType::Lines)
@@ -259,10 +285,15 @@ async fn handle_ws_json(
 
                         if should_send {
                             if let Ok(json) = serde_json::to_string(&event) {
-                                if ws_tx.send(Message::Text(json)).await.is_err() {
-                                    break;
-                                }
+                                ws_send!(ws_tx, Message::Text(json));
                             }
+                        }
+                    }
+                    Some(crate::parser::SubscriptionEvent::Lagged(n)) => {
+                        tracing::warn!(skipped = n, "parser event subscriber lagged");
+                        let lag_msg = serde_json::json!({"type": "lagged", "skipped": n});
+                        if let Ok(json) = serde_json::to_string(&lag_msg) {
+                            ws_send!(ws_tx, Message::Text(json));
                         }
                     }
                     None => break,
@@ -279,15 +310,19 @@ async fn handle_ws_json(
                 match input_event {
                     Ok(event) => {
                         if let Ok(json) = serde_json::to_string(&event) {
-                            if ws_tx.send(Message::Text(json)).await.is_err() {
-                                break;
-                            }
+                            ws_send!(ws_tx, Message::Text(json));
                         }
                     }
                     Err(broadcast::error::RecvError::Closed) => {
                         input_rx = None;
                     }
-                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(skipped = n, "input event subscriber lagged");
+                        let lag_msg = serde_json::json!({"type": "input_lagged", "skipped": n});
+                        if let Ok(json) = serde_json::to_string(&lag_msg) {
+                            ws_send!(ws_tx, Message::Text(json));
+                        }
+                    }
                 }
             }
 
@@ -317,9 +352,7 @@ async fn handle_ws_json(
                             }),
                         );
                         if let Ok(json) = serde_json::to_string(&resp) {
-                            if ws_tx.send(Message::Text(json)).await.is_err() {
-                                break;
-                            }
+                            ws_send!(ws_tx, Message::Text(json));
                         }
                     }
                 } else {
@@ -331,9 +364,7 @@ async fn handle_ws_json(
                         "Terminal did not become quiescent within the deadline.",
                     );
                     if let Ok(json) = serde_json::to_string(&resp) {
-                        if ws_tx.send(Message::Text(json)).await.is_err() {
-                            break;
-                        }
+                        ws_send!(ws_tx, Message::Text(json));
                     }
                 }
             }
@@ -360,9 +391,7 @@ async fn handle_ws_json(
                                 scrollback_lines,
                             };
                             if let Ok(json) = serde_json::to_string(&sync_event) {
-                                if ws_tx.send(Message::Text(json)).await.is_err() {
-                                    break;
-                                }
+                                ws_send!(ws_tx, Message::Text(json));
                             }
                         }
                     }
@@ -379,9 +408,7 @@ async fn handle_ws_json(
                     tracing::debug!("ws_json client unresponsive (no pong), closing");
                     break;
                 }
-                if ws_tx.send(Message::Ping(vec![])).await.is_err() {
-                    break;
-                }
+                ws_send!(ws_tx, Message::Ping(vec![]));
                 ping_sent = true;
             }
 
@@ -400,7 +427,7 @@ async fn handle_ws_json(
                                     "Invalid JSON or missing 'method' field.",
                                 );
                                 if let Ok(json) = serde_json::to_string(&err) {
-                                    let _ = ws_tx.send(Message::Text(json)).await;
+                                    ws_send!(ws_tx, Message::Text(json));
                                 }
                                 continue;
                             }
@@ -463,9 +490,7 @@ async fn handle_ws_json(
                                         serde_json::json!({"events": event_names}),
                                     );
                                     if let Ok(json) = serde_json::to_string(&resp) {
-                                        if ws_tx.send(Message::Text(json)).await.is_err() {
-                                            break;
-                                        }
+                                        ws_send!(ws_tx, Message::Text(json));
                                     }
 
                                     // Send sync event
@@ -481,9 +506,7 @@ async fn handle_ws_json(
                                             scrollback_lines,
                                         };
                                         if let Ok(json) = serde_json::to_string(&sync_event) {
-                                            if ws_tx.send(Message::Text(json)).await.is_err() {
-                                                break;
-                                            }
+                                            ws_send!(ws_tx, Message::Text(json));
                                         }
                                     }
                                 }
@@ -495,7 +518,7 @@ async fn handle_ws_json(
                                         &format!("Invalid subscribe params: {}.", e),
                                     );
                                     if let Ok(json) = serde_json::to_string(&resp) {
-                                        let _ = ws_tx.send(Message::Text(json)).await;
+                                        ws_send!(ws_tx, Message::Text(json));
                                     }
                                 }
                             }
@@ -533,9 +556,7 @@ async fn handle_ws_json(
                                             "A new await_quiesce request superseded this one.",
                                         );
                                         if let Ok(json) = serde_json::to_string(&resp) {
-                                            if ws_tx.send(Message::Text(json)).await.is_err() {
-                                                break;
-                                            }
+                                            ws_send!(ws_tx, Message::Text(json));
                                         }
                                     }
                                     pending_quiesce = Some((req.id.clone(), format, fut));
@@ -548,7 +569,7 @@ async fn handle_ws_json(
                                         &format!("Invalid await_quiesce params: {}.", e),
                                     );
                                     if let Ok(json) = serde_json::to_string(&resp) {
-                                        let _ = ws_tx.send(Message::Text(json)).await;
+                                        ws_send!(ws_tx, Message::Text(json));
                                     }
                                 }
                             }
@@ -557,9 +578,7 @@ async fn handle_ws_json(
                             let resp = super::ws_methods::dispatch(&req, &session).await;
 
                             if let Ok(json) = serde_json::to_string(&resp) {
-                                if ws_tx.send(Message::Text(json)).await.is_err() {
-                                    break;
-                                }
+                                ws_send!(ws_tx, Message::Text(json));
                             }
                         }
                     }
@@ -613,7 +632,7 @@ pub(super) async fn ws_json_server(
 /// A tagged session event forwarded through the internal mpsc channel.
 struct TaggedSessionEvent {
     session: String,
-    event: crate::parser::events::Event,
+    event: crate::parser::SubscriptionEvent,
 }
 
 /// Tracks a per-session subscription's forwarding task.
@@ -712,6 +731,20 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
     let mut ping_sent = false;
     const PONG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
+    // Timeout-wrapped send macro (same as handle_ws_json)
+    macro_rules! ws_send {
+        ($tx:expr, $msg:expr) => {
+            match tokio::time::timeout(WS_SEND_TIMEOUT, $tx.send($msg)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(_)) => break,
+                Err(_) => {
+                    tracing::debug!("server ws_json send timed out, closing");
+                    break;
+                }
+            }
+        };
+    }
+
     // Main event loop
     loop {
         tokio::select! {
@@ -727,7 +760,7 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
                                     "Invalid JSON or missing 'method' field.",
                                 );
                                 if let Ok(json) = serde_json::to_string(&err) {
-                                    let _ = ws_tx.send(Message::Text(json)).await;
+                                    ws_send!(ws_tx, Message::Text(json));
                                 }
                                 continue;
                             }
@@ -749,9 +782,7 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
                             let subscribe_ok = is_subscribe && resp.error.is_none();
 
                             if let Ok(json) = serde_json::to_string(&resp) {
-                                if ws_tx.send(Message::Text(json)).await.is_err() {
-                                    break;
-                                }
+                                ws_send!(ws_tx, Message::Text(json));
                             }
 
                             // Send sync event after successful subscribe
@@ -780,9 +811,7 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
                                                 }
                                             });
                                             if let Ok(json) = serde_json::to_string(&sync_event) {
-                                                if ws_tx.send(Message::Text(json)).await.is_err() {
-                                                    break;
-                                                }
+                                                ws_send!(ws_tx, Message::Text(json));
                                             }
                                         }
                                     }
@@ -804,9 +833,7 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
                     tracing::debug!("server ws_json client unresponsive (no pong), closing");
                     break;
                 }
-                if ws_tx.send(Message::Ping(vec![])).await.is_err() {
-                    break;
-                }
+                ws_send!(ws_tx, Message::Ping(vec![]));
                 ping_sent = true;
             }
 
@@ -816,9 +843,7 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
                     Ok(event) => {
                         let event_json = format_registry_event(&event, &mut sub_handles);
                         if let Ok(json) = serde_json::to_string(&event_json) {
-                            if ws_tx.send(Message::Text(json)).await.is_err() {
-                                break;
-                            }
+                            ws_send!(ws_tx, Message::Text(json));
                         }
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
@@ -831,20 +856,33 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
 
             // Per-session parser events forwarded from subscription tasks
             Some(tagged) = sub_rx.recv() => {
-                if let Some(handle) = sub_handles.get(&tagged.session) {
-                    if should_forward_session_event(&tagged.event, handle) {
-                        if let Ok(event_value) = serde_json::to_value(&tagged.event) {
-                            let tagged_json = if let serde_json::Value::Object(mut map) = event_value {
-                                map.insert("session".to_string(), serde_json::json!(tagged.session));
-                                serde_json::Value::Object(map)
-                            } else {
-                                event_value
-                            };
-                            if let Ok(json) = serde_json::to_string(&tagged_json) {
-                                if ws_tx.send(Message::Text(json)).await.is_err() {
-                                    break;
+                match tagged.event {
+                    crate::parser::SubscriptionEvent::Event(ref event) => {
+                        if let Some(handle) = sub_handles.get(&tagged.session) {
+                            if should_forward_session_event(event, handle) {
+                                if let Ok(event_value) = serde_json::to_value(event) {
+                                    let tagged_json = if let serde_json::Value::Object(mut map) = event_value {
+                                        map.insert("session".to_string(), serde_json::json!(tagged.session));
+                                        serde_json::Value::Object(map)
+                                    } else {
+                                        event_value
+                                    };
+                                    if let Ok(json) = serde_json::to_string(&tagged_json) {
+                                        ws_send!(ws_tx, Message::Text(json));
+                                    }
                                 }
                             }
+                        }
+                    }
+                    crate::parser::SubscriptionEvent::Lagged(n) => {
+                        tracing::warn!(session = %tagged.session, skipped = n, "parser event subscriber lagged");
+                        let lag_msg = serde_json::json!({
+                            "type": "lagged",
+                            "session": tagged.session,
+                            "skipped": n,
+                        });
+                        if let Ok(json) = serde_json::to_string(&lag_msg) {
+                            ws_send!(ws_tx, Message::Text(json));
                         }
                     }
                 }
@@ -2150,7 +2188,7 @@ pub(super) async fn session_kill(
         .sessions
         .remove(&name)
         .ok_or(ApiError::SessionNotFound(name))?;
-    session.detach();
+    session.force_kill();
     Ok(StatusCode::NO_CONTENT)
 }
 

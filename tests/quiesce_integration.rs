@@ -39,10 +39,10 @@ fn create_test_state() -> (api::AppState, mpsc::Receiver<Bytes>, ActivityTracker
         parser,
         overlays: OverlayStore::new(),
         panels: wsh::panel::PanelStore::new(),
-        pty: Arc::new(
+        pty: Arc::new(parking_lot::Mutex::new(
             wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default())
                 .expect("failed to spawn PTY for test"),
-        ),
+        )),
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         input_mode: InputMode::new(),
         input_broadcaster: InputBroadcaster::new(),
@@ -709,10 +709,10 @@ fn create_multi_session_state() -> (api::AppState, ActivityTracker, ActivityTrac
             parser,
             overlays: OverlayStore::new(),
             panels: wsh::panel::PanelStore::new(),
-            pty: Arc::new(
+            pty: Arc::new(parking_lot::Mutex::new(
                 wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default())
                     .expect("failed to spawn PTY for test"),
-            ),
+            )),
             terminal_size: wsh::terminal::TerminalSize::new(24, 80),
             input_mode: InputMode::new(),
             input_broadcaster: InputBroadcaster::new(),

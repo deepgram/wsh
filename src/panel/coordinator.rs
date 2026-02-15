@@ -27,7 +27,7 @@ use super::store::PanelStore;
 pub async fn reconfigure_layout(
     panels: &PanelStore,
     terminal_size: &TerminalSize,
-    pty: &Arc<Pty>,
+    pty: &Arc<parking_lot::Mutex<Pty>>,
     parser: &Parser,
 ) {
     let all_panels = panels.list();
@@ -42,7 +42,7 @@ pub async fn reconfigure_layout(
 
     // Resize PTY and parser (use at least 1 row to avoid invalid resize)
     let effective_pty_rows = layout.pty_rows.max(1);
-    if let Err(e) = pty.resize(effective_pty_rows, layout.pty_cols) {
+    if let Err(e) = pty.lock().resize(effective_pty_rows, layout.pty_cols) {
         tracing::error!(?e, "failed to resize PTY");
     }
     if let Err(e) = parser

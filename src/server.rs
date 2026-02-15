@@ -243,7 +243,7 @@ async fn handle_attach_session<S: AsyncRead + AsyncWrite + Unpin>(
     };
 
     // Resize session to match client terminal
-    if let Err(e) = session.pty.resize(msg.rows, msg.cols) {
+    if let Err(e) = session.pty.lock().resize(msg.rows, msg.cols) {
         tracing::warn!(?e, "failed to resize PTY on attach");
     }
     if let Err(e) = session.parser.resize(msg.cols as usize, msg.rows as usize).await {
@@ -363,7 +363,7 @@ async fn handle_kill_session<S: AsyncRead + AsyncWrite + Unpin>(
 ) -> io::Result<()> {
     match sessions.remove(&msg.name) {
         Some(session) => {
-            session.detach();
+            session.force_kill();
             tracing::info!(session = %msg.name, "session killed via socket");
             let resp = KillSessionResponseMsg { name: msg.name };
             let resp_frame = Frame::control(FrameType::KillSessionResponse, &resp)
@@ -483,7 +483,10 @@ async fn run_streaming<S: AsyncRead + AsyncWrite + Unpin>(
     session: &Session,
 ) -> io::Result<()> {
     let _client_guard = session.connect();
-    let (mut reader, mut writer) = tokio::io::split(stream);
+    let (reader, mut writer) = tokio::io::split(stream);
+    // BufReader preserves partially-read bytes across select! cancellation,
+    // making Frame::read_from cancellation-safe.
+    let mut reader = tokio::io::BufReader::new(reader);
 
     // Subscribe to session output
     let mut output_rx = session.output_rx.subscribe();
@@ -502,6 +505,14 @@ async fn run_streaming<S: AsyncRead + AsyncWrite + Unpin>(
     // Main loop: read from client and session output concurrently
     loop {
         tokio::select! {
+            // Session was killed/removed → send Detach frame and break
+            _ = session.cancelled.cancelled() => {
+                tracing::debug!("session was killed, closing socket connection");
+                let detach_frame = Frame::new(FrameType::Detach, Bytes::new());
+                let _ = write_frame_with_timeout(&detach_frame, &mut writer).await;
+                break;
+            }
+
             // Remote detach signal → send Detach frame to client and break
             _ = detach_rx.recv() => {
                 let detach_frame = Frame::new(FrameType::Detach, Bytes::new());
@@ -564,8 +575,20 @@ async fn run_streaming<S: AsyncRead + AsyncWrite + Unpin>(
                 }
             }
 
-            // Frames from client
-            result = Frame::read_from(&mut reader) => {
+            // Frames from client (with timeout to detect stale connections)
+            result = async {
+                tokio::time::timeout(
+                    Duration::from_secs(300),
+                    Frame::read_from(&mut reader),
+                ).await
+            } => {
+                let result = match result {
+                    Ok(inner) => inner,
+                    Err(_) => {
+                        tracing::warn!("socket client read timed out (300s idle), disconnecting");
+                        break;
+                    }
+                };
                 match result {
                     Ok(f) => {
                         match f.frame_type {
@@ -604,7 +627,7 @@ async fn run_streaming<S: AsyncRead + AsyncWrite + Unpin>(
                             FrameType::Resize => {
                                 if let Ok(msg) = f.parse_json::<ResizeMsg>() {
                                     terminal_size.set(msg.rows, msg.cols);
-                                    if let Err(e) = pty.resize(msg.rows, msg.cols) {
+                                    if let Err(e) = pty.lock().resize(msg.rows, msg.cols) {
                                         tracing::warn!(?e, "failed to resize PTY");
                                     }
                                     if let Err(e) = parser.resize(
