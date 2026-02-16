@@ -863,7 +863,7 @@ List all active sessions.
 **Result:**
 
 ```json
-{"id": 1, "method": "list_sessions", "result": [{"name": "dev"}, {"name": "build"}]}
+{"id": 1, "method": "list_sessions", "result": [{"name": "dev", "pid": 12345, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 1}, {"name": "build", "pid": 12346, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 0}]}
 ```
 
 #### `create_session`
@@ -888,7 +888,7 @@ Create a new session.
 **Result:**
 
 ```json
-{"id": 2, "method": "create_session", "result": {"name": "dev"}}
+{"id": 2, "method": "create_session", "result": {"name": "dev", "pid": 12345, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 0}}
 ```
 
 #### `kill_session`
@@ -970,19 +970,13 @@ The server-level WebSocket automatically broadcasts session lifecycle events:
 {"event": "session_created", "params": {"name": "dev"}}
 ```
 
-**Session exited** (PTY process terminated):
-
-```json
-{"event": "session_exited", "params": {"name": "dev"}}
-```
-
 **Session renamed:**
 
 ```json
 {"event": "session_renamed", "params": {"old_name": "dev", "new_name": "prod"}}
 ```
 
-**Session destroyed** (killed via API):
+**Session destroyed** (killed via API, or PTY process exited):
 
 ```json
 {"event": "session_destroyed", "params": {"name": "dev"}}

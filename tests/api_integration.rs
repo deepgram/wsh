@@ -34,6 +34,9 @@ fn create_test_app() -> (axum::Router, mpsc::Receiver<Bytes>, broadcast::Sender<
     let parser = Parser::spawn(&broker, 80, 24, 1000);
     let session = Session {
         name: "test".to_string(),
+        pid: None,
+        command: "test".to_string(),
+        client_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         input_tx,
         output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),
@@ -46,8 +49,8 @@ fn create_test_app() -> (axum::Router, mpsc::Receiver<Bytes>, broadcast::Sender<
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
         focus: FocusTracker::new(),
-        is_local: false,
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
+        visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
     };
     let registry = SessionRegistry::new();
@@ -129,6 +132,9 @@ async fn test_api_input_multiple_requests() {
     let parser = Parser::spawn(&broker, 80, 24, 1000);
     let session = Session {
         name: "test".to_string(),
+        pid: None,
+        command: "test".to_string(),
+        client_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         input_tx,
         output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),
@@ -141,8 +147,8 @@ async fn test_api_input_multiple_requests() {
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
         focus: FocusTracker::new(),
-        is_local: false,
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
+        visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
     };
     let registry = SessionRegistry::new();
@@ -217,6 +223,9 @@ async fn test_websocket_receives_pty_output() {
     let parser = Parser::spawn(&broker, 80, 24, 1000);
     let session = Session {
         name: "test".to_string(),
+        pid: None,
+        command: "test".to_string(),
+        client_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         input_tx,
         output_rx: output_tx.clone(),
         shutdown: ShutdownCoordinator::new(),
@@ -229,8 +238,8 @@ async fn test_websocket_receives_pty_output() {
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
         focus: FocusTracker::new(),
-        is_local: false,
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
+        visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
     };
     let registry = SessionRegistry::new();
@@ -277,6 +286,9 @@ async fn test_websocket_sends_input_to_pty() {
     let parser = Parser::spawn(&broker, 80, 24, 1000);
     let session = Session {
         name: "test".to_string(),
+        pid: None,
+        command: "test".to_string(),
+        client_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         input_tx,
         output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),
@@ -289,8 +301,8 @@ async fn test_websocket_sends_input_to_pty() {
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
         focus: FocusTracker::new(),
-        is_local: false,
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
+        visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
     };
     let registry = SessionRegistry::new();
@@ -333,6 +345,9 @@ async fn test_websocket_text_input_to_pty() {
     let parser = Parser::spawn(&broker, 80, 24, 1000);
     let session = Session {
         name: "test".to_string(),
+        pid: None,
+        command: "test".to_string(),
+        client_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         input_tx,
         output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),
@@ -345,8 +360,8 @@ async fn test_websocket_text_input_to_pty() {
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
         focus: FocusTracker::new(),
-        is_local: false,
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
+        visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
     };
     let registry = SessionRegistry::new();
@@ -388,6 +403,9 @@ async fn test_websocket_bidirectional_communication() {
     let parser = Parser::spawn(&broker, 80, 24, 1000);
     let session = Session {
         name: "test".to_string(),
+        pid: None,
+        command: "test".to_string(),
+        client_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         input_tx,
         output_rx: output_tx.clone(),
         shutdown: ShutdownCoordinator::new(),
@@ -400,8 +418,8 @@ async fn test_websocket_bidirectional_communication() {
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
         focus: FocusTracker::new(),
-        is_local: false,
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
+        visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
     };
     let registry = SessionRegistry::new();
@@ -462,6 +480,9 @@ async fn test_websocket_multiple_outputs() {
     let parser = Parser::spawn(&broker, 80, 24, 1000);
     let session = Session {
         name: "test".to_string(),
+        pid: None,
+        command: "test".to_string(),
+        client_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         input_tx,
         output_rx: output_tx.clone(),
         shutdown: ShutdownCoordinator::new(),
@@ -474,8 +495,8 @@ async fn test_websocket_multiple_outputs() {
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
         focus: FocusTracker::new(),
-        is_local: false,
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
+        visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
     };
     let registry = SessionRegistry::new();
@@ -585,6 +606,9 @@ async fn test_websocket_line_event_includes_total_lines() {
     let parser = Parser::spawn(&broker, 80, 24, 1000);
     let session = Session {
         name: "test".to_string(),
+        pid: None,
+        command: "test".to_string(),
+        client_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         input_tx,
         output_rx: output_tx.clone(),
         shutdown: ShutdownCoordinator::new(),
@@ -597,8 +621,8 @@ async fn test_websocket_line_event_includes_total_lines() {
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
         focus: FocusTracker::new(),
-        is_local: false,
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
+        visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
     };
     let registry = SessionRegistry::new();
@@ -674,6 +698,9 @@ async fn test_scrollback_endpoint() {
     let parser = Parser::spawn(&broker, 80, 5, 1000); // 5-row screen to get scrollback quickly
     let session = Session {
         name: "test".to_string(),
+        pid: None,
+        command: "test".to_string(),
+        client_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         input_tx,
         output_rx: output_tx.clone(),
         shutdown: ShutdownCoordinator::new(),
@@ -686,8 +713,8 @@ async fn test_scrollback_endpoint() {
         terminal_size: wsh::terminal::TerminalSize::new(5, 80),
         activity: wsh::activity::ActivityTracker::new(),
         focus: FocusTracker::new(),
-        is_local: false,
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
+        visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
     };
     let registry = SessionRegistry::new();
@@ -739,6 +766,9 @@ async fn test_scrollback_initial_state() {
     let parser = Parser::spawn(&broker, 80, 24, 1000);
     let session = Session {
         name: "test".to_string(),
+        pid: None,
+        command: "test".to_string(),
+        client_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         input_tx,
         output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),
@@ -751,8 +781,8 @@ async fn test_scrollback_initial_state() {
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
         focus: FocusTracker::new(),
-        is_local: false,
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
+        visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
     };
     let registry = SessionRegistry::new();

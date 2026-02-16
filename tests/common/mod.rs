@@ -32,6 +32,9 @@ pub fn create_test_session_with_size(name: &str, rows: u16, cols: u16) -> TestSe
     let parser = Parser::spawn(&broker, cols as usize, rows as usize, 1000);
     let session = Session {
         name: name.to_string(),
+        pid: None,
+        command: "test".to_string(),
+        client_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         input_tx,
         output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),
@@ -47,8 +50,8 @@ pub fn create_test_session_with_size(name: &str, rows: u16, cols: u16) -> TestSe
         terminal_size: TerminalSize::new(rows, cols),
         activity: ActivityTracker::new(),
         focus: FocusTracker::new(),
-        is_local: false,
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
+        visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
     };
     TestSession {

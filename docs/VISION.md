@@ -123,12 +123,9 @@ This loop is simple but powerful. It works for any program, any interface, any s
 
 **Multiple Sessions, Parallel Work**
 
-`wsh` operates in two modes:
+`wsh` always uses a client/server architecture. Running `wsh` with no subcommand auto-spawns an ephemeral server if needed, creates a session, and attaches -- giving you immediate, transparent access. Running `wsh server` starts the daemon explicitly for persistent, multi-session operation.
 
-- **Standalone mode**: One `wsh` process, one session, attached to your terminal. Simple. Immediate.
-- **Server mode**: A headless daemon managing multiple named sessions. Agents can create sessions on demand, run work in parallel, and tear them down when done.
-
-Server mode is where the co-processor vision comes alive. An agent can spin up a dozen sessions, run different tasks in each, monitor progress across all of them, and report results -- while the human continues working in their own terminal undisturbed.
+An agent can spin up a dozen sessions, run different tasks in each, monitor progress across all of them, and report results -- while the human continues working in their own terminal undisturbed.
 
 ---
 
@@ -295,11 +292,10 @@ The critical columns are the first two. No existing tool provides a structured, 
 
 **Now: The API Platform**
 
-The core is built: PTY management, terminal state machine, HTTP/WebSocket API, session management, overlays, panels, input capture, quiescence detection. AI agents can drive interactive terminal sessions today.
+The core is built: PTY management, terminal state machine, HTTP/WebSocket API, session management, overlays, panels, input capture, quiescence detection. MCP integration exposes `wsh` as a first-class MCP server -- 14 tools, 3 resources, 9 prompts -- via Streamable HTTP and stdio transports. AI agents can drive interactive terminal sessions today through HTTP, WebSocket, or MCP.
 
 **Next: Richer Agent Capabilities**
 
-- **MCP integration**: Expose `wsh` as an MCP server so AI assistants can discover and use terminal sessions natively
 - **Structured events**: Semantic notifications -- "command completed," "prompt detected," "approval requested" -- layered on top of raw terminal output
 - **Agent middleware**: Allow agents to observe, filter, transform, and respond to terminal activity through composable hooks
 

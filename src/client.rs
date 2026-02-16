@@ -11,7 +11,71 @@ use bytes::Bytes;
 use tokio::io::{AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::UnixStream;
 
+use crate::overlay::{self, Overlay};
+use crate::panel::{self, Panel};
 use crate::protocol::*;
+
+/// Render the panel sync update, writing ANSI escape sequences to `w`.
+///
+/// Handles scroll region transitions carefully: DECSTBM (`\x1b[r`) moves the
+/// cursor to (1,1) as a side effect per VT100 spec, so we only emit it when
+/// there is an actual transition between having panels and not having them.
+///
+/// Transition table:
+/// - no panels → no panels: no scroll region change (avoids cursor jump)
+/// - no panels → has panels: set scroll region
+/// - has panels → has panels: update scroll region
+/// - has panels → no panels: reset scroll region
+fn render_panel_sync(
+    w: &mut impl std::io::Write,
+    new_panels: &[Panel],
+    cached_panels: &[Panel],
+    term_rows: u16,
+    term_cols: u16,
+) -> std::io::Result<()> {
+    w.write_all(overlay::begin_sync().as_bytes())?;
+
+    // Erase old panels using cached layout
+    if !cached_panels.is_empty() {
+        let old_layout = panel::compute_layout(cached_panels, term_rows, term_cols);
+        w.write_all(panel::erase_all_panels(&old_layout, term_cols).as_bytes())?;
+    }
+
+    // Compute new layout
+    let new_layout = panel::compute_layout(new_panels, term_rows, term_cols);
+
+    let had_panels = !cached_panels.is_empty();
+    let has_panels = !new_layout.top_panels.is_empty()
+        || !new_layout.bottom_panels.is_empty();
+
+    // Only change scroll region when transitioning between having panels and
+    // not having them (or vice versa). DECSTBM (`\x1b[r` / `\x1b[t;br`)
+    // moves the cursor to (1,1) as a side effect per VT100 spec, so we:
+    //   1. Skip it entirely for no-panels → no-panels (the original bug fix)
+    //   2. Wrap it in SCOSC save/restore when we do emit it, to preserve
+    //      cursor position (safe here because erase_all_panels already
+    //      completed its own save/restore cycle — no nesting)
+    if has_panels {
+        w.write_all(overlay::save_cursor().as_bytes())?;
+        w.write_all(
+            panel::set_scroll_region(new_layout.scroll_region_top, new_layout.scroll_region_bottom)
+                .as_bytes(),
+        )?;
+        w.write_all(overlay::restore_cursor().as_bytes())?;
+    } else if had_panels {
+        // Transitioning from panels → no panels: reset
+        w.write_all(overlay::save_cursor().as_bytes())?;
+        w.write_all(panel::reset_scroll_region().as_bytes())?;
+        w.write_all(overlay::restore_cursor().as_bytes())?;
+    }
+    // else: no panels before, no panels now — skip entirely
+
+    if has_panels {
+        w.write_all(panel::render_all_panels(&new_layout, term_cols).as_bytes())?;
+    }
+    w.write_all(overlay::end_sync().as_bytes())?;
+    w.flush()
+}
 
 /// A client connection to the wsh server daemon over a Unix socket.
 pub struct Client {
@@ -189,13 +253,50 @@ impl Client {
         // Channel for stdin data from the blocking reader
         let (stdin_tx, mut stdin_rx) = tokio::sync::mpsc::channel::<Bytes>(64);
 
-        // Spawn stdin reader in a blocking thread
-        tokio::task::spawn_blocking(move || {
+        // Self-pipe for stdin reader cancellation. poll() blocks on both
+        // stdin and the read end of this pipe. To cancel, we drop the write
+        // end — poll() wakes instantly with POLLHUP. No timeout needed.
+        let (cancel_rd, cancel_wr) = {
+            let mut fds = [0i32; 2];
+            if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            unsafe {
+                use std::os::unix::io::FromRawFd;
+                (
+                    std::os::unix::io::OwnedFd::from_raw_fd(fds[0]),
+                    std::os::unix::io::OwnedFd::from_raw_fd(fds[1]),
+                )
+            }
+        };
+        let cancel_rd_raw = std::os::unix::io::AsRawFd::as_raw_fd(&cancel_rd);
+
+        // Spawn stdin reader in a blocking thread.
+        let stdin_handle = tokio::task::spawn_blocking(move || {
             use std::io::Read;
-            let mut stdin = std::io::stdin();
+            use std::os::unix::io::AsRawFd;
+
+            let _cancel_rd = cancel_rd; // keep alive; closed on exit
+            let stdin = std::io::stdin();
+            let stdin_fd = stdin.as_raw_fd();
             let mut buf = [0u8; 4096];
             loop {
-                match stdin.read(&mut buf) {
+                let mut pfds = [
+                    libc::pollfd { fd: stdin_fd, events: libc::POLLIN, revents: 0 },
+                    libc::pollfd { fd: cancel_rd_raw, events: libc::POLLIN, revents: 0 },
+                ];
+                let ret = unsafe { libc::poll(pfds.as_mut_ptr(), 2, -1) };
+                if ret < 0 {
+                    break;
+                }
+                // Cancel pipe closed → exit
+                if pfds[1].revents != 0 {
+                    break;
+                }
+                if pfds[0].revents & libc::POLLIN == 0 {
+                    continue;
+                }
+                match stdin.lock().read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
                         let data = Bytes::copy_from_slice(&buf[..n]);
@@ -226,7 +327,18 @@ impl Client {
             }
         });
 
-        streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx).await
+        let mut stdout = std::io::stdout();
+        let result = streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx, &mut stdout).await;
+
+        // Close the cancel pipe write end — poll() in the reader wakes
+        // instantly with POLLHUP and the reader exits. Then we join it
+        // to ensure it's fully stopped before the caller restores the
+        // terminal.
+        drop(cancel_wr);
+        drop(stdin_rx);
+        let _ = stdin_handle.await;
+
+        result
     }
 
 }
@@ -235,12 +347,14 @@ impl Client {
 ///
 /// Reads stdin data from `stdin_rx`, reads frames from the server via `reader`,
 /// writes frames to the server via `writer`, and handles resize signals from
-/// `sigwinch_rx`.
+/// `sigwinch_rx`. Terminal output (PTY data, overlays, panels) is written to
+/// `output`, which is `stdout` in production and a buffer in tests.
 async fn streaming_loop(
     mut reader: ReadHalf<UnixStream>,
     mut writer: WriteHalf<UnixStream>,
     stdin_rx: &mut tokio::sync::mpsc::Receiver<Bytes>,
     sigwinch_rx: &mut tokio::sync::mpsc::Receiver<(u16, u16)>,
+    output: &mut impl std::io::Write,
 ) -> io::Result<()> {
     // Ctrl+\ double-tap detection for detach.
     // Each Ctrl+\ is forwarded to the server immediately (the server toggles
@@ -250,6 +364,10 @@ async fn streaming_loop(
     let mut pending_detach = false;
     let detach_timer = tokio::time::sleep(std::time::Duration::from_millis(500));
     tokio::pin!(detach_timer);
+
+    // Local caches of visual state for erase-before-render
+    let mut cached_overlays: Vec<Overlay> = Vec::new();
+    let mut cached_panels: Vec<Panel> = Vec::new();
 
     loop {
         tokio::select! {
@@ -293,18 +411,50 @@ async fn streaming_loop(
                 }
             }
 
-            // PtyOutput frames from server → stdout
+            // Frames from server → output
             result = Frame::read_from(&mut reader) => {
                 match result {
                     Ok(frame) => {
                         match frame.frame_type {
                             FrameType::PtyOutput => {
-                                use std::io::Write;
-                                let mut stdout = std::io::stdout().lock();
-                                if stdout.write_all(&frame.payload).is_err() {
-                                    break;
+                                if !cached_overlays.is_empty() {
+                                    // Erase overlays, write PTY output, re-render overlays
+                                    let _ = output.write_all(overlay::begin_sync().as_bytes());
+                                    let _ = output.write_all(overlay::erase_all_overlays(&cached_overlays).as_bytes());
+                                    let _ = output.write_all(&frame.payload);
+                                    let _ = output.write_all(overlay::render_all_overlays(&cached_overlays).as_bytes());
+                                    let _ = output.write_all(overlay::end_sync().as_bytes());
+                                } else {
+                                    let _ = output.write_all(&frame.payload);
                                 }
-                                let _ = stdout.flush();
+                                let _ = output.flush();
+                            }
+                            FrameType::OverlaySync => {
+                                if let Ok(msg) = frame.parse_json::<OverlaySyncMsg>() {
+                                    let _ = output.write_all(overlay::begin_sync().as_bytes());
+                                    let _ = output.write_all(overlay::save_cursor().as_bytes());
+                                    // Erase old overlays
+                                    let _ = output.write_all(overlay::erase_all_overlays(&cached_overlays).as_bytes());
+                                    // Render new overlays
+                                    let _ = output.write_all(overlay::render_all_overlays(&msg.overlays).as_bytes());
+                                    let _ = output.write_all(overlay::restore_cursor().as_bytes());
+                                    let _ = output.write_all(overlay::end_sync().as_bytes());
+                                    let _ = output.flush();
+                                    cached_overlays = msg.overlays;
+                                }
+                            }
+                            FrameType::PanelSync => {
+                                if let Ok(msg) = frame.parse_json::<PanelSyncMsg>() {
+                                    let (term_rows, term_cols) = crate::terminal::terminal_size().unwrap_or((24, 80));
+                                    let _ = render_panel_sync(
+                                        output,
+                                        &msg.panels,
+                                        &cached_panels,
+                                        term_rows,
+                                        term_cols,
+                                    );
+                                    cached_panels = msg.panels;
+                                }
                             }
                             FrameType::Error => {
                                 if let Ok(err) = frame.parse_json::<ErrorMsg>() {
@@ -339,6 +489,20 @@ async fn streaming_loop(
                 pending_detach = false;
             }
         }
+    }
+
+    // Clean up visual state before exiting
+    {
+        if !cached_overlays.is_empty() {
+            let _ = output.write_all(overlay::erase_all_overlays(&cached_overlays).as_bytes());
+        }
+        if !cached_panels.is_empty() {
+            let (term_rows, term_cols) = crate::terminal::terminal_size().unwrap_or((24, 80));
+            let layout = panel::compute_layout(&cached_panels, term_rows, term_cols);
+            let _ = output.write_all(panel::erase_all_panels(&layout, term_cols).as_bytes());
+            let _ = output.write_all(panel::reset_scroll_region().as_bytes());
+        }
+        let _ = output.flush();
     }
 
     // Ensure the writer half is cleanly shut down
@@ -584,7 +748,7 @@ mod tests {
 
         // Spawn the streaming loop
         let loop_handle = tokio::spawn(async move {
-            streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx).await
+            streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx, &mut std::io::sink()).await
         });
 
         // Send data through stdin channel
@@ -629,7 +793,7 @@ mod tests {
 
         // Spawn the streaming loop
         let loop_handle = tokio::spawn(async move {
-            streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx).await
+            streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx, &mut std::io::sink()).await
         });
 
         // Send a PtyOutput frame from the "server"
@@ -655,7 +819,7 @@ mod tests {
         let (sigwinch_tx, mut sigwinch_rx) = tokio::sync::mpsc::channel::<(u16, u16)>(4);
 
         let loop_handle = tokio::spawn(async move {
-            streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx).await
+            streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx, &mut std::io::sink()).await
         });
 
         // Send a resize signal
@@ -724,7 +888,7 @@ mod tests {
         let (_sigwinch_tx, mut sigwinch_rx) = tokio::sync::mpsc::channel::<(u16, u16)>(4);
 
         let loop_handle = tokio::spawn(async move {
-            streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx).await
+            streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx, &mut std::io::sink()).await
         });
 
         // Send Ctrl+\ twice in quick succession
@@ -773,7 +937,7 @@ mod tests {
         let (_sigwinch_tx, mut sigwinch_rx) = tokio::sync::mpsc::channel::<(u16, u16)>(4);
 
         let loop_handle = tokio::spawn(async move {
-            streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx).await
+            streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx, &mut std::io::sink()).await
         });
 
         // Send a single Ctrl+\ — should be forwarded immediately (no delay)
@@ -812,7 +976,7 @@ mod tests {
         let (_sigwinch_tx, mut sigwinch_rx) = tokio::sync::mpsc::channel::<(u16, u16)>(4);
 
         let loop_handle = tokio::spawn(async move {
-            streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx).await
+            streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx, &mut std::io::sink()).await
         });
 
         // Send Ctrl+\ followed by 'a'
@@ -860,7 +1024,7 @@ mod tests {
         let (_sigwinch_tx, mut sigwinch_rx) = tokio::sync::mpsc::channel::<(u16, u16)>(4);
 
         let loop_handle = tokio::spawn(async move {
-            streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx).await
+            streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx, &mut std::io::sink()).await
         });
 
         // Send Ctrl+\ then immediately close stdin
@@ -890,5 +1054,162 @@ mod tests {
         assert_eq!(frame2.frame_type, FrameType::Detach);
 
         loop_handle.await.unwrap().unwrap();
+    }
+
+    /// Helper: create a minimal visible panel for testing scroll region behavior.
+    fn test_panel(id: &str, position: panel::Position) -> Panel {
+        Panel {
+            id: id.to_string(),
+            position,
+            height: 1,
+            z: 0,
+            background: None,
+            spans: vec![],
+            region_writes: vec![],
+            visible: true,
+            focusable: false,
+            screen_mode: crate::overlay::ScreenMode::Normal,
+        }
+    }
+
+    #[test]
+    fn test_panel_sync_no_panels_to_no_panels_skips_scroll_region() {
+        // When there are no panels before and no panels after, DECSTBM (\x1b[r)
+        // must NOT be emitted — it moves the cursor to (1,1) as a side effect.
+        let mut buf = Vec::new();
+        render_panel_sync(&mut buf, &[], &[], 24, 80).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+
+        assert!(
+            !output.contains("\x1b[r"),
+            "empty→empty must not emit DECSTBM; got: {:?}",
+            output,
+        );
+    }
+
+    #[test]
+    fn test_panel_sync_panels_to_no_panels_resets_scroll_region() {
+        // Transitioning from having panels to no panels should reset the
+        // scroll region so the shell uses the full terminal again.
+        let old = vec![test_panel("p1", panel::Position::Bottom)];
+        let mut buf = Vec::new();
+        render_panel_sync(&mut buf, &[], &old, 24, 80).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+
+        assert!(
+            output.contains("\x1b[r"),
+            "panels→empty must emit DECSTBM reset; got: {:?}",
+            output,
+        );
+        // DECSTBM reset must be wrapped in cursor save/restore to avoid
+        // moving the cursor to (1,1).
+        assert!(
+            output.contains("\x1b[s\x1b[r\x1b[u"),
+            "DECSTBM reset must be wrapped in SCOSC save/restore; got: {:?}",
+            output,
+        );
+    }
+
+    #[test]
+    fn test_panel_sync_no_panels_to_panels_sets_scroll_region() {
+        // Adding the first panel should set DECSTBM to carve out panel rows.
+        let new = vec![test_panel("p1", panel::Position::Bottom)];
+        let mut buf = Vec::new();
+        render_panel_sync(&mut buf, &new, &[], 24, 80).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+
+        // Should contain a scroll region set (e.g. \x1b[1;23r) wrapped in
+        // cursor save/restore.
+        assert!(
+            output.contains("\x1b[s\x1b[1;23r\x1b[u"),
+            "empty→panels must set scroll region with save/restore; got: {:?}",
+            output,
+        );
+    }
+
+    #[test]
+    fn test_panel_sync_panels_to_panels_updates_scroll_region() {
+        // Updating from one panel layout to another should update DECSTBM.
+        let old = vec![test_panel("p1", panel::Position::Bottom)];
+        let new = vec![
+            test_panel("p1", panel::Position::Bottom),
+            test_panel("p2", panel::Position::Top),
+        ];
+        let mut buf = Vec::new();
+        render_panel_sync(&mut buf, &new, &old, 24, 80).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+
+        // Should contain an updated scroll region (top=2, bottom=23 → \x1b[2;23r)
+        // wrapped in cursor save/restore.
+        assert!(
+            output.contains("\x1b[s\x1b[2;23r\x1b[u"),
+            "panels→panels must update scroll region with save/restore; got: {:?}",
+            output,
+        );
+    }
+
+    /// Integration test: send a PanelSync frame with empty panels through the
+    /// socket and verify the streaming loop does NOT emit DECSTBM (`\x1b[r`).
+    ///
+    /// This is the exact scenario that caused cursor corruption after alternate
+    /// screen exit: the server sends a PanelSync with empty panels (triggered by
+    /// screen_mode change), and the client must not emit `\x1b[r` since it moves
+    /// the cursor to (1,1).
+    #[tokio::test]
+    async fn test_streaming_loop_empty_panel_sync_no_decstbm() {
+        use std::sync::{Arc, Mutex};
+
+        /// A `Write` impl that appends to a shared buffer.
+        #[derive(Clone)]
+        struct SharedBuf(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for SharedBuf {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let (client_stream, mut server_stream) = TokioUnixStream::pair().unwrap();
+
+        let (reader, writer) = tokio::io::split(client_stream);
+        let (_stdin_tx, mut stdin_rx) = tokio::sync::mpsc::channel::<Bytes>(64);
+        let (_sigwinch_tx, mut sigwinch_rx) = tokio::sync::mpsc::channel::<(u16, u16)>(4);
+
+        let output_buf = SharedBuf(Arc::new(Mutex::new(Vec::new())));
+        let output_buf_clone = output_buf.clone();
+
+        let loop_handle = tokio::spawn(async move {
+            let mut out = output_buf_clone;
+            streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx, &mut out).await
+        });
+
+        // Send a PanelSync frame with empty panels (simulates server visual
+        // update after alternate screen exit with no active panels)
+        let panel_sync_msg = PanelSyncMsg {
+            panels: vec![],
+            scroll_region_top: 1,
+            scroll_region_bottom: 24,
+        };
+        let frame = Frame::control(FrameType::PanelSync, &panel_sync_msg).unwrap();
+        frame.write_to(&mut server_stream).await.unwrap();
+
+        // Give the loop time to process the frame
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Close the server connection to end the loop
+        drop(server_stream);
+        let _ = loop_handle.await;
+
+        let bytes = output_buf.0.lock().unwrap();
+        let output = String::from_utf8_lossy(&bytes);
+
+        assert!(
+            !output.contains("\x1b[r"),
+            "empty PanelSync must not emit DECSTBM (\\x1b[r); got: {:?}",
+            output,
+        );
     }
 }

@@ -59,6 +59,17 @@ pub(crate) fn get_session(
 }
 
 pub fn router(state: AppState, token: Option<String>) -> Router {
+    use rmcp::transport::streamable_http_server::{
+        StreamableHttpService, StreamableHttpServerConfig,
+        session::local::LocalSessionManager,
+    };
+
+    let mcp_state = state.clone();
+    let mcp_service = StreamableHttpService::new(
+        move || Ok(crate::mcp::WshMcpServer::new(mcp_state.clone())),
+        Arc::new(LocalSessionManager::default()),
+        StreamableHttpServerConfig::default(),
+    );
     let session_routes = Router::new()
         .route("/input", post(input))
         .route("/input/mode", get(input_mode_get))
@@ -118,7 +129,7 @@ pub fn router(state: AppState, token: Option<String>) -> Router {
         )
         .route("/sessions/:name/detach", post(session_detach))
         .route("/quiesce", get(quiesce_any))
-        .route("/server/persist", post(server_persist))
+        .route("/server/persist", get(server_persist_get).put(server_persist_set))
         .route("/ws/json", get(ws_json_server));
 
     let protected = Router::new()
@@ -138,6 +149,7 @@ pub fn router(state: AppState, token: Option<String>) -> Router {
         .route("/health", get(health))
         .route("/openapi.yaml", get(openapi_spec))
         .route("/docs", get(docs_index))
+        .nest_service("/mcp", mcp_service)
         .merge(protected)
         .fallback(web::web_asset)
 }
@@ -166,6 +178,9 @@ mod tests {
         let parser = Parser::spawn(&broker, 80, 24, 1000);
         let session = crate::session::Session {
             name: "test".to_string(),
+            pid: None,
+            command: "test".to_string(),
+            client_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             input_tx,
             output_rx: broker.sender(),
             shutdown: ShutdownCoordinator::new(),
@@ -181,8 +196,8 @@ mod tests {
             input_broadcaster: crate::input::InputBroadcaster::new(),
             activity: ActivityTracker::new(),
             focus: crate::input::FocusTracker::new(),
-            is_local: false,
             detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
+            visual_update_tx: tokio::sync::broadcast::channel::<crate::protocol::VisualUpdate>(16).0,
             screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(crate::overlay::ScreenMode::Normal)),
         };
         let registry = crate::session::SessionRegistry::new();
@@ -987,7 +1002,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_server_persist_sets_persistent_mode() {
+    async fn test_server_persist_get_returns_current_state() {
         let state = create_empty_state();
         assert!(!state.server_config.is_persistent());
         let app = router(state.clone(), None);
@@ -995,7 +1010,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .method("POST")
+                    .method("GET")
                     .uri("/server/persist")
                     .body(Body::empty())
                     .unwrap(),
@@ -1004,13 +1019,67 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["persistent"], false);
+        // State unchanged
+        assert!(!state.server_config.is_persistent());
+    }
 
+    #[tokio::test]
+    async fn test_server_persist_put_sets_persistent_on() {
+        let state = create_empty_state();
+        assert!(!state.server_config.is_persistent());
+        let app = router(state.clone(), None);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/server/persist")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"persistent": true}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["persistent"], true);
         assert!(state.server_config.is_persistent());
+    }
+
+    #[tokio::test]
+    async fn test_server_persist_put_sets_persistent_off() {
+        let state = create_empty_state();
+        state.server_config.set_persistent(true);
+        let app = router(state.clone(), None);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/server/persist")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"persistent": false}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["persistent"], false);
+        assert!(!state.server_config.is_persistent());
     }
 
     // ── ServerConfig unit tests ──────────────────────────────────────
@@ -1054,7 +1123,6 @@ mod tests {
                     let is_removal = matches!(
                         event,
                         crate::session::SessionEvent::Destroyed { .. }
-                            | crate::session::SessionEvent::Exited { .. }
                     );
                     if is_removal && !config.is_persistent() && sessions.len() == 0 {
                         return true;
@@ -1071,8 +1139,11 @@ mod tests {
         let config = Arc::new(ServerConfig::new(false)); // ephemeral
         let registry = crate::session::SessionRegistry::new();
 
-        // Start the monitor
+        // Start the monitor and yield so it subscribes to events before
+        // we create any sessions.  (In production the monitor starts at
+        // server boot, well before any sessions exist.)
         let monitor = tokio::spawn(run_ephemeral_monitor(config.clone(), registry.clone()));
+        tokio::task::yield_now().await;
 
         // Create a session via the registry
         let app = router(
@@ -1126,8 +1197,9 @@ mod tests {
         let config = Arc::new(ServerConfig::new(true)); // persistent
         let registry = crate::session::SessionRegistry::new();
 
-        // Start the monitor
+        // Start the monitor and yield so it subscribes before events fire
         let monitor = tokio::spawn(run_ephemeral_monitor(config.clone(), registry.clone()));
+        tokio::task::yield_now().await;
 
         // Create and remove a session
         let app = router(
@@ -1179,8 +1251,9 @@ mod tests {
         let config = Arc::new(ServerConfig::new(false)); // ephemeral
         let registry = crate::session::SessionRegistry::new();
 
-        // Start the monitor
+        // Start the monitor and yield so it subscribes before events fire
         let monitor = tokio::spawn(run_ephemeral_monitor(config.clone(), registry.clone()));
+        tokio::task::yield_now().await;
 
         let app = router(
             AppState {
@@ -1255,9 +1328,10 @@ mod tests {
             .clone()
             .oneshot(
                 Request::builder()
-                    .method("POST")
+                    .method("PUT")
                     .uri("/server/persist")
-                    .body(Body::empty())
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"persistent": true}"#))
                     .unwrap(),
             )
             .await

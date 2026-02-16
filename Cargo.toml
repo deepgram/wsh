@@ -27,6 +27,10 @@ parking_lot = "0.12"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 rust-embed = "8"
 mime_guess = "2"
+rmcp = { version = "0.15", features = ["server", "macros", "transport-io", "transport-streamable-http-server"] }
+schemars = "1.0"
+tokio-util = { version = "0.7", features = ["rt"] }
+libc = "0.2"
 
 [dev-dependencies]
 tower = { version = "0.4", features = ["util"] }
@@ -34,5 +38,5 @@ tokio-tungstenite = "0.24"
 hyper = { version = "1", features = ["full"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "blocking"] }
 tempfile = "3"

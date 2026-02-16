@@ -12,6 +12,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::UnixListener;
 use tracing;
 
+use crate::panel::layout::compute_layout;
 use crate::protocol::*;
 use crate::pty::SpawnCommand;
 use crate::session::{Session, SessionRegistry};
@@ -174,6 +175,7 @@ async fn handle_create_session<S: AsyncRead + AsyncWrite + Unpin>(
     // Send response
     let resp = CreateSessionResponseMsg {
         name: name.clone(),
+        pid: session.pid,
         rows: msg.rows,
         cols: msg.cols,
     };
@@ -182,6 +184,9 @@ async fn handle_create_session<S: AsyncRead + AsyncWrite + Unpin>(
     resp_frame.write_to(stream).await?;
 
     tracing::info!(session = %name, "client created session");
+
+    // Send initial visual state before streaming
+    send_initial_visual_state(stream, &session).await?;
 
     // Enter streaming loop
     run_streaming(stream, &session).await
@@ -218,7 +223,9 @@ async fn handle_attach_session<S: AsyncRead + AsyncWrite + Unpin>(
         tracing::warn!(?e, "failed to resize parser on attach");
     }
 
-    // Build scrollback/screen data for replay
+    // Build scrollback/screen data for replay (using Styled format to
+    // preserve colors and attributes for the reconnecting client).
+    use crate::parser::ansi::line_to_ansi;
     use crate::parser::state::{Format, Query, QueryResponse};
     let scrollback_data = match msg.scrollback {
         ScrollbackRequest::None => Vec::new(),
@@ -228,17 +235,15 @@ async fn handle_attach_session<S: AsyncRead + AsyncWrite + Unpin>(
                 _ => usize::MAX,
             };
             match session.parser.query(Query::Scrollback {
-                format: Format::Plain,
+                format: Format::Styled,
                 offset: 0,
                 limit,
             }).await {
                 Ok(QueryResponse::Scrollback(sb)) => {
                     let mut buf = String::new();
                     for line in &sb.lines {
-                        if let crate::parser::state::FormattedLine::Plain(text) = line {
-                            buf.push_str(text);
-                            buf.push_str("\r\n");
-                        }
+                        buf.push_str(&line_to_ansi(line));
+                        buf.push_str("\r\n");
                     }
                     buf.into_bytes()
                 }
@@ -248,18 +253,16 @@ async fn handle_attach_session<S: AsyncRead + AsyncWrite + Unpin>(
     };
 
     let screen_data = match session.parser.query(Query::Screen {
-        format: Format::Plain,
+        format: Format::Styled,
     }).await {
         Ok(QueryResponse::Screen(screen)) => {
             let mut buf = String::new();
             // Clear screen and home cursor before replaying
             buf.push_str("\x1b[H\x1b[2J");
             for (i, line) in screen.lines.iter().enumerate() {
-                if let crate::parser::state::FormattedLine::Plain(text) = line {
-                    buf.push_str(text);
-                    if i + 1 < screen.lines.len() {
-                        buf.push_str("\r\n");
-                    }
+                buf.push_str(&line_to_ansi(line));
+                if i + 1 < screen.lines.len() {
+                    buf.push_str("\r\n");
                 }
             }
             // Restore cursor position
@@ -279,12 +282,18 @@ async fn handle_attach_session<S: AsyncRead + AsyncWrite + Unpin>(
         cols: msg.cols,
         scrollback: scrollback_data,
         screen: screen_data,
+        input_mode: session.input_mode.get(),
+        screen_mode: *session.screen_mode.read(),
+        focused_id: session.focus.focused(),
     };
     let resp_frame = Frame::control(FrameType::AttachSessionResponse, &resp)
         .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
     resp_frame.write_to(stream).await?;
 
     tracing::info!(session = %msg.name, "client attached to session");
+
+    // Send initial visual state before streaming
+    send_initial_visual_state(stream, &session).await?;
 
     // Enter streaming loop
     run_streaming(stream, &session).await
@@ -297,7 +306,21 @@ async fn handle_list_sessions<S: AsyncRead + AsyncWrite + Unpin>(
 ) -> io::Result<()> {
     let names = sessions.list();
     let resp = ListSessionsResponseMsg {
-        sessions: names.into_iter().map(|name| SessionInfoMsg { name }).collect(),
+        sessions: names
+            .into_iter()
+            .filter_map(|name| {
+                let session = sessions.get(&name)?;
+                let (rows, cols) = session.terminal_size.get();
+                Some(SessionInfoMsg {
+                    name,
+                    pid: session.pid,
+                    command: session.command.clone(),
+                    rows,
+                    cols,
+                    clients: session.clients(),
+                })
+            })
+            .collect(),
     };
     let resp_frame = Frame::control(FrameType::ListSessionsResponse, &resp)
         .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
@@ -368,6 +391,46 @@ async fn handle_detach_session<S: AsyncRead + AsyncWrite + Unpin>(
     }
 }
 
+/// Send initial overlay and panel state to a newly connected client.
+///
+/// Called after sending CreateSessionResponse or AttachSessionResponse,
+/// before entering the streaming loop.
+async fn send_initial_visual_state<S: AsyncWrite + Unpin>(
+    stream: &mut S,
+    session: &Session,
+) -> io::Result<()> {
+    // Filter overlays and panels by the current screen mode so clients
+    // don't receive visuals intended for a different mode (e.g. normal-mode
+    // overlays shouldn't appear while vim has the alternate screen active).
+    let mode = *session.screen_mode.read();
+
+    // Send current overlay state
+    let overlays = session.overlays.list_by_mode(mode);
+    if !overlays.is_empty() {
+        let msg = OverlaySyncMsg { overlays };
+        let frame = Frame::control(FrameType::OverlaySync, &msg)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        frame.write_to(stream).await?;
+    }
+
+    // Send current panel state
+    let panels = session.panels.list_by_mode(mode);
+    if !panels.is_empty() {
+        let (term_rows, term_cols) = session.terminal_size.get();
+        let layout = compute_layout(&panels, term_rows, term_cols);
+        let msg = PanelSyncMsg {
+            panels,
+            scroll_region_top: layout.scroll_region_top,
+            scroll_region_bottom: layout.scroll_region_bottom,
+        };
+        let frame = Frame::control(FrameType::PanelSync, &msg)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        frame.write_to(stream).await?;
+    }
+
+    Ok(())
+}
+
 /// Main streaming loop: proxy I/O between the client and the session.
 ///
 /// - Client → Server: StdinInput frames are forwarded to session.input_tx
@@ -378,6 +441,7 @@ async fn run_streaming<S: AsyncRead + AsyncWrite + Unpin>(
     stream: &mut S,
     session: &Session,
 ) -> io::Result<()> {
+    let _client_guard = session.connect();
     let (mut reader, mut writer) = tokio::io::split(stream);
 
     // Subscribe to session output
@@ -392,6 +456,7 @@ async fn run_streaming<S: AsyncRead + AsyncWrite + Unpin>(
     let input_broadcaster = session.input_broadcaster.clone();
     let focus = session.focus.clone();
     let mut detach_rx = session.detach_signal.subscribe();
+    let mut visual_update_rx = session.visual_update_tx.subscribe();
 
     // Main loop: read from client and session output concurrently
     loop {
@@ -401,6 +466,41 @@ async fn run_streaming<S: AsyncRead + AsyncWrite + Unpin>(
                 let detach_frame = Frame::new(FrameType::Detach, Bytes::new());
                 let _ = detach_frame.write_to(&mut writer).await;
                 break;
+            }
+
+            // Visual state changes → send OverlaySync or PanelSync frame
+            result = visual_update_rx.recv() => {
+                match result {
+                    Ok(VisualUpdate::OverlaysChanged) => {
+                        let mode = *session.screen_mode.read();
+                        let msg = OverlaySyncMsg {
+                            overlays: session.overlays.list_by_mode(mode),
+                        };
+                        if let Ok(frame) = Frame::control(FrameType::OverlaySync, &msg) {
+                            if frame.write_to(&mut writer).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Ok(VisualUpdate::PanelsChanged) => {
+                        let mode = *session.screen_mode.read();
+                        let panels = session.panels.list_by_mode(mode);
+                        let (term_rows, term_cols) = terminal_size.get();
+                        let layout = compute_layout(&panels, term_rows, term_cols);
+                        let msg = PanelSyncMsg {
+                            panels,
+                            scroll_region_top: layout.scroll_region_top,
+                            scroll_region_bottom: layout.scroll_region_bottom,
+                        };
+                        if let Ok(frame) = Frame::control(FrameType::PanelSync, &msg) {
+                            if frame.write_to(&mut writer).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                }
             }
 
             // Output from session → client

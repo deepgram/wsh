@@ -4,26 +4,24 @@
 //!
 //! ## Modes
 //!
-//! **Standalone mode** (default, no subcommand): Spawns a PTY, enters raw mode,
-//! proxies stdin/stdout, and starts an HTTP/WS API server — all in one process.
+//! **Default** (no subcommand): Connects to an existing server (or auto-spawns
+//! an ephemeral one), creates a session, and attaches — acting as a thin
+//! terminal client.
 //!
 //! **Server mode** (`wsh server`): Starts a headless daemon with HTTP/WS and
-//! Unix socket listeners. No PTY is spawned automatically — sessions are created
-//! on demand via the API or Unix socket protocol.
+//! Unix socket listeners. Runs in persistent mode by default (stays alive when
+//! sessions end). Use `--ephemeral` to exit when the last session ends.
 
-use bytes::Bytes;
 use clap::{Parser as ClapParser, Subcommand};
-use std::io::{Read, Write};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use thiserror::Error;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use wsh::{
-    api, client, input, overlay, panel,
+    api, client, protocol,
     protocol::{AttachSessionMsg, ScrollbackRequest},
-    pty::SpawnCommand,
     server,
-    session::{Session, SessionRegistry},
+    session::SessionRegistry,
     shutdown::ShutdownCoordinator,
     terminal,
 };
@@ -83,6 +81,11 @@ enum Commands {
         /// Path to the Unix domain socket
         #[arg(long)]
         socket: Option<PathBuf>,
+
+        /// Run in ephemeral mode (exit when last session ends).
+        /// By default, `wsh server` runs in persistent mode.
+        #[arg(long)]
+        ephemeral: bool,
     },
 
     /// Attach to an existing session on the server
@@ -131,11 +134,33 @@ enum Commands {
         socket: Option<PathBuf>,
     },
 
-    /// Upgrade a running server to persistent mode (it won't shut down when sessions end)
+    /// Query or set server persistence mode.
+    ///
+    /// With no argument, prints the current persistence state.
+    /// `wsh persist on` — server stays alive when all sessions end.
+    /// `wsh persist off` — server exits when the last session ends.
     Persist {
+        /// "on" or "off". Omit to query without changing.
+        value: Option<String>,
+
         /// Address of the HTTP/WebSocket API server
         #[arg(long, default_value = "127.0.0.1:8080")]
         bind: SocketAddr,
+
+        /// Authentication token
+        #[arg(long, env = "WSH_TOKEN")]
+        token: Option<String>,
+    },
+
+    /// Start an MCP server over stdio (for AI hosts like Claude Desktop)
+    Mcp {
+        /// Address to bind the HTTP/WebSocket API server (for auto-spawn)
+        #[arg(long, default_value = "127.0.0.1:8080")]
+        bind: SocketAddr,
+
+        /// Path to the Unix domain socket
+        #[arg(long)]
+        socket: Option<PathBuf>,
 
         /// Authentication token
         #[arg(long, env = "WSH_TOKEN")]
@@ -185,11 +210,17 @@ fn resolve_token(bind: &SocketAddr, user_token: &Option<String>) -> Option<Strin
 async fn main() -> Result<(), WshError> {
     let cli = Cli::parse();
 
-    init_tracing();
+    // MCP mode: tracing must use stderr since stdout is for MCP protocol
+    let is_mcp = matches!(cli.command, Some(Commands::Mcp { .. }));
+    if is_mcp {
+        init_tracing_stderr();
+    } else {
+        init_tracing();
+    }
 
     match cli.command {
-        Some(Commands::Server { bind, token, socket }) => {
-            run_server(bind, token, socket).await
+        Some(Commands::Server { bind, token, socket, ephemeral }) => {
+            run_server(bind, token, socket, ephemeral).await
         }
         Some(Commands::Attach { name, scrollback, socket, alt_screen }) => {
             run_attach(name, scrollback, socket, alt_screen).await
@@ -203,11 +234,14 @@ async fn main() -> Result<(), WshError> {
         Some(Commands::Detach { name, socket }) => {
             run_detach(name, socket).await
         }
-        Some(Commands::Persist { bind, token }) => {
-            run_persist(bind, token).await
+        Some(Commands::Persist { value, bind, token }) => {
+            run_persist(value, bind, token).await
+        }
+        Some(Commands::Mcp { bind, socket, token }) => {
+            run_mcp(bind, socket, token).await
         }
         None => {
-            run_standalone(cli).await
+            run_default(cli).await
         }
     }
 }
@@ -221,6 +255,19 @@ fn init_tracing() {
         .init();
 }
 
+/// Initialize tracing with stderr output.
+///
+/// MCP mode uses stdout for the JSON-RPC protocol, so all tracing MUST go
+/// to stderr to avoid corrupting the protocol stream.
+fn init_tracing_stderr() {
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::new(
+            std::env::var("RUST_LOG").unwrap_or_else(|_| "wsh=info".into()),
+        ))
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
+        .init();
+}
+
 // ── Server mode ────────────────────────────────────────────────────
 
 /// Run the wsh server daemon: HTTP/WS + Unix socket, no local terminal.
@@ -228,6 +275,7 @@ async fn run_server(
     bind: SocketAddr,
     token: Option<String>,
     socket: Option<PathBuf>,
+    ephemeral: bool,
 ) -> Result<(), WshError> {
     tracing::info!("wsh server starting");
 
@@ -236,9 +284,10 @@ async fn run_server(
         tracing::info!("auth token configured");
     }
 
+    let persistent = !ephemeral;
     let sessions = SessionRegistry::new();
     let shutdown = ShutdownCoordinator::new();
-    let server_config = std::sync::Arc::new(api::ServerConfig::new(false));
+    let server_config = std::sync::Arc::new(api::ServerConfig::new(persistent));
     let state = api::AppState {
         sessions: sessions.clone(),
         shutdown: shutdown.clone(),
@@ -263,6 +312,7 @@ async fn run_server(
 
     // Start Unix socket server
     let socket_path = socket.unwrap_or_else(server::default_socket_path);
+    let socket_path_for_cleanup = socket_path.clone();
     let socket_sessions = sessions.clone();
     let socket_handle = tokio::spawn(async move {
         if let Err(e) = server::serve(socket_sessions, &socket_path).await {
@@ -284,7 +334,6 @@ async fn run_server(
                     let is_removal = matches!(
                         event,
                         wsh::session::SessionEvent::Destroyed { .. }
-                            | wsh::session::SessionEvent::Exited { .. }
                     );
                     if is_removal
                         && !config_for_monitor.is_persistent()
@@ -317,6 +366,11 @@ async fn run_server(
         }
     }
 
+    // Signal WebSocket handlers to send close frames
+    shutdown.shutdown();
+    // Give handlers a moment to flush close frames before stopping the server
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
     let _ = server_shutdown_tx.send(());
 
     // Wait for HTTP server to stop
@@ -326,27 +380,297 @@ async fn run_server(
 
     // Clean up
     socket_handle.abort();
+
+    // Remove the socket file so a subsequent server can bind
+    if socket_path_for_cleanup.exists() {
+        let _ = std::fs::remove_file(&socket_path_for_cleanup);
+        tracing::debug!(path = %socket_path_for_cleanup.display(), "removed socket file");
+    }
+
     tracing::info!("wsh server exiting");
     Ok(())
 }
 
-// ── Standalone mode ────────────────────────────────────────────────
+// ── MCP stdio mode ─────────────────────────────────────────────────
 
-/// Run the standalone mode: single session with local terminal I/O.
-async fn run_standalone(cli: Cli) -> Result<(), WshError> {
-    tracing::info!("wsh starting");
+/// Run the MCP stdio bridge: connect to (or spawn) a server, then bridge
+/// stdin/stdout JSON-RPC ↔ the server's `/mcp` Streamable HTTP endpoint.
+async fn run_mcp(
+    bind: SocketAddr,
+    socket: Option<PathBuf>,
+    token: Option<String>,
+) -> Result<(), WshError> {
+    tracing::info!("wsh mcp stdio bridge starting");
 
-    let token = resolve_token(&cli.bind, &cli.token);
-    if token.is_some() {
-        tracing::info!("auth token configured");
+    let socket_path = socket.unwrap_or_else(server::default_socket_path);
+
+    // Connect to existing server or spawn one
+    match client::Client::connect(&socket_path).await {
+        Ok(_) => {
+            tracing::debug!("connected to existing server");
+        }
+        Err(_) => {
+            tracing::debug!("no server running, spawning daemon");
+            spawn_server_daemon(&socket_path, &bind, token.as_deref())?;
+            wait_for_socket(&socket_path).await?;
+        }
     }
 
-    // Enable raw mode so we receive all keystrokes (including Ctrl+C, etc.)
+    let mcp_url = format!("http://{}/mcp", bind);
+    let http_client = reqwest::Client::new();
+    let mut session_id: Option<String> = None;
+
+    let stdin = tokio::io::stdin();
+    let mut reader = tokio::io::BufReader::new(stdin);
+    let mut stdout = tokio::io::stdout();
+
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = tokio::io::AsyncBufReadExt::read_line(&mut reader, &mut line)
+            .await
+            .map_err(WshError::Io)?;
+        if n == 0 {
+            // EOF on stdin
+            break;
+        }
+
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        // Build HTTP request
+        let mut req = http_client
+            .post(&mcp_url)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json, text/event-stream");
+
+        if let Some(ref sid) = session_id {
+            req = req.header("Mcp-Session-Id", sid);
+        }
+        if let Some(ref t) = token {
+            req = req.bearer_auth(t);
+        }
+
+        req = req.body(trimmed.to_string());
+
+        let resp = match req.send().await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!(?e, "HTTP request to /mcp failed");
+                // Write a JSON-RPC error to stdout
+                let err_json = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "error": {
+                        "code": -32603,
+                        "message": format!("HTTP request failed: {e}")
+                    },
+                    "id": null
+                });
+                let err_line = format!("{}\n", err_json);
+                tokio::io::AsyncWriteExt::write_all(&mut stdout, err_line.as_bytes())
+                    .await
+                    .map_err(WshError::Io)?;
+                tokio::io::AsyncWriteExt::flush(&mut stdout)
+                    .await
+                    .map_err(WshError::Io)?;
+                continue;
+            }
+        };
+
+        // Capture headers before consuming the body
+        let content_type = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+
+        // Capture mcp-session-id from response headers
+        if let Some(sid) = resp.headers().get("mcp-session-id") {
+            if let Ok(s) = sid.to_str() {
+                session_id = Some(s.to_string());
+            }
+        }
+
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+
+        if !status.is_success() && !status.is_informational() {
+            tracing::warn!(status = %status, "MCP endpoint returned error");
+            // Try to pass through the body as-is (it may be a JSON-RPC error)
+            if !body.trim().is_empty() {
+                let out_line = format!("{}\n", body.trim());
+                tokio::io::AsyncWriteExt::write_all(&mut stdout, out_line.as_bytes())
+                    .await
+                    .map_err(WshError::Io)?;
+                tokio::io::AsyncWriteExt::flush(&mut stdout)
+                    .await
+                    .map_err(WshError::Io)?;
+            }
+            continue;
+        }
+
+        // Parse SSE response: look for `data:` lines in event-stream format
+        // The response may be plain JSON or SSE depending on content type
+        if content_type.contains("text/event-stream") || body.contains("data:") {
+            // Parse as SSE
+            for event in body.split("\n\n") {
+                let event = event.trim();
+                if event.is_empty() {
+                    continue;
+                }
+                for event_line in event.lines() {
+                    if let Some(data) = event_line.strip_prefix("data:") {
+                        let json_str = data.trim();
+                        if !json_str.is_empty() {
+                            let out_line = format!("{}\n", json_str);
+                            tokio::io::AsyncWriteExt::write_all(
+                                &mut stdout,
+                                out_line.as_bytes(),
+                            )
+                            .await
+                            .map_err(WshError::Io)?;
+                        }
+                    }
+                }
+            }
+        } else {
+            // Plain JSON response
+            let trimmed_body = body.trim();
+            if !trimmed_body.is_empty() {
+                let out_line = format!("{}\n", trimmed_body);
+                tokio::io::AsyncWriteExt::write_all(&mut stdout, out_line.as_bytes())
+                    .await
+                    .map_err(WshError::Io)?;
+            }
+        }
+        tokio::io::AsyncWriteExt::flush(&mut stdout)
+            .await
+            .map_err(WshError::Io)?;
+    }
+
+    tracing::info!("wsh mcp stdio bridge exiting");
+    Ok(())
+}
+
+// ── Default mode (no subcommand) ───────────────────────────────────
+
+/// Spawn a wsh server daemon as a background process.
+///
+/// The spawned server runs in ephemeral mode (exits when last session ends).
+fn spawn_server_daemon(
+    socket_path: &std::path::Path,
+    bind: &SocketAddr,
+    token: Option<&str>,
+) -> Result<(), WshError> {
+    let exe = std::env::current_exe().map_err(WshError::Io)?;
+    let mut cmd = std::process::Command::new(exe);
+    cmd.arg("server")
+        .arg("--ephemeral")
+        .arg("--bind")
+        .arg(bind.to_string())
+        .arg("--socket")
+        .arg(socket_path);
+
+    if let Some(t) = token {
+        cmd.arg("--token").arg(t);
+    }
+
+    // Detach from parent: redirect stdio, start new session
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+
+    // On Unix, create a new process group so the server survives if the
+    // parent exits.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+
+    cmd.spawn().map_err(WshError::Io)?;
+    tracing::debug!("spawned wsh server daemon");
+    Ok(())
+}
+
+/// Wait for the Unix socket to become connectable.
+async fn wait_for_socket(socket_path: &std::path::Path) -> Result<(), WshError> {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if tokio::time::Instant::now() > deadline {
+            return Err(WshError::Io(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!(
+                    "timed out waiting for server socket at {}",
+                    socket_path.display()
+                ),
+            )));
+        }
+        match client::Client::connect(socket_path).await {
+            Ok(_) => return Ok(()),
+            Err(_) => {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        }
+    }
+}
+
+/// Run the default mode (no subcommand): connect to (or spawn) a server, then attach.
+async fn run_default(cli: Cli) -> Result<(), WshError> {
+    tracing::info!("wsh starting");
+
+    let socket_path = server::default_socket_path();
+
+    // Try connecting to an existing server; if none, spawn one
+    let mut c = match client::Client::connect(&socket_path).await {
+        Ok(c) => {
+            tracing::debug!("connected to existing server");
+            c
+        }
+        Err(_) => {
+            tracing::debug!("no server running, spawning daemon");
+            spawn_server_daemon(&socket_path, &cli.bind, None)?;
+            wait_for_socket(&socket_path).await?;
+            client::Client::connect(&socket_path).await.map_err(|e| {
+                eprintln!("wsh: failed to connect to server after spawn: {}", e);
+                WshError::Io(e)
+            })?
+        }
+    };
+
+    let (rows, cols) = terminal::terminal_size().unwrap_or((24, 80));
+    tracing::debug!(rows, cols, "terminal size");
+
+    // Determine what command to pass to the server
+    let command = match &cli.cmd {
+        Some(cmd) => Some(cmd.clone()),
+        None => cli.shell.clone(),
+    };
+
+    let msg = protocol::CreateSessionMsg {
+        name: cli.name.clone(),
+        command,
+        cwd: None,
+        env: None,
+        rows,
+        cols,
+    };
+
+    let resp = c.create_session(msg).await.map_err(|e| {
+        eprintln!("wsh: failed to create session: {}", e);
+        WshError::Io(e)
+    })?;
+
+    tracing::info!(session = %resp.name, "session created");
+
+    // Enter raw mode for the local terminal
     let raw_guard = terminal::RawModeGuard::new()?;
 
     // Clear the screen (or enter alternate screen) so the local view
-    // matches the API output — the first line of session output appears
-    // at the top of the terminal.
+    // starts clean.
     let screen_mode = if cli.alt_screen {
         terminal::ScreenMode::AltScreen
     } else {
@@ -354,142 +678,21 @@ async fn run_standalone(cli: Cli) -> Result<(), WshError> {
     };
     let screen_guard = terminal::ScreenGuard::new(screen_mode)?;
 
-    let (rows, cols) = terminal::terminal_size().unwrap_or((24, 80));
-    tracing::debug!(rows, cols, "terminal size");
+    // Enter the streaming I/O loop
+    let result = c.run_streaming().await;
 
-    // Determine what command to spawn
-    let spawn_cmd = match &cli.cmd {
-        Some(cmd) => SpawnCommand::Command {
-            command: cmd.clone(),
-            interactive: cli.interactive,
-        },
-        None => SpawnCommand::Shell {
-            interactive: cli.interactive,
-            shell: cli.shell.clone(),
-        },
-    };
-
-    let session_name = cli.name.unwrap_or_else(|| "default".to_string());
-
-    // Spawn the session
-    let (mut session, child_exit_rx) =
-        Session::spawn(session_name.clone(), spawn_cmd, rows, cols)?;
-    session.is_local = true;
-    tracing::debug!("session spawned");
-
-    // Subscribe to session output for local terminal display
-    let mut output_sub = session.output_rx.subscribe();
-    let overlays_for_display = session.overlays.clone();
-    tokio::spawn(async move {
-        let mut stdout = std::io::stdout();
-        while let Ok(data) = output_sub.recv().await {
-            let overlay_list = overlays_for_display.list();
-            if !overlay_list.is_empty() {
-                let erase = overlay::erase_all_overlays(&overlay_list);
-                let render = overlay::render_all_overlays(&overlay_list);
-                let _ = stdout.write_all(overlay::begin_sync().as_bytes());
-                let _ = stdout.write_all(erase.as_bytes());
-                let _ = stdout.write_all(&data);
-                let _ = stdout.write_all(render.as_bytes());
-                let _ = stdout.write_all(overlay::end_sync().as_bytes());
-            } else {
-                let _ = stdout.write_all(&data);
-            }
-            let _ = stdout.flush();
-        }
-    });
-
-    // Register session in registry
-    let sessions = SessionRegistry::new();
-    sessions
-        .insert(Some(session_name), session.clone())
-        .unwrap();
-
-    let shutdown = ShutdownCoordinator::new();
-    let server_config = std::sync::Arc::new(api::ServerConfig::new(false));
-    let state = api::AppState {
-        sessions,
-        shutdown: shutdown.clone(),
-        server_config,
-    };
-
-    // Start API server
-    let app = api::router(state, token);
-    tracing::info!(addr = %cli.bind, "API server listening");
-
-    let (server_shutdown_tx, server_shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-    let bind_addr = cli.bind;
-    let server_handle = tokio::spawn(async move {
-        let listener = tokio::net::TcpListener::bind(bind_addr).await.unwrap();
-        axum::serve(listener, app)
-            .with_graceful_shutdown(async {
-                server_shutdown_rx.await.ok();
-            })
-            .await
-            .unwrap();
-    });
-
-    // Spawn stdin reader
-    spawn_stdin_reader(
-        session.input_tx.clone(),
-        session.input_mode.clone(),
-        session.input_broadcaster.clone(),
-        session.activity.clone(),
-        session.focus.clone(),
-    );
-
-    // SIGWINCH handler
-    {
-        let panels = session.panels.clone();
-        let terminal_size = session.terminal_size.clone();
-        let pty = session.pty.clone();
-        let parser = session.parser.clone();
-        tokio::spawn(async move {
-            use tokio::signal::unix::{signal, SignalKind};
-            let mut sigwinch =
-                signal(SignalKind::window_change()).expect("failed to install SIGWINCH handler");
-            loop {
-                sigwinch.recv().await;
-                let (new_rows, new_cols) = terminal::terminal_size()
-                    .unwrap_or((terminal_size.get().0, terminal_size.get().1));
-                tracing::debug!(new_rows, new_cols, "SIGWINCH received");
-                terminal_size.set(new_rows, new_cols);
-
-                if panels.list().is_empty() {
-                    if let Err(e) = pty.resize(new_rows, new_cols) {
-                        tracing::error!(?e, "failed to resize PTY on SIGWINCH");
-                    }
-                    if let Err(e) = parser.resize(new_cols as usize, new_rows as usize).await {
-                        tracing::error!(?e, "failed to resize parser on SIGWINCH");
-                    }
-                } else {
-                    panel::reconfigure_layout(&panels, &terminal_size, &pty, &parser).await;
-                }
-            }
-        });
-    }
-
-    // Wait for exit
-    wait_for_exit(child_exit_rx).await;
-
-    // Graceful shutdown
-    let active = shutdown.active_count();
-    if active > 0 {
-        tracing::info!(active, "signaling clients to disconnect");
-        shutdown.shutdown();
-        shutdown.wait_for_all_closed().await;
-        tracing::debug!("all clients disconnected");
-    }
-
-    let _ = server_shutdown_tx.send(());
-    if let Err(e) = server_handle.await {
-        tracing::warn!(?e, "server task panicked");
-    }
-
-    tracing::info!("wsh exiting");
+    // Restore terminal
     drop(screen_guard);
     drop(raw_guard);
-    std::process::exit(0)
+
+    if let Err(e) = result {
+        eprintln!("wsh: streaming error: {}", e);
+        return Err(WshError::Io(e));
+    }
+
+    eprintln!("[detached from session '{}']", resp.name);
+    tracing::info!("wsh exiting");
+    Ok(())
 }
 
 // ── Client subcommands ─────────────────────────────────────────────
@@ -570,6 +773,7 @@ async fn run_attach(
         return Err(WshError::Io(e));
     }
 
+    eprintln!("[detached from session '{}']", resp.name);
     Ok(())
 }
 
@@ -598,9 +802,20 @@ async fn run_list(socket: Option<PathBuf>) -> Result<(), WshError> {
     if sessions.is_empty() {
         println!("No active sessions.");
     } else {
-        println!("{:<20}", "NAME");
+        println!(
+            "{:<20} {:<8} {:<20} {:<12} {}",
+            "NAME", "PID", "COMMAND", "SIZE", "CLIENTS"
+        );
         for s in &sessions {
-            println!("{:<20}", s.name);
+            let pid_str = match s.pid {
+                Some(pid) => pid.to_string(),
+                None => "-".to_string(),
+            };
+            let size = format!("{}x{}", s.cols, s.rows);
+            println!(
+                "{:<20} {:<8} {:<20} {:<12} {}",
+                s.name, pid_str, s.command, size, s.clients
+            );
         }
     }
 
@@ -653,23 +868,61 @@ async fn run_detach(name: String, socket: Option<PathBuf>) -> Result<(), WshErro
     Ok(())
 }
 
-async fn run_persist(bind: SocketAddr, token: Option<String>) -> Result<(), WshError> {
+async fn run_persist(
+    value: Option<String>,
+    bind: SocketAddr,
+    token: Option<String>,
+) -> Result<(), WshError> {
     let url = format!("http://{}/server/persist", bind);
     let client = reqwest::Client::new();
-    let mut req = client.post(&url);
-    if let Some(t) = &token {
-        req = req.bearer_auth(t);
-    }
 
-    let resp = match req.send().await {
-        Ok(r) => r,
-        Err(e) => {
-            if e.is_connect() {
-                eprintln!("wsh persist: could not connect to wsh server at {} — is the server running?", bind);
-            } else {
-                eprintln!("wsh persist: {}", e);
-            }
+    // Determine whether to GET (query) or PUT (set)
+    let persistent_value = match value.as_deref() {
+        None => None,
+        Some("on") => Some(true),
+        Some("off") => Some(false),
+        Some(other) => {
+            eprintln!("wsh persist: expected 'on' or 'off', got '{}'", other);
             std::process::exit(1);
+        }
+    };
+
+    let resp = match persistent_value {
+        None => {
+            // Query current state
+            let mut req = client.get(&url);
+            if let Some(t) = &token {
+                req = req.bearer_auth(t);
+            }
+            match req.send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    if e.is_connect() {
+                        eprintln!("wsh persist: could not connect to wsh server at {} — is the server running?", bind);
+                    } else {
+                        eprintln!("wsh persist: {}", e);
+                    }
+                    std::process::exit(1);
+                }
+            }
+        }
+        Some(val) => {
+            // Set new state
+            let mut req = client.put(&url).json(&serde_json::json!({"persistent": val}));
+            if let Some(t) = &token {
+                req = req.bearer_auth(t);
+            }
+            match req.send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    if e.is_connect() {
+                        eprintln!("wsh persist: could not connect to wsh server at {} — is the server running?", bind);
+                    } else {
+                        eprintln!("wsh persist: {}", e);
+                    }
+                    std::process::exit(1);
+                }
+            }
         }
     };
 
@@ -678,72 +931,13 @@ async fn run_persist(bind: SocketAddr, token: Option<String>) -> Result<(), WshE
         std::process::exit(1);
     }
 
-    println!("Server upgraded to persistent mode.");
+    let body: serde_json::Value = resp.json().await.unwrap_or_default();
+    let is_persistent = body["persistent"].as_bool().unwrap_or(false);
+    if is_persistent {
+        println!("Server is in persistent mode (will stay alive when sessions end).");
+    } else {
+        println!("Server is in ephemeral mode (will exit when last session ends).");
+    }
     Ok(())
 }
 
-// ── Helpers ────────────────────────────────────────────────────────
-
-/// Spawn the stdin reader task.
-fn spawn_stdin_reader(
-    input_tx: tokio::sync::mpsc::Sender<Bytes>,
-    input_mode: input::InputMode,
-    input_broadcaster: input::InputBroadcaster,
-    activity: wsh::activity::ActivityTracker,
-    focus: input::FocusTracker,
-) {
-    tokio::task::spawn_blocking(move || {
-        let mut stdin = std::io::stdin();
-        let mut buf = [0u8; 1024];
-
-        loop {
-            match stdin.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => {
-                    let data = &buf[..n];
-                    let mode = input_mode.get();
-
-                    let target = focus.focused();
-                    input_broadcaster.broadcast_input(data, mode, target);
-                    activity.touch();
-
-                    // Ctrl+\ toggles input capture; never forwarded to PTY
-                    if input::is_ctrl_backslash(data) {
-                        let new_mode = input_mode.toggle();
-                        input_broadcaster.broadcast_mode(new_mode);
-                        tracing::debug!("Ctrl+\\ pressed, toggled to {new_mode:?} mode");
-                        continue;
-                    }
-
-                    if mode == input::Mode::Capture {
-                        continue;
-                    }
-
-                    if input_tx.blocking_send(Bytes::copy_from_slice(data)).is_err() {
-                        break;
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-    });
-}
-
-/// Wait for an exit condition: child exit or Ctrl+C.
-async fn wait_for_exit(child_exit_rx: tokio::sync::oneshot::Receiver<()>) {
-    let shutdown = async {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("failed to install Ctrl+C handler");
-        tracing::info!("received Ctrl+C");
-    };
-
-    tokio::select! {
-        _ = child_exit_rx => {
-            tracing::debug!("child process exited");
-        }
-        _ = shutdown => {
-            tracing::debug!("shutdown signal");
-        }
-    }
-}

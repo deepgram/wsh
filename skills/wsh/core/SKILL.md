@@ -21,11 +21,17 @@ and **a voice** (overlays and panels to communicate with the human).
 
 ## How It Works
 
-wsh wraps a shell in a PTY and exposes everything over an HTTP API
-at `http://localhost:8080`. The human sees their normal terminal. You
-see a programmatic interface to the same session. Everything is
-synchronized — input you send appears on their screen, output they
-generate appears in your API calls.
+wsh manages terminal sessions via a server daemon and exposes
+everything over an HTTP API at `http://localhost:8080`. The human
+sees their normal terminal. You see a programmatic interface to
+the same session. Everything is synchronized — input you send
+appears on their screen, output they generate appears in your
+API calls. All endpoints are scoped to a session via
+`/sessions/:name/` prefix (e.g., `/sessions/default/input`).
+
+> **MCP also available:** wsh is also accessible as an MCP server (14 tools,
+> 3 resources, 9 prompts) via Streamable HTTP at `/mcp` or the `wsh mcp` stdio
+> bridge. See the `wsh:core-mcp` prompt for MCP-specific guidance.
 
 ## The Fundamental Loop
 
@@ -47,12 +53,12 @@ These are the building blocks. Every specialized skill builds on these.
 Inject keystrokes into the terminal. Supports raw bytes — use
 bash `$'...'` quoting for control characters.
 
-    curl -s -X POST http://localhost:8080/input -d 'ls -la'
-    curl -s -X POST http://localhost:8080/input -d $'ls -la\n'
-    curl -s -X POST http://localhost:8080/input -d $'\x03'        # Ctrl+C
-    curl -s -X POST http://localhost:8080/input -d $'\x1b'        # Escape
-    curl -s -X POST http://localhost:8080/input -d $'\x1b[A'      # Arrow Up
-    curl -s -X POST http://localhost:8080/input -d $'\t'          # Tab
+    curl -s -X POST http://localhost:8080/sessions/default/input -d 'ls -la'
+    curl -s -X POST http://localhost:8080/sessions/default/input -d $'ls -la\n'
+    curl -s -X POST http://localhost:8080/sessions/default/input -d $'\x03'        # Ctrl+C
+    curl -s -X POST http://localhost:8080/sessions/default/input -d $'\x1b'        # Escape
+    curl -s -X POST http://localhost:8080/sessions/default/input -d $'\x1b[A'      # Arrow Up
+    curl -s -X POST http://localhost:8080/sessions/default/input -d $'\t'          # Tab
 
 Returns 204 (no content) on success.
 
@@ -61,7 +67,7 @@ Block until the terminal has been idle for `timeout_ms` milliseconds.
 This is a hint that the program may be idle — it could also just be
 working without producing output.
 
-    curl -s http://localhost:8080/quiesce?timeout_ms=2000
+    curl -s http://localhost:8080/sessions/default/quiesce?timeout_ms=2000
 
 Returns the current screen snapshot plus a `generation` counter once
 idle. Returns 408 if the terminal doesn't settle within 30 seconds
@@ -70,18 +76,18 @@ idle. Returns 408 if the terminal doesn't settle within 30 seconds
 When polling repeatedly, pass back the `generation` from the previous
 response as `last_generation` to avoid busy-loop storms:
 
-    curl -s 'http://localhost:8080/quiesce?timeout_ms=2000&last_generation=42'
+    curl -s 'http://localhost:8080/sessions/default/quiesce?timeout_ms=2000&last_generation=42'
 
 Or use `fresh=true` to always observe real silence (simpler, but
 always waits at least `timeout_ms`):
 
-    curl -s 'http://localhost:8080/quiesce?timeout_ms=2000&fresh=true'
+    curl -s 'http://localhost:8080/sessions/default/quiesce?timeout_ms=2000&fresh=true'
 
 ### Read the Screen
 Get the current visible screen contents.
 
-    curl -s http://localhost:8080/screen?format=plain
-    curl -s http://localhost:8080/screen?format=styled
+    curl -s http://localhost:8080/sessions/default/screen?format=plain
+    curl -s http://localhost:8080/sessions/default/screen?format=styled
 
 `plain` returns simple text lines. `styled` returns spans with
 color and formatting attributes.
@@ -89,7 +95,7 @@ color and formatting attributes.
 ### Read Scrollback
 Get historical output that has scrolled off screen.
 
-    curl -s http://localhost:8080/scrollback?format=plain&offset=0&limit=100
+    curl -s http://localhost:8080/sessions/default/scrollback?format=plain&offset=0&limit=100
 
 Use `offset` and `limit` to page through history.
 
@@ -102,7 +108,7 @@ Verify wsh is running.
 For monitoring and input capture, you need real-time event
 streaming. Connect to the JSON WebSocket:
 
-    websocat ws://localhost:8080/ws/json
+    websocat ws://localhost:8080/sessions/default/ws/json
 
 After connecting, subscribe to the events you care about:
 
@@ -123,9 +129,9 @@ The server pushes events as they happen. It also sends
 periodic `sync` snapshots when the terminal goes quiet
 (controlled by `quiesce_ms`).
 
-For per-session WebSocket in server mode:
+For a different session, replace `default` with the session name:
 
-    websocat ws://localhost:8080/sessions/:name/ws/json
+    websocat ws://localhost:8080/sessions/build/ws/json
 
 You can also send requests over the WebSocket instead of
 HTTP — `get_screen`, `send_input`, `capture_input`,
@@ -140,19 +146,19 @@ Floating text positioned on top of terminal content. They don't
 affect the terminal — they're a layer on top.
 
     # Create an overlay at position (0, 0) with explicit size
-    curl -s -X POST http://localhost:8080/overlay \
+    curl -s -X POST http://localhost:8080/sessions/default/overlay \
       -H "Content-Type: application/json" \
       -d '{"x": 0, "y": 0, "width": 20, "height": 1,
            "spans": [{"text": "Hello!", "bold": true}]}'
 
     # Returns {"id": "uuid"} — use this to update or delete it
-    curl -s -X DELETE http://localhost:8080/overlay/{id}
-    curl -s -X DELETE http://localhost:8080/overlay          # clear all
+    curl -s -X DELETE http://localhost:8080/sessions/default/overlay/{id}
+    curl -s -X DELETE http://localhost:8080/sessions/default/overlay          # clear all
 
 **Opaque overlays:** Add `background` to fill the rectangle with a
 solid color, making it a window-like element:
 
-    curl -s -X POST http://localhost:8080/overlay \
+    curl -s -X POST http://localhost:8080/sessions/default/overlay \
       -H "Content-Type: application/json" \
       -d '{"x": 10, "y": 5, "width": 40, "height": 10,
            "background": {"bg": "black"},
@@ -163,7 +169,7 @@ Background accepts named colors (`"bg": "blue"`) or RGB
 
 **Named spans:** Give spans an `id` for targeted updates:
 
-    curl -s -X POST http://localhost:8080/overlay \
+    curl -s -X POST http://localhost:8080/sessions/default/overlay \
       -H "Content-Type: application/json" \
       -d '{"x": 0, "y": 0, "width": 30, "height": 1,
            "spans": [
@@ -172,13 +178,13 @@ Background accepts named colors (`"bg": "blue"`) or RGB
           ]}'
 
     # Update named spans by id (POST with array of span updates)
-    curl -s -X POST http://localhost:8080/overlay/{id}/spans \
+    curl -s -X POST http://localhost:8080/sessions/default/overlay/{id}/spans \
       -H "Content-Type: application/json" \
       -d '{"spans": [{"id": "value", "text": "stopped", "fg": "red"}]}'
 
 **Region writes:** Place styled text at specific (row, col) offsets:
 
-    curl -s -X POST http://localhost:8080/overlay/{id}/write \
+    curl -s -X POST http://localhost:8080/sessions/default/overlay/{id}/write \
       -H "Content-Type: application/json" \
       -d '{"writes": [{"row": 2, "col": 5, "text": "Hello", "bold": true}]}'
 
@@ -195,13 +201,13 @@ Agent-owned screen regions at the top or bottom of the terminal.
 Unlike overlays, panels **shrink the PTY** — they carve out
 dedicated space.
 
-    curl -s -X POST http://localhost:8080/panel \
+    curl -s -X POST http://localhost:8080/sessions/default/panel \
       -H "Content-Type: application/json" \
       -d '{"position": "bottom", "height": 3, "spans": [{"text": "Status: running"}]}'
 
 **Background:** Add `background` to fill the panel with a solid color:
 
-    curl -s -X POST http://localhost:8080/panel \
+    curl -s -X POST http://localhost:8080/sessions/default/panel \
       -H "Content-Type: application/json" \
       -d '{"position": "bottom", "height": 2,
            "background": {"bg": "blue"},
@@ -210,13 +216,13 @@ dedicated space.
 **Named spans:** Same as overlays — give spans an `id` for targeted
 updates via POST with an array of span updates:
 
-    curl -s -X POST http://localhost:8080/panel/{id}/spans \
+    curl -s -X POST http://localhost:8080/sessions/default/panel/{id}/spans \
       -H "Content-Type: application/json" \
       -d '{"spans": [{"id": "status", "text": "3 errors", "fg": "red"}]}'
 
 **Region writes:** Place text at specific (row, col) offsets:
 
-    curl -s -X POST http://localhost:8080/panel/{id}/write \
+    curl -s -X POST http://localhost:8080/sessions/default/panel/{id}/write \
       -H "Content-Type: application/json" \
       -d '{"writes": [{"row": 0, "col": 10, "text": "updated", "bold": true}]}'
 
@@ -230,8 +236,8 @@ real estate.
 ### Input Capture
 Intercept keyboard input so it comes to you instead of the shell.
 
-    curl -s -X POST http://localhost:8080/input/capture    # grab input
-    curl -s -X POST http://localhost:8080/input/release    # release back
+    curl -s -X POST http://localhost:8080/sessions/default/input/capture    # grab input
+    curl -s -X POST http://localhost:8080/sessions/default/input/release    # release back
 
 While captured, keystrokes are available via WebSocket subscription
 instead of going to the PTY. The human can press Ctrl+\ to toggle
@@ -240,12 +246,12 @@ capture mode (it switches between passthrough and capture).
 **Focus routing:** Direct captured input to a specific focusable
 overlay or panel. At most one element has focus at a time.
 
-    curl -s -X POST http://localhost:8080/input/focus \
+    curl -s -X POST http://localhost:8080/sessions/default/input/focus \
       -H "Content-Type: application/json" \
       -d '{"id": "overlay-uuid"}'
 
-    curl -s http://localhost:8080/input/focus               # get current focus
-    curl -s -X POST http://localhost:8080/input/unfocus     # clear focus
+    curl -s http://localhost:8080/sessions/default/input/focus               # get current focus
+    curl -s -X POST http://localhost:8080/sessions/default/input/unfocus     # clear focus
 
 Focus is automatically cleared when input is released or when the
 focused element is deleted.
@@ -258,9 +264,9 @@ Enter a separate screen mode where you can create a completely
 independent set of overlays and panels. Exiting cleans up everything
 automatically.
 
-    curl -s http://localhost:8080/screen_mode                  # get current mode
-    curl -s -X POST http://localhost:8080/screen_mode/enter_alt  # enter alt screen
-    curl -s -X POST http://localhost:8080/screen_mode/exit_alt   # exit alt screen
+    curl -s http://localhost:8080/sessions/default/screen_mode                  # get current mode
+    curl -s -X POST http://localhost:8080/sessions/default/screen_mode/enter_alt  # enter alt screen
+    curl -s -X POST http://localhost:8080/sessions/default/screen_mode/exit_alt   # exit alt screen
 
 Overlays and panels are automatically tagged with the screen mode
 active at the time of creation. List endpoints return only elements
@@ -272,14 +278,10 @@ Use alt screen mode for: temporary full-screen agent UIs, setup
 wizards, immersive dashboards — anything that needs a clean canvas
 and should leave no trace when done.
 
-## Server Mode
+## Session Management
 
-wsh can run as a headless daemon managing multiple sessions. This
-unlocks parallel workflows — run several processes simultaneously,
-each in its own terminal session.
-
-### Checking for Server Mode
-If wsh is running in server mode, the sessions endpoint is available:
+wsh always runs as a server daemon managing sessions. The sessions
+endpoint is always available:
 
     curl -s http://localhost:8080/sessions
 
@@ -302,9 +304,9 @@ as a prefix:
 Overlays, panels, and input capture are also per-session.
 
 ### Wait for Quiescence on Any Session
-In server mode, you can race quiescence across all sessions:
+You can race quiescence across all sessions:
 
-    curl -s 'http://localhost:8080/quiesce?timeout_ms=2000&format=plain'
+    curl -s 'http://localhost:8080/sessions/default/quiesce?timeout_ms=2000&format=plain'
 
 Returns the first session to become quiescent, including its name:
 
@@ -313,7 +315,7 @@ Returns the first session to become quiescent, including its name:
 To avoid re-returning the same session, pass `last_session` and
 `last_generation` from the previous response:
 
-    curl -s 'http://localhost:8080/quiesce?timeout_ms=2000&last_session=build&last_generation=7'
+    curl -s 'http://localhost:8080/sessions/default/quiesce?timeout_ms=2000&last_session=build&last_generation=7'
 
 Returns 404 (`no_sessions`) if no sessions exist. Returns 408 if no
 session settles within `max_wait_ms`.
@@ -327,10 +329,11 @@ session settles within `max_wait_ms`.
       -d '{"name": "build-v2"}'                         # rename
     curl -s -X DELETE http://localhost:8080/sessions/build  # kill
 
-### Standalone Mode
-When wsh is running in standalone mode (the default), there is a
-single implicit session. Use the unprefixed endpoints — no session
-name needed.
+### Default Session
+When wsh is started with `wsh` (no arguments), it auto-spawns a
+server daemon and creates a session named `default`. Use
+`/sessions/default/` prefix for all endpoints. If started with
+`--name`, the session has that name instead.
 
 ## Specialized Skills
 

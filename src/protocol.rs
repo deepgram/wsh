@@ -31,6 +31,10 @@ pub enum FrameType {
     // Data frames (raw bytes payload)
     PtyOutput = 0x10,
     StdinInput = 0x11,
+
+    // Visual state sync frames (JSON payload, server → client)
+    OverlaySync = 0x12,
+    PanelSync = 0x13,
 }
 
 impl FrameType {
@@ -51,6 +55,8 @@ impl FrameType {
             0x0D => Some(Self::DetachSessionResponse),
             0x10 => Some(Self::PtyOutput),
             0x11 => Some(Self::StdinInput),
+            0x12 => Some(Self::OverlaySync),
+            0x13 => Some(Self::PanelSync),
             _ => None,
         }
     }
@@ -193,6 +199,7 @@ pub struct CreateSessionMsg {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateSessionResponseMsg {
     pub name: String,
+    pub pid: Option<u32>,
     pub rows: u16,
     pub cols: u16,
 }
@@ -227,6 +234,15 @@ pub struct AttachSessionResponseMsg {
     /// Raw terminal bytes for current screen state (base64-encoded in JSON).
     #[serde(with = "base64_bytes")]
     pub screen: Vec<u8>,
+    /// Current input routing mode (passthrough or capture).
+    #[serde(default)]
+    pub input_mode: crate::input::mode::Mode,
+    /// Current screen mode (normal or alt).
+    #[serde(default)]
+    pub screen_mode: crate::overlay::ScreenMode,
+    /// ID of the currently focused overlay/panel, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focused_id: Option<String>,
 }
 
 /// Client → Server: resize notification.
@@ -257,6 +273,11 @@ pub struct ListSessionsResponseMsg {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionInfoMsg {
     pub name: String,
+    pub pid: Option<u32>,
+    pub command: String,
+    pub rows: u16,
+    pub cols: u16,
+    pub clients: usize,
 }
 
 /// Client → Server: request to kill (destroy) a session.
@@ -281,6 +302,32 @@ pub struct DetachSessionMsg {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DetachSessionResponseMsg {
     pub name: String,
+}
+
+/// Server → Client: full overlay state sync.
+///
+/// Sent when any overlay changes, contains ALL current overlays.
+/// Full-state sync is simpler than delta updates and overlay counts are small.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OverlaySyncMsg {
+    pub overlays: Vec<crate::overlay::Overlay>,
+}
+
+/// Server → Client: full panel state sync.
+///
+/// Sent when any panel changes, contains ALL current panels plus layout info.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PanelSyncMsg {
+    pub panels: Vec<crate::panel::Panel>,
+    pub scroll_region_top: u16,
+    pub scroll_region_bottom: u16,
+}
+
+/// Visual state change notification (internal, not a wire type).
+#[derive(Debug, Clone)]
+pub enum VisualUpdate {
+    OverlaysChanged,
+    PanelsChanged,
 }
 
 /// Serde helper for base64-encoded byte vectors in JSON.
@@ -323,6 +370,8 @@ mod tests {
             FrameType::DetachSessionResponse,
             FrameType::PtyOutput,
             FrameType::StdinInput,
+            FrameType::OverlaySync,
+            FrameType::PanelSync,
         ];
         for ft in types {
             let byte = ft as u8;
@@ -433,12 +482,14 @@ mod tests {
     fn control_frame_create_session_response() {
         let msg = CreateSessionResponseMsg {
             name: "session-0".to_string(),
+            pid: None,
             rows: 40,
             cols: 120,
         };
         let frame = Frame::control(FrameType::CreateSessionResponse, &msg).unwrap();
         let decoded: CreateSessionResponseMsg = frame.parse_json().unwrap();
         assert_eq!(decoded.name, "session-0");
+        assert_eq!(decoded.pid, None);
         assert_eq!(decoded.rows, 40);
         assert_eq!(decoded.cols, 120);
     }
@@ -465,12 +516,37 @@ mod tests {
             cols: 80,
             scrollback: b"scrollback data here".to_vec(),
             screen: b"\x1b[H\x1b[2Jscreen".to_vec(),
+            input_mode: crate::input::mode::Mode::Passthrough,
+            screen_mode: crate::overlay::ScreenMode::Normal,
+            focused_id: None,
         };
         let frame = Frame::control(FrameType::AttachSessionResponse, &msg).unwrap();
         let decoded: AttachSessionResponseMsg = frame.parse_json().unwrap();
         assert_eq!(decoded.name, "test");
         assert_eq!(decoded.scrollback, b"scrollback data here");
         assert_eq!(decoded.screen, b"\x1b[H\x1b[2Jscreen");
+        assert_eq!(decoded.input_mode, crate::input::mode::Mode::Passthrough);
+        assert_eq!(decoded.screen_mode, crate::overlay::ScreenMode::Normal);
+        assert_eq!(decoded.focused_id, None);
+    }
+
+    #[test]
+    fn control_frame_attach_session_response_with_session_state() {
+        let msg = AttachSessionResponseMsg {
+            name: "test".to_string(),
+            rows: 24,
+            cols: 80,
+            scrollback: Vec::new(),
+            screen: Vec::new(),
+            input_mode: crate::input::mode::Mode::Capture,
+            screen_mode: crate::overlay::ScreenMode::Alt,
+            focused_id: Some("overlay-123".to_string()),
+        };
+        let frame = Frame::control(FrameType::AttachSessionResponse, &msg).unwrap();
+        let decoded: AttachSessionResponseMsg = frame.parse_json().unwrap();
+        assert_eq!(decoded.input_mode, crate::input::mode::Mode::Capture);
+        assert_eq!(decoded.screen_mode, crate::overlay::ScreenMode::Alt);
+        assert_eq!(decoded.focused_id, Some("overlay-123".to_string()));
     }
 
     #[test]
@@ -525,15 +601,35 @@ mod tests {
     fn control_frame_list_sessions_response() {
         let msg = ListSessionsResponseMsg {
             sessions: vec![
-                SessionInfoMsg { name: "alpha".to_string() },
-                SessionInfoMsg { name: "beta".to_string() },
+                SessionInfoMsg {
+                    name: "alpha".to_string(),
+                    pid: Some(1234),
+                    command: "/bin/bash".to_string(),
+                    rows: 24,
+                    cols: 80,
+                    clients: 1,
+                },
+                SessionInfoMsg {
+                    name: "beta".to_string(),
+                    pid: None,
+                    command: String::new(),
+                    rows: 0,
+                    cols: 0,
+                    clients: 0,
+                },
             ],
         };
         let frame = Frame::control(FrameType::ListSessionsResponse, &msg).unwrap();
         let decoded: ListSessionsResponseMsg = frame.parse_json().unwrap();
         assert_eq!(decoded.sessions.len(), 2);
         assert_eq!(decoded.sessions[0].name, "alpha");
+        assert_eq!(decoded.sessions[0].pid, Some(1234));
+        assert_eq!(decoded.sessions[0].command, "/bin/bash");
+        assert_eq!(decoded.sessions[0].rows, 24);
+        assert_eq!(decoded.sessions[0].cols, 80);
+        assert_eq!(decoded.sessions[0].clients, 1);
         assert_eq!(decoded.sessions[1].name, "beta");
+        assert_eq!(decoded.sessions[1].pid, None);
     }
 
     #[test]

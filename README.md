@@ -1,8 +1,12 @@
 # wsh: An API for Your Terminal
 
-An API that lets AI agents *interact* with terminal programs -- not just run commands, but use them the way a human does. Send keystrokes, read the screen, wait for output, react to prompts. The terminal is the fundamental interface of the modern computer. `wsh` makes it programmable.
+**The AI revolution has reached your desktop. Now it has reached your terminal.**
 
-`wsh` sits transparently between your terminal emulator and your shell, capturing all I/O, maintaining structured terminal state, and exposing everything via HTTP/WebSocket API. Your terminal works exactly as before -- but now AI agents, automation tools, and other clients can tap into the same session.
+AI agents are crossing the line from assistants to coworkers — managing files, automating browsers, writing and shipping code. But the revolution can only move as fast as the tools allow, and every human interface that hasn't been AI-enabled is lost productivity at scale. The biggest gap is the terminal. It's a fundamental impedance mismatch: the most universal interface in computing, and agents have never been able to simply sit at one and drive it the way a human does.
+
+`wsh` fixes this. It sits transparently between your terminal and your shell, maintains a full terminal state machine, and exposes everything — screen contents, cursor state, input injection, idle detection, real-time events — as both a structured API and via an MCP server. An agent sees what you see. Types what's needed. Waits for the right moment. Reads the screen. Decides what to do next. Your terminal works exactly as before. But now any program a human can operate through a terminal, an agent can operate through `wsh`.
+
+The implications land fast: orchestrator agents that launch fleets of AI coding tools in parallel terminal sessions, feed them tasks, and collect results. End-to-end automation that doesn't choke the moment a program asks a question. Live copilots that watch your session and render contextual help as overlays directly in your workflow -- true generative UI in the terminal. The terminal protocol survived fifty years because it's simple, universal, and composable. `wsh` doesn't replace it — it teaches AI to speak it, and makes every shell session AI-native.
 
 See [docs/VISION.md](docs/VISION.md) for the full project vision.
 
@@ -16,24 +20,33 @@ See [docs/VISION.md](docs/VISION.md) for the full project vision.
 
 ## Quick Start
 
-### Standalone Mode
+### Getting Started
 
 ```bash
-nix develop -c sh -c "cargo run"
+# Start wsh (auto-spawns a server daemon if one isn't running)
+wsh
+
+# In another terminal, list sessions
+wsh list
+
+# Start a second session
+wsh --name dev
+
+# Attach to an existing session
+wsh attach dev
+
+# Kill a session
+wsh kill dev
 ```
 
-This starts wsh which:
-1. Puts your terminal in raw mode and clears the screen
-2. Spawns your shell in a PTY
-3. Starts an HTTP/WebSocket API server on `127.0.0.1:8080`
-4. Passes through all keyboard input and terminal output transparently
-
-Exit when the child process exits, or press Ctrl+C.
+Running `wsh` automatically starts a background server daemon (if one isn't already running) and creates a new session. Your terminal enters raw mode, and keyboard input and terminal output pass through transparently. Detach with `Ctrl+\` `Ctrl+\` (double-tap). The server exits automatically when the last session ends.
 
 ### Server Mode
 
+For persistent operation (e.g., hosting sessions for AI agents):
+
 ```bash
-# Start the headless daemon
+# Start the server daemon (persistent by default)
 wsh server
 
 # Create a session via the API
@@ -51,7 +64,7 @@ wsh list
 wsh kill dev
 ```
 
-The server exposes the same HTTP/WS API on `127.0.0.1:8080` and a Unix domain socket for client commands (`list`, `kill`, `attach`, `detach`). Sessions must be created via the API before attaching. In ephemeral mode (default), the server shuts down when its last session exits. Use `wsh persist` to upgrade a running server to persistent mode.
+The server exposes an HTTP/WS API on `127.0.0.1:8080` and a Unix domain socket for client commands (`list`, `kill`, `attach`, `detach`). Use `--ephemeral` to have the server exit when its last session ends. Use `wsh persist` to upgrade a running ephemeral server to persistent mode.
 
 ## The Agent Loop
 
@@ -116,7 +129,7 @@ Once installed, the skills are available automatically. Claude Code will load th
 
 ## CLI Reference
 
-### Top-Level Flags (Standalone Mode)
+### Top-Level Flags
 
 | Flag | Env Var | Default | Description |
 |------|---------|---------|-------------|
@@ -170,7 +183,7 @@ Once installed, the skills are available automatically. Claude Code will load th
 
 ## API Overview
 
-All session-specific endpoints are nested under `/sessions/:name/`. In standalone mode, the default session name is `default`.
+All session-specific endpoints are nested under `/sessions/:name/`. When running `wsh` with no subcommand, the default session name is `default`.
 
 ### Session Management
 
@@ -379,7 +392,7 @@ See [docs/api/authentication.md](docs/api/authentication.md) for details.
 
 ```
 src/
-├── main.rs              # Entry point, CLI args, standalone/server orchestration
+├── main.rs              # Entry point, CLI args, client/server orchestration
 ├── lib.rs               # Library exports
 ├── activity.rs          # Activity tracking for quiescence detection
 ├── broker.rs            # Broadcast channel for output fanout
@@ -464,27 +477,52 @@ tests/
 ├── quiesce_integration.rs      # Quiescence integration tests
 ├── server_client_e2e.rs        # Server/client end-to-end tests
 ├── session_management.rs       # Session management tests
+├── lifecycle_stress.rs          # Lifecycle stress tests (detach/reattach/exit)
 ├── ws_json_methods.rs          # WebSocket JSON method tests
 └── ws_server_integration.rs    # Server-level WebSocket tests
 ```
 
 ## Building
 
-This project uses Nix for development. All cargo commands must be wrapped:
+You need a Rust toolchain to build the project:
 
 ```bash
-nix develop -c sh -c "cargo build"
-nix develop -c sh -c "cargo build --release"
-nix develop -c sh -c "cargo check"
+cargo build
+cargo build --release
 ```
 
 ## Running Tests
 
 ```bash
-nix develop -c sh -c "cargo test"
-nix develop -c sh -c "cargo test -- --nocapture"
-nix develop -c sh -c "cargo test --test api_integration"
+cargo test
+cargo test -- --nocapture
+cargo test --test api_integration
 ```
+
+### Lifecycle Stress Tests
+
+Stress tests for client/server lifecycle interactions (detach, reattach, alt screen, overlays, exit). These spawn real `wsh` processes inside PTYs and exercise realistic user interaction sequences. They're `#[ignore]` by default since they're slow and designed for bug hunting.
+
+```bash
+# Run all lifecycle stress tests
+cargo test --test lifecycle_stress -- --ignored --nocapture
+
+# Run a single scenario
+cargo test --test lifecycle_stress scenario_1 -- --ignored --nocapture
+
+# Run just the random walk
+cargo test --test lifecycle_stress scenario_6 -- --ignored --nocapture
+
+# Run repeated random walks (scenario 7) with custom iteration count and step range
+WSH_STRESS_RUNS=20 WSH_STRESS_STEPS=50..100 cargo test --test lifecycle_stress scenario_7 -- --ignored --nocapture
+```
+
+| Env Var | Default | Description |
+|---------|---------|-------------|
+| `WSH_STRESS_RUNS` | `5` | Number of random walk iterations (scenario 7) |
+| `WSH_STRESS_STEPS` | `20..50` | Steps per walk: `N` (exact) or `N..M` (range) |
+
+On failure, each test logs the full action sequence and RNG seed for reproduction.
 
 ## License
 

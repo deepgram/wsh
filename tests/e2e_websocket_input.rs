@@ -70,6 +70,9 @@ async fn test_websocket_input_reaches_pty_and_output_returns() {
     let parser = Parser::spawn(&broker, 80, 24, 1000);
     let session = Session {
         name: "test".to_string(),
+        pid: None,
+        command: "test".to_string(),
+        client_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         input_tx: input_tx.clone(),
         output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),
@@ -82,8 +85,8 @@ async fn test_websocket_input_reaches_pty_and_output_returns() {
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
         focus: FocusTracker::new(),
-        is_local: false,
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
+        visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
     };
     let registry = SessionRegistry::new();
@@ -208,6 +211,9 @@ async fn test_websocket_text_input_reaches_pty() {
     let parser = Parser::spawn(&broker, 80, 24, 1000);
     let session = Session {
         name: "test".to_string(),
+        pid: None,
+        command: "test".to_string(),
+        client_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         input_tx: input_tx.clone(),
         output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),
@@ -220,8 +226,8 @@ async fn test_websocket_text_input_reaches_pty() {
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
         focus: FocusTracker::new(),
-        is_local: false,
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
+        visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
     };
     let registry = SessionRegistry::new();

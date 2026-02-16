@@ -3,12 +3,10 @@
 wsh exposes terminal I/O via HTTP and WebSocket. This document covers every
 endpoint, request format, and response shape you need to build against the API.
 
-wsh operates in two modes:
-
-- **Standalone mode** (default): A single session with local terminal I/O and
-  an HTTP/WS API server. Run `wsh` with no subcommand.
-- **Server mode**: A headless daemon managing multiple sessions via HTTP/WS and
-  a Unix domain socket. Run `wsh server`.
+`wsh` always operates in a client/server architecture. Running `wsh` with no
+subcommand auto-spawns an ephemeral server daemon if one isn't already running,
+creates a session, and attaches to it as a thin terminal client. Running
+`wsh server` starts the daemon explicitly (persistent by default).
 
 **Base URL:** `http://localhost:8080` (default)
 
@@ -16,9 +14,7 @@ wsh operates in two modes:
 
 ### Session Endpoints (nested under `/sessions/:name`)
 
-In server mode, per-session endpoints are nested under `/sessions/:name`. In
-standalone mode, the single session is accessible at the top level for backward
-compatibility.
+Per-session endpoints are nested under `/sessions/:name`.
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -71,7 +67,8 @@ compatibility.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/server/persist` | Switch server to persistent mode |
+| `GET` | `/server/persist` | Query current persistence mode |
+| `PUT` | `/server/persist` | Set persistence mode (on/off) |
 | `GET` | `/ws/json` | Server-level JSON WebSocket (multi-session) |
 
 ### Global Endpoints
@@ -84,45 +81,51 @@ compatibility.
 
 ## Quick Start
 
-### Standalone Mode
+### Getting Started
+
+Running `wsh` auto-spawns a server daemon if one isn't already running, then creates and attaches to a session. All API endpoints are available immediately.
 
 ```bash
-# Start wsh (localhost, no auth required)
+# Start wsh (auto-spawns server, creates session, attaches)
 wsh
 
+# In another terminal:
 # Check health
 curl http://localhost:8080/health
 # {"status":"ok"}
 
+# List sessions
+curl http://localhost:8080/sessions
+# [{"name":"default","pid":12345,"command":"/bin/bash","rows":24,"cols":80,"clients":1}]
+
 # Get current screen contents
-curl http://localhost:8080/screen
-# {"epoch":1,"first_line_index":0,"total_lines":1,"lines":["$ "],"cursor":{"row":0,"col":2,"visible":true},"cols":80,"rows":24,"alternate_active":false}
+curl http://localhost:8080/sessions/default/screen
+# {"epoch":1,"first_line_index":0,"total_lines":1,"lines":["$ "],...}
 
 # Send input (type "ls\n")
-curl -X POST http://localhost:8080/input -d 'ls\n'
-
-# Get scrollback with pagination
-curl 'http://localhost:8080/scrollback?offset=0&limit=50'
+curl -X POST http://localhost:8080/sessions/default/input -d 'ls\n'
 
 # Connect to raw WebSocket (using websocat)
-websocat ws://localhost:8080/ws/raw
+websocat ws://localhost:8080/sessions/default/ws/raw
 ```
 
 ### Server Mode
 
+For persistent operation (e.g., hosting sessions for AI agents):
+
 ```bash
-# Start the server daemon
+# Start the server daemon (persistent by default)
 wsh server
 
 # Create a session via HTTP
 curl -X POST http://localhost:8080/sessions \
   -H 'Content-Type: application/json' \
   -d '{"name": "dev"}'
-# {"name":"dev"}
+# {"name":"dev","pid":12345,"command":"/bin/bash","rows":24,"cols":80,"clients":0}
 
 # List sessions
 curl http://localhost:8080/sessions
-# [{"name":"dev"}]
+# [{"name":"dev","pid":12345,"command":"/bin/bash","rows":24,"cols":80,"clients":0}]
 
 # Get the session's screen
 curl http://localhost:8080/sessions/dev/screen
@@ -136,9 +139,8 @@ wsh attach dev
 # Kill the session
 curl -X DELETE http://localhost:8080/sessions/dev
 
-# Switch server to persistent mode (won't exit when last session ends)
-curl -X POST http://localhost:8080/server/persist
-# {"persistent":true}
+# Use --ephemeral to auto-exit when last session ends
+wsh server --ephemeral
 ```
 
 ## Health Check
@@ -459,10 +461,9 @@ curl 'http://localhost:8080/quiesce?timeout_ms=500&last_session=build&last_gener
 
 ## Server Mode
 
-Server mode (`wsh server`) runs a headless daemon that manages multiple terminal
-sessions. Sessions are created on demand via the HTTP API or Unix socket
-protocol. Unlike standalone mode, no PTY is spawned automatically and no local
-terminal I/O is performed.
+`wsh server` runs a headless daemon that manages multiple terminal sessions.
+Sessions are created on demand via the HTTP API or Unix socket protocol. No PTY
+is spawned automatically and no local terminal I/O is performed.
 
 ### CLI Subcommands
 
@@ -475,7 +476,8 @@ wsh provides several subcommands for interacting with a running server:
 | `wsh list` | List active sessions |
 | `wsh kill <name>` | Destroy a session |
 | `wsh detach <name>` | Detach all clients from a session |
-| `wsh persist` | Switch the server to persistent mode |
+| `wsh mcp` | MCP stdio bridge (connects to server) |
+| `wsh persist [on\|off]` | Query or set server persistence mode |
 
 #### `wsh server`
 
@@ -517,7 +519,8 @@ date.
 wsh list [--socket <path>]
 ```
 
-Lists active sessions on the server via the Unix socket.
+Lists active sessions on the server via the Unix socket. Output is a table
+showing NAME, PID, COMMAND, SIZE (rows x cols), and CLIENTS for each session.
 
 #### `wsh kill`
 
@@ -539,11 +542,13 @@ session itself remains alive -- only the client connections are dropped.
 #### `wsh persist`
 
 ```bash
-wsh persist [--bind <addr>] [--token <token>]
+wsh persist [on|off] [--bind <addr>] [--token <token>]
 ```
 
-Switches the server to persistent mode via `POST /server/persist`. In persistent
-mode, the server stays alive even when all sessions have exited.
+Query or set the server's persistence mode. With no argument, prints the current
+state. `wsh persist on` enables persistent mode (server stays alive when all
+sessions end). `wsh persist off` enables ephemeral mode (server exits when the
+last session ends).
 
 ### Session Management
 
@@ -558,7 +563,10 @@ Returns an array of all active sessions.
 **Response:** `200 OK`
 
 ```json
-[{"name": "dev"}, {"name": "build"}]
+[
+  {"name": "dev", "pid": 12345, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 1},
+  {"name": "build", "pid": 12346, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 0}
+]
 ```
 
 **Example:**
@@ -599,7 +607,7 @@ Content-Type: application/json
 **Response:** `201 Created`
 
 ```json
-{"name": "dev"}
+{"name": "dev", "pid": 12345, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 0}
 ```
 
 **Errors:**
@@ -626,7 +634,7 @@ GET /sessions/:name
 **Response:** `200 OK`
 
 ```json
-{"name": "dev"}
+{"name": "dev", "pid": 12345, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 1}
 ```
 
 **Errors:**
@@ -657,7 +665,7 @@ Content-Type: application/json
 **Response:** `200 OK`
 
 ```json
-{"name": "new-name"}
+{"name": "new-name", "pid": 12345, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 1}
 ```
 
 **Errors:**
@@ -725,13 +733,28 @@ curl -X POST http://localhost:8080/sessions/dev/detach
 ### Server Persist
 
 ```
-POST /server/persist
+GET /server/persist
 ```
 
-Switches the server from ephemeral to persistent mode. In persistent mode, the
-server remains running even when all sessions have exited. This is a one-way
-operation -- there is no way to switch back to ephemeral mode without restarting
-the server.
+Returns the current persistence mode without changing it.
+
+**Response:** `200 OK`
+
+```json
+{"persistent": false}
+```
+
+```
+PUT /server/persist
+```
+
+Sets the server's persistence mode.
+
+**Request body:**
+
+```json
+{"persistent": true}
+```
 
 **Response:** `200 OK`
 
@@ -739,10 +762,21 @@ the server.
 {"persistent": true}
 ```
 
-**Example:**
+**Examples:**
 
 ```bash
-curl -X POST http://localhost:8080/server/persist
+# Query current state
+curl http://localhost:8080/server/persist
+
+# Enable persistent mode
+curl -X PUT http://localhost:8080/server/persist \
+  -H 'Content-Type: application/json' \
+  -d '{"persistent": true}'
+
+# Enable ephemeral mode
+curl -X PUT http://localhost:8080/server/persist \
+  -H 'Content-Type: application/json' \
+  -d '{"persistent": false}'
 ```
 
 ### Ephemeral vs Persistent Mode
@@ -752,8 +786,8 @@ when its last session exits or is destroyed. This is useful for ad-hoc server
 usage where you want automatic cleanup.
 
 In **persistent mode**, the server stays alive indefinitely, waiting for new
-sessions to be created. Switch to persistent mode via `POST /server/persist`,
-the `wsh persist` CLI command, or the `set_server_mode` WebSocket method.
+sessions to be created. Toggle via `GET`/`PUT /server/persist`,
+the `wsh persist [on|off]` CLI command, or the `set_server_mode` WebSocket method.
 
 ### Server-Level WebSocket
 
@@ -773,7 +807,7 @@ events. After connecting, the server sends `{"connected": true}`.
 | `create_session` | Create a new session |
 | `kill_session` | Destroy a session |
 | `detach_session` | Detach all clients from a session |
-| `set_server_mode` | Set server mode (ephemeral/persistent) |
+| `set_server_mode` | Query or set server mode (ephemeral/persistent) |
 
 **Per-session methods** require a `session` field in the request:
 
@@ -789,23 +823,27 @@ the same as on the per-session `/sessions/:name/ws/json` endpoint.
 
 ```json
 {"event": "session_created", "params": {"name": "dev"}}
-{"event": "session_exited", "params": {"name": "dev"}}
 {"event": "session_renamed", "params": {"old_name": "dev", "new_name": "prod"}}
 {"event": "session_destroyed", "params": {"name": "dev"}}
 ```
 
 #### `set_server_mode`
 
-Set the server's persistence mode.
+Query or set the server's persistence mode. If `params` is omitted, returns the
+current mode without changing it.
 
-**Params:**
+**Params (optional):**
 
 | Param | Type | Description |
 |-------|------|-------------|
 | `persistent` | boolean | `true` for persistent mode, `false` for ephemeral |
 
 ```json
+// Set mode
 {"id": 1, "method": "set_server_mode", "params": {"persistent": true}}
+
+// Query mode (no params)
+{"id": 2, "method": "set_server_mode"}
 ```
 
 **Result:**

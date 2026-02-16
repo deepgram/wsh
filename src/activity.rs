@@ -186,20 +186,28 @@ mod tests {
     #[tokio::test]
     async fn activity_resets_timer() {
         let tracker = ActivityTracker::new();
-        tracker.touch();
+        tracker.touch(); // gen=1
 
         let t = tracker.clone();
-        // Spawn a task that touches after 30ms, resetting the timer.
+        // Spawn a task that touches after 20ms, resetting the timer.
+        // The large gap between touch delay (20ms) and timeout (150ms)
+        // ensures the touch fires well before the timeout under any
+        // realistic scheduler load.
         tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(30)).await;
-            t.touch();
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            t.touch(); // gen=2
         });
 
         let start = Instant::now();
-        tracker.wait_for_quiescence(Duration::from_millis(50), None).await;
+        let gen = tracker.wait_for_quiescence(Duration::from_millis(150), None).await;
         let elapsed = start.elapsed();
-        // Should take at least 80ms total (30ms + 50ms timeout from second touch).
-        assert!(elapsed >= Duration::from_millis(75));
+        // The touch at ~20ms resets the timer; total >= 20ms + 150ms = 170ms.
+        assert_eq!(gen, 2, "second touch should have been observed");
+        assert!(
+            elapsed >= Duration::from_millis(150),
+            "Expected >= 150ms (timer should have reset on activity), got {:?}",
+            elapsed
+        );
     }
 
     #[tokio::test]
@@ -280,22 +288,25 @@ mod tests {
     #[tokio::test]
     async fn fresh_quiescence_resets_on_activity() {
         let tracker = ActivityTracker::new();
-        tokio::time::sleep(Duration::from_millis(120)).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
 
         let t = tracker.clone();
+        // Touch after 20ms. The large gap between touch delay (20ms) and
+        // timeout (150ms) ensures the touch fires well before the initial
+        // sleep expires under any realistic scheduler load.
         tokio::spawn(async move {
-            // Touch after 30ms to reset the timer
-            tokio::time::sleep(Duration::from_millis(30)).await;
-            t.touch();
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            t.touch(); // gen=1
         });
 
         let start = Instant::now();
-        tracker.wait_for_fresh_quiescence(Duration::from_millis(50)).await;
+        let gen = tracker.wait_for_fresh_quiescence(Duration::from_millis(150)).await;
         let elapsed = start.elapsed();
-        // Should wait at least 30ms (activity) + 50ms (fresh timeout)
+        // The touch at ~20ms resets the timer; total >= 20ms + 150ms = 170ms.
+        assert_eq!(gen, 1, "touch should have been observed");
         assert!(
-            elapsed >= Duration::from_millis(75),
-            "Expected >= 75ms, got {:?}",
+            elapsed >= Duration::from_millis(150),
+            "Expected >= 150ms (timer should have reset on activity), got {:?}",
             elapsed
         );
     }

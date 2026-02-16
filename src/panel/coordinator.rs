@@ -3,16 +3,13 @@
 //! Provides `reconfigure_layout()` which is called after any panel mutation
 //! that could change total height, and on outer terminal resize.
 
-use std::io::Write;
 use std::sync::Arc;
 
-use crate::overlay;
 use crate::parser::Parser;
 use crate::pty::Pty;
 use crate::terminal::TerminalSize;
 
 use super::layout::compute_layout;
-use super::render;
 use super::store::PanelStore;
 
 /// Reconfigure the terminal layout after panel changes.
@@ -20,12 +17,13 @@ use super::store::PanelStore;
 /// This function:
 /// 1. Computes the new layout from all panels and terminal size
 /// 2. Updates panel visibility in the store
-/// 3. Sets the DECSTBM scroll region
-/// 4. Renders all visible panels
-/// 5. Resizes the PTY and parser to match the new viewport
+/// 3. Resizes the PTY and parser to match the new viewport
 ///
 /// Call this after any panel create, delete, or height/position/z change.
 /// Also called on outer terminal resize (SIGWINCH).
+///
+/// Note: Visual rendering (scroll region, panel content) is handled by
+/// socket clients via PanelSync frames, not by the server.
 pub async fn reconfigure_layout(
     panels: &PanelStore,
     terminal_size: &TerminalSize,
@@ -42,34 +40,6 @@ pub async fn reconfigure_layout(
         panels.set_visible(&panel.id, visible);
     }
 
-    // Write scroll region and panel content to stdout
-    {
-        let stdout = std::io::stdout();
-        let mut lock = stdout.lock();
-        let _ = lock.write_all(overlay::begin_sync().as_bytes());
-
-        // Erase old panel content
-        let _ = lock.write_all(render::erase_all_panels(&layout, term_cols).as_bytes());
-
-        // Set scroll region (or reset if no panels or panels consume all rows)
-        if layout.top_panels.is_empty() && layout.bottom_panels.is_empty()
-            || layout.pty_rows == 0
-        {
-            let _ = lock.write_all(render::reset_scroll_region().as_bytes());
-        } else {
-            let _ = lock.write_all(
-                render::set_scroll_region(layout.scroll_region_top, layout.scroll_region_bottom)
-                    .as_bytes(),
-            );
-        }
-
-        // Render visible panels
-        let _ = lock.write_all(render::render_all_panels(&layout, term_cols).as_bytes());
-
-        let _ = lock.write_all(overlay::end_sync().as_bytes());
-        let _ = lock.flush();
-    }
-
     // Resize PTY and parser (use at least 1 row to avoid invalid resize)
     let effective_pty_rows = layout.pty_rows.max(1);
     if let Err(e) = pty.resize(effective_pty_rows, layout.pty_cols) {
@@ -83,49 +53,14 @@ pub async fn reconfigure_layout(
     }
 }
 
-/// Flush a single panel's content to stdout without changing scroll region or PTY size.
+/// Notify that a single panel's content has changed (spans only).
 ///
-/// Used for span-only updates where height/position/z haven't changed.
+/// This is a no-op on the server. Visual rendering of panel content is
+/// handled by socket clients via PanelSync frames.
 pub fn flush_panel_content(
-    panels: &PanelStore,
-    panel_id: &str,
-    terminal_size: &TerminalSize,
+    _panels: &PanelStore,
+    _panel_id: &str,
+    _terminal_size: &TerminalSize,
 ) {
-    let (term_rows, term_cols) = terminal_size.get();
-    let all_panels = panels.list();
-    let layout = compute_layout(&all_panels, term_rows, term_cols);
-
-    // Find the panel and its start row in the layout
-    let mut row = 0u16;
-    for panel in &layout.top_panels {
-        if panel.id == panel_id {
-            let stdout = std::io::stdout();
-            let mut lock = stdout.lock();
-            let _ = lock.write_all(overlay::begin_sync().as_bytes());
-            let _ = lock.write_all(overlay::save_cursor().as_bytes());
-            let _ = lock.write_all(render::render_panel(panel, row, term_cols).as_bytes());
-            let _ = lock.write_all(overlay::restore_cursor().as_bytes());
-            let _ = lock.write_all(overlay::end_sync().as_bytes());
-            let _ = lock.flush();
-            return;
-        }
-        row += panel.height;
-    }
-
-    // Check bottom panels
-    let mut row = layout.scroll_region_bottom; // 0-indexed start of bottom panels
-    for panel in &layout.bottom_panels {
-        if panel.id == panel_id {
-            let stdout = std::io::stdout();
-            let mut lock = stdout.lock();
-            let _ = lock.write_all(overlay::begin_sync().as_bytes());
-            let _ = lock.write_all(overlay::save_cursor().as_bytes());
-            let _ = lock.write_all(render::render_panel(panel, row, term_cols).as_bytes());
-            let _ = lock.write_all(overlay::restore_cursor().as_bytes());
-            let _ = lock.write_all(overlay::end_sync().as_bytes());
-            let _ = lock.flush();
-            return;
-        }
-        row += panel.height;
-    }
+    // No-op: clients render panels from PanelSync frames
 }

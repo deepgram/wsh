@@ -1,6 +1,7 @@
 use bytes::Bytes;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use parking_lot::RwLock;
 use tokio::sync::{broadcast, mpsc};
 use tokio::sync::broadcast as tokio_broadcast;
@@ -10,6 +11,7 @@ use crate::input::{FocusTracker, InputBroadcaster, InputMode};
 use crate::overlay::{OverlayStore, ScreenMode};
 use crate::panel::PanelStore;
 use crate::parser::Parser;
+use crate::protocol::VisualUpdate;
 use crate::pty::{Pty, PtyError, SpawnCommand};
 use crate::shutdown::ShutdownCoordinator;
 use crate::terminal::TerminalSize;
@@ -17,12 +19,18 @@ use crate::terminal::TerminalSize;
 /// A single terminal session with all associated state.
 ///
 /// Each `Session` owns the PTY, parser, I/O channels, and auxiliary stores
-/// for one terminal session. In standalone mode there is exactly one session;
-/// in server mode the `SessionRegistry` manages many.
+/// for one terminal session. The `SessionRegistry` manages all sessions
+/// on the server.
 #[derive(Clone)]
 pub struct Session {
     /// Human-readable session name (displayed in UI, used in URLs).
     pub name: String,
+    /// PID of the child process spawned in the PTY, if available.
+    pub pid: Option<u32>,
+    /// Human-readable display of the command being run (e.g. shell path or command string).
+    pub command: String,
+    /// Number of currently connected streaming clients (WebSocket, socket, etc.).
+    pub client_count: Arc<AtomicUsize>,
     pub input_tx: mpsc::Sender<Bytes>,
     pub output_rx: broadcast::Sender<Bytes>,
     pub shutdown: ShutdownCoordinator,
@@ -34,22 +42,47 @@ pub struct Session {
     pub input_mode: InputMode,
     pub input_broadcaster: InputBroadcaster,
     pub activity: ActivityTracker,
-    /// Whether this session is attached to the local terminal (stdout).
-    /// Only the standalone-mode session should have this set to `true`.
-    /// Controls whether overlay/panel ANSI escape sequences are written to stdout.
-    pub is_local: bool,
     /// Tracks which overlay or panel currently has input focus.
     pub focus: FocusTracker,
     /// Signal to detach all streaming clients from this session.
     /// Subscribers receive `()` when `detach()` is called; the session stays alive.
     pub detach_signal: broadcast::Sender<()>,
+    /// Notification channel for overlay/panel visual state changes.
+    /// API handlers fire events here after mutations; the server streaming loop
+    /// picks them up and sends OverlaySync/PanelSync frames to socket clients.
+    pub visual_update_tx: broadcast::Sender<VisualUpdate>,
     /// Current screen mode (normal or alt). Used to tag overlays/panels and
     /// filter list results. Protected by a `parking_lot::RwLock` for cheap
     /// cloning across threads.
     pub screen_mode: Arc<RwLock<ScreenMode>>,
 }
 
+/// RAII guard that decrements the session client count on drop.
+pub struct ClientGuard {
+    counter: Arc<AtomicUsize>,
+}
+
+impl Drop for ClientGuard {
+    fn drop(&mut self) {
+        self.counter.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
 impl Session {
+    /// Register a new streaming client, returning an RAII guard that decrements
+    /// the count when dropped.
+    pub fn connect(&self) -> ClientGuard {
+        self.client_count.fetch_add(1, Ordering::Relaxed);
+        ClientGuard {
+            counter: Arc::clone(&self.client_count),
+        }
+    }
+
+    /// Return the number of currently connected streaming clients.
+    pub fn clients(&self) -> usize {
+        self.client_count.load(Ordering::Relaxed)
+    }
+
     /// Signal all attached streaming clients to detach.
     ///
     /// The session remains alive — only the streaming connections are closed.
@@ -83,6 +116,14 @@ impl Session {
         cwd: Option<String>,
         env: Option<std::collections::HashMap<String, String>>,
     ) -> Result<(Self, tokio::sync::oneshot::Receiver<()>), PtyError> {
+        let command_display = match &command {
+            SpawnCommand::Shell { shell, .. } => {
+                shell.clone().unwrap_or_else(|| {
+                    std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
+                })
+            }
+            SpawnCommand::Command { command, .. } => command.clone(),
+        };
         let mut cmd = Pty::build_command(&command);
         if let Some(ref dir) = cwd {
             cmd.cwd(dir);
@@ -96,6 +137,7 @@ impl Session {
         let pty_reader = pty.take_reader()?;
         let pty_writer = pty.take_writer()?;
         let pty_child = pty.take_child();
+        let pid = pty_child.as_ref().and_then(|c| c.process_id());
         let pty = Arc::new(pty);
 
         // Monitor child exit via a oneshot channel.
@@ -158,27 +200,64 @@ impl Session {
             }
         });
 
-        Ok((
-            Session {
-                name,
-                input_tx,
-                output_rx: broker.sender(),
-                shutdown,
-                parser,
-                overlays,
-                panels,
-                pty,
-                terminal_size,
-                input_mode,
-                input_broadcaster,
-                activity,
-                focus,
-                is_local: false,
-                detach_signal: broadcast::channel::<()>(1).0,
-                screen_mode: Arc::new(RwLock::new(ScreenMode::Normal)),
-            },
-            child_exit_rx,
-        ))
+        let session = Session {
+            name,
+            pid,
+            command: command_display,
+            client_count: Arc::new(AtomicUsize::new(0)),
+            input_tx,
+            output_rx: broker.sender(),
+            shutdown,
+            parser,
+            overlays,
+            panels,
+            pty,
+            terminal_size,
+            input_mode,
+            input_broadcaster,
+            activity,
+            focus,
+            detach_signal: broadcast::channel::<()>(1).0,
+            visual_update_tx: broadcast::channel::<VisualUpdate>(16).0,
+            screen_mode: Arc::new(RwLock::new(ScreenMode::Normal)),
+        };
+
+        // Watch for alternate screen mode changes from the parser and
+        // update session.screen_mode accordingly. This ensures overlays
+        // and panels are automatically filtered by screen mode.
+        {
+            let screen_mode = session.screen_mode.clone();
+            let visual_update_tx = session.visual_update_tx.clone();
+            let parser = session.parser.clone();
+            tokio::spawn(async move {
+                use tokio_stream::StreamExt;
+                let mut events = std::pin::pin!(parser.subscribe());
+                while let Some(event) = events.next().await {
+                    if let crate::parser::events::Event::Mode { alternate_active, .. } = event {
+                        let new_mode = if alternate_active {
+                            ScreenMode::Alt
+                        } else {
+                            ScreenMode::Normal
+                        };
+                        let changed = {
+                            let mut mode = screen_mode.write();
+                            if *mode != new_mode {
+                                *mode = new_mode;
+                                true
+                            } else {
+                                false
+                            }
+                        };
+                        if changed {
+                            let _ = visual_update_tx.send(VisualUpdate::OverlaysChanged);
+                            let _ = visual_update_tx.send(VisualUpdate::PanelsChanged);
+                        }
+                    }
+                }
+            });
+        }
+
+        Ok((session, child_exit_rx))
     }
 }
 
@@ -186,7 +265,6 @@ impl Session {
 #[derive(Debug, Clone)]
 pub enum SessionEvent {
     Created { name: String },
-    Exited { name: String },
     Renamed { old_name: String, new_name: String },
     Destroyed { name: String },
 }
@@ -334,22 +412,31 @@ impl SessionRegistry {
         self.events_tx.subscribe()
     }
 
-    /// Monitor a session's child process exit and emit `SessionEvent::Exited`.
+    /// Monitor a session's child process exit and remove it from the registry.
     ///
     /// Spawns a background task that waits on `child_exit_rx`. When the child
-    /// exits, the `Exited` event is broadcast to all subscribers. This should
-    /// be called for API-created sessions where the caller would otherwise
-    /// discard the exit receiver.
+    /// exits, all streaming clients are detached (so their I/O loops exit
+    /// promptly), then the session is removed from the registry (emitting a
+    /// `SessionEvent::Destroyed` event). This should be called for
+    /// API-created sessions where the caller would otherwise discard the
+    /// exit receiver.
     pub fn monitor_child_exit(
         &self,
         name: String,
         child_exit_rx: tokio::sync::oneshot::Receiver<()>,
     ) {
-        let events_tx = self.events_tx.clone();
+        let registry = self.clone();
         tokio::spawn(async move {
             let _ = child_exit_rx.await;
             tracing::info!(session = %name, "session child process exited");
-            let _ = events_tx.send(SessionEvent::Exited { name });
+            // Signal all attached streaming clients to detach before removing
+            // the session. Without this, socket streaming loops would block
+            // forever on output_rx.recv() because the Session holds a
+            // broadcast::Sender clone that keeps the channel open.
+            if let Some(session) = registry.get(&name) {
+                session.detach();
+            }
+            registry.remove(&name);
         });
     }
 }
@@ -369,6 +456,9 @@ mod tests {
 
         let session = Session {
             name: name.to_string(),
+            pid: None,
+            command: "test".to_string(),
+            client_count: Arc::new(AtomicUsize::new(0)),
             input_tx,
             output_rx: broker.sender(),
             shutdown: ShutdownCoordinator::new(),
@@ -381,8 +471,8 @@ mod tests {
             input_broadcaster: InputBroadcaster::new(),
             activity: ActivityTracker::new(),
             focus: FocusTracker::new(),
-            is_local: false,
             detach_signal: broadcast::channel::<()>(1).0,
+            visual_update_tx: broadcast::channel::<VisualUpdate>(16).0,
             screen_mode: Arc::new(RwLock::new(ScreenMode::Normal)),
         };
         (session, input_rx)
@@ -622,7 +712,6 @@ mod tests {
         .expect("Session::spawn should succeed");
 
         assert_eq!(session.name, "spawned");
-        assert!(!session.is_local);
 
         // Send input to make the shell exit
         session
