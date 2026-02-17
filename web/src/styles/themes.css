@@ -648,6 +648,90 @@
 }
 
 /* ==========================================================================
+   Theme-specific tile selection styles
+   ========================================================================== */
+
+.theme-glass .tile-select-circle {
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.theme-glass .tile-select-circle.selected {
+  box-shadow: 0 0 8px var(--accent-glow);
+}
+
+.theme-glass .tile-action-btn {
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4), 0 0 16px var(--accent-glow);
+}
+
+.theme-neon .tile-select-circle {
+  border-color: rgba(0, 255, 204, 0.2);
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.theme-neon .tile-select-circle:hover {
+  border-color: var(--neon-green);
+  box-shadow: 0 0 8px rgba(0, 255, 204, 0.3);
+}
+
+.theme-neon .tile-select-circle.selected {
+  background: var(--neon-green);
+  border-color: var(--neon-green);
+  box-shadow: 0 0 12px rgba(0, 255, 204, 0.5);
+}
+
+.theme-neon .session-thumbnail.tile-selected {
+  outline-color: var(--neon-green);
+  box-shadow: 0 0 16px rgba(0, 255, 204, 0.2);
+}
+
+.theme-neon .tile-action-btn {
+  background: var(--neon-green);
+  color: #05050a;
+  box-shadow: 0 0 20px rgba(0, 255, 204, 0.3), 0 4px 16px rgba(0, 0, 0, 0.5);
+  text-shadow: none;
+}
+
+.theme-neon .tile-action-btn:hover {
+  box-shadow: 0 0 28px rgba(0, 255, 204, 0.4), 0 6px 24px rgba(0, 0, 0, 0.5);
+}
+
+.theme-minimal .tile-select-circle {
+  border-color: #3a3a3c;
+  background: rgba(0, 0, 0, 0.4);
+  width: 22px;
+  height: 22px;
+  font-size: 11px;
+}
+
+.theme-minimal .tile-select-circle.selected {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+}
+
+.theme-minimal .session-thumbnail.tile-selected {
+  outline-color: var(--accent);
+}
+
+.theme-minimal .tile-action-btn {
+  background: var(--accent);
+  color: var(--bg);
+  border-radius: 8px;
+  font-size: 13px;
+  padding: 8px 20px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.theme-neon .tile-close:hover {
+  color: var(--neon-pink);
+}
+
+/* ==========================================================================
    Shared theme utilities
    ========================================================================== */
 

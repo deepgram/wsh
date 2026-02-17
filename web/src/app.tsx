@@ -6,6 +6,7 @@ import {
   sessionOrder,
   viewMode,
   tileLayout,
+  tileSelection,
   connectionState,
   theme,
 } from "./state/sessions";
@@ -174,9 +175,23 @@ function handleLifecycleEvent(client: WshClient, raw: any): void {
       if (focusedSession.value === name) {
         focusedSession.value = sessionOrder.value[0] ?? null;
       }
+      // Clean up tile selection
+      if (tileSelection.value.includes(name)) {
+        tileSelection.value = tileSelection.value.filter((s) => s !== name);
+      }
+      // Clean up tile layout
       if (tileLayout.value?.sessions.includes(name)) {
-        tileLayout.value = null;
-        viewMode.value = "focused";
+        const remaining = tileLayout.value.sessions.filter((s) => s !== name);
+        if (remaining.length < 2) {
+          tileLayout.value = null;
+          viewMode.value = "focused";
+        } else {
+          const evenSize = 1 / remaining.length;
+          tileLayout.value = {
+            sessions: remaining,
+            sizes: remaining.map(() => evenSize),
+          };
+        }
       }
       break;
     }

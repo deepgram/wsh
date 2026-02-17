@@ -3,6 +3,9 @@ import {
   focusedSession,
   viewMode,
   tileLayout,
+  tileSelection,
+  toggleTileSelection,
+  clearTileSelection,
 } from "../state/sessions";
 import { SessionThumbnail } from "./SessionThumbnail";
 import type { WshClient } from "../api/ws";
@@ -13,16 +16,17 @@ interface SessionGridProps {
 
 export function SessionGrid({ client }: SessionGridProps) {
   const order = sessionOrder.value;
+  const selection = tileSelection.value;
 
   const handleSelect = (name: string) => {
     focusedSession.value = name;
+    clearTileSelection();
     viewMode.value = "focused";
   };
 
   const handleCreate = async () => {
     try {
       await client.createSession();
-      // session_created lifecycle event will add it to the list
     } catch (e) {
       console.error("Failed to create session:", e);
     }
@@ -31,39 +35,28 @@ export function SessionGrid({ client }: SessionGridProps) {
   const handleClose = async (name: string) => {
     try {
       await client.killSession(name);
-      // session_destroyed lifecycle event will remove it
     } catch (e) {
       console.error("Failed to kill session:", e);
     }
   };
 
-  const handleTile = (name: string) => {
-    // Only allow tiling on wide screens
-    if (window.innerWidth < 768) return;
-    const current = focusedSession.value;
-    const sessionsForTile: string[] = [];
-    if (current && current !== name) {
-      sessionsForTile.push(current, name);
-    } else {
-      sessionsForTile.push(name);
-      const other = order.find((s) => s !== name);
-      if (other) sessionsForTile.push(other);
-    }
-    if (sessionsForTile.length >= 2) {
-      tileLayout.value = {
-        sessions: sessionsForTile.slice(0, 2),
-        sizes: [0.5, 0.5],
-      };
-      viewMode.value = "tiled";
-    }
+  const handleTileSelected = (e: Event) => {
+    e.stopPropagation();
+    if (selection.length < 2) return;
+    const evenSize = 1 / selection.length;
+    tileLayout.value = {
+      sessions: [...selection],
+      sizes: selection.map(() => evenSize),
+    };
+    clearTileSelection();
+    viewMode.value = "tiled";
   };
-
-  const canTile = order.length >= 2 && window.innerWidth >= 768;
 
   return (
     <div
       class="session-grid-backdrop"
       onClick={() => {
+        clearTileSelection();
         viewMode.value = "focused";
       }}
     >
@@ -73,15 +66,22 @@ export function SessionGrid({ client }: SessionGridProps) {
             key={name}
             session={name}
             focused={name === focusedSession.value}
+            selectionIndex={selection.indexOf(name)}
             onSelect={() => handleSelect(name)}
             onClose={() => handleClose(name)}
-            onTile={canTile ? () => handleTile(name) : undefined}
+            onToggleTile={() => toggleTileSelection(name)}
           />
         ))}
         <div class="session-thumbnail new-session" onClick={handleCreate}>
           <span class="new-session-icon">+</span>
         </div>
       </div>
+
+      {selection.length >= 2 && (
+        <button class="tile-action-btn" onClick={handleTileSelected}>
+          Tile {selection.length} sessions
+        </button>
+      )}
     </div>
   );
 }

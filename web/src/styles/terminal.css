@@ -261,8 +261,7 @@ html, body, #app {
   flex-shrink: 0;
 }
 
-.thumbnail-close,
-.thumbnail-tile {
+.thumbnail-close {
   background: none;
   border: none;
   color: #666;
@@ -279,19 +278,74 @@ html, body, #app {
   background: rgba(231, 76, 60, 0.1);
 }
 
-.thumbnail-tile {
-  display: none;
+/* Tile selection circle */
+.tile-select-circle {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  background: rgba(0, 0, 0, 0.5);
+  color: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: system-ui, sans-serif;
+  transition: all 0.2s;
+  z-index: 5;
+  padding: 0;
 }
 
-@media (min-width: 768px) {
-  .thumbnail-tile {
-    display: flex;
-  }
+.tile-select-circle:hover {
+  border-color: var(--cursor-color);
+  background: rgba(0, 0, 0, 0.7);
 }
 
-.thumbnail-tile:hover {
-  color: var(--cursor-color);
-  background: rgba(0, 212, 255, 0.1);
+.tile-select-circle.selected {
+  border-color: var(--cursor-color);
+  background: var(--cursor-color);
+  color: var(--bg, #0a0a0f);
+}
+
+.session-thumbnail.tile-selected {
+  outline: 2px solid var(--cursor-color);
+  outline-offset: -2px;
+}
+
+/* Need relative positioning on thumbnail for the circle */
+.session-thumbnail {
+  position: relative;
+}
+
+/* Floating tile action button */
+.tile-action-btn {
+  position: fixed;
+  bottom: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--cursor-color);
+  color: var(--bg, #0a0a0f);
+  border: none;
+  border-radius: 20px;
+  padding: 10px 24px;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: system-ui, sans-serif;
+  cursor: pointer;
+  z-index: 20;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  transition: transform 0.15s, box-shadow 0.15s;
+  animation: fade-in 0.2s ease-out;
+}
+
+.tile-action-btn:hover {
+  transform: translateX(-50%) scale(1.05);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
 }
 
 .thumbnail-content {
@@ -448,7 +502,14 @@ html, body, #app {
   white-space: nowrap;
 }
 
-.tile-maximize {
+.tile-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.tile-maximize,
+.tile-close {
   background: none;
   border: none;
   color: #666;
@@ -462,6 +523,10 @@ html, body, #app {
 
 .tile-maximize:hover {
   color: var(--cursor-color);
+}
+
+.tile-close:hover {
+  color: #e74c3c;
 }
 
 .tile-content {

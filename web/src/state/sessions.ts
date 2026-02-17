@@ -16,6 +16,21 @@ export const connectionState = signal<
   "connecting" | "connected" | "disconnected"
 >("disconnected");
 export const theme = signal<Theme>(storedTheme);
+export const tileSelection = signal<string[]>([]);
+
+export function toggleTileSelection(session: string): void {
+  const current = tileSelection.value;
+  const idx = current.indexOf(session);
+  if (idx >= 0) {
+    tileSelection.value = current.filter((s) => s !== session);
+  } else {
+    tileSelection.value = [...current, session];
+  }
+}
+
+export function clearTileSelection(): void {
+  tileSelection.value = [];
+}
 
 export function cycleTheme(): Theme {
   const order: Theme[] = ["glass", "neon", "minimal"];

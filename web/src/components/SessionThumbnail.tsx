@@ -3,41 +3,30 @@ import { Terminal } from "./Terminal";
 interface SessionThumbnailProps {
   session: string;
   focused: boolean;
+  selectionIndex: number; // -1 = not selected, 0+ = selection order
   onSelect: () => void;
   onClose: () => void;
-  onTile?: () => void;
+  onToggleTile: () => void;
 }
 
 export function SessionThumbnail({
   session,
   focused,
+  selectionIndex,
   onSelect,
   onClose,
-  onTile,
+  onToggleTile,
 }: SessionThumbnailProps) {
+  const selected = selectionIndex >= 0;
+
   return (
     <div
-      class={`session-thumbnail ${focused ? "focused" : ""}`}
+      class={`session-thumbnail ${focused ? "focused" : ""} ${selected ? "tile-selected" : ""}`}
       onClick={onSelect}
     >
       <div class="thumbnail-header">
         <span class="thumbnail-name">{session}</span>
         <div class="thumbnail-actions">
-          {onTile && (
-            <button
-              class="thumbnail-tile"
-              onClick={(e) => {
-                e.stopPropagation();
-                onTile();
-              }}
-              title="Tile session"
-            >
-              <svg width="12" height="12" viewBox="0 0 12 12">
-                <rect x="0" y="0" width="5" height="12" fill="currentColor" rx="1" />
-                <rect x="7" y="0" width="5" height="12" fill="currentColor" rx="1" />
-              </svg>
-            </button>
-          )}
           <button
             class="thumbnail-close"
             onClick={(e) => {
@@ -60,6 +49,16 @@ export function SessionThumbnail({
       <div class="thumbnail-content">
         <Terminal session={session} />
       </div>
+      <button
+        class={`tile-select-circle ${selected ? "selected" : ""}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleTile();
+        }}
+        title={selected ? "Remove from tile" : "Add to tile"}
+      >
+        {selected ? selectionIndex + 1 : ""}
+      </button>
     </div>
   );
 }
