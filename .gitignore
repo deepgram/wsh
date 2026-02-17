@@ -1,5 +1,7 @@
 .worktrees/
+.claude/
+.claude-plugin/
 /target/
 /web/node_modules/
 /web/bun.lock
-/web-dist/assets/
+/web-dist/
