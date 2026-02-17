@@ -24,7 +24,7 @@
             curl
             jq
             websocat
-            nodejs_22
+            bun
           ];
 
           # nix develop overwrites $SHELL with stdenv's readline-less bash,

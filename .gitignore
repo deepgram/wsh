@@ -1,4 +1,5 @@
 .worktrees/
 /target/
 /web/node_modules/
+/web/bun.lock
 /web-dist/assets/
