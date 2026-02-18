@@ -10,7 +10,7 @@ interface SessionPaneProps {
 export function SessionPane({ session, client }: SessionPaneProps) {
   return (
     <div class="session-pane">
-      <Terminal session={session} />
+      <Terminal session={session} client={client} />
       <InputBar session={session} client={client} />
     </div>
   );

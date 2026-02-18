@@ -715,6 +715,230 @@ html, body, #app {
 }
 
 /* ==========================================================================
+   Queue View
+   ========================================================================== */
+
+.queue-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg);
+}
+
+.queue-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--chrome);
+  border-bottom: 1px solid var(--border-dim);
+  flex-shrink: 0;
+}
+
+.queue-back {
+  color: #888;
+  display: flex;
+  align-items: center;
+  text-decoration: none;
+  padding: 2px;
+  border-radius: 3px;
+  transition: color 0.15s;
+}
+
+.queue-back:hover {
+  color: var(--cursor-color);
+}
+
+.queue-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+.queue-count {
+  font-size: 11px;
+  color: var(--bg, #0a0a0f);
+  background: var(--cursor-color);
+  border-radius: 10px;
+  padding: 1px 7px;
+  font-weight: 600;
+  font-family: system-ui, sans-serif;
+}
+
+/* ==========================================================================
+   Card Stack
+   ========================================================================== */
+
+.card-stack {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+  padding: 8px;
+  padding-bottom: 24px;
+}
+
+.card-stack-slot {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  right: 8px;
+  bottom: 24px;
+  transition: transform 0.3s ease, opacity 0.3s ease;
+}
+
+.card-stack-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.card-stack-empty-text {
+  font-size: 16px;
+  color: #666;
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+.card-stack-count {
+  position: absolute;
+  bottom: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 11px;
+  color: #666;
+  font-family: system-ui, sans-serif;
+}
+
+/* ==========================================================================
+   Queue Card
+   ========================================================================== */
+
+.queue-card {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.queue-card-behind {
+  pointer-events: none;
+}
+
+.queue-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--chrome);
+  border-bottom: 1px solid var(--border-dim);
+  flex-shrink: 0;
+}
+
+.queue-card-session {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  font-family: system-ui, -apple-system, sans-serif;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue-card-badge {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-family: system-ui, sans-serif;
+  flex-shrink: 0;
+}
+
+.queue-card-badge-prompt {
+  color: #f1c40f;
+  background: rgba(241, 196, 15, 0.15);
+  border: 1px solid rgba(241, 196, 15, 0.3);
+}
+
+.queue-card-badge-error {
+  color: #e74c3c;
+  background: rgba(231, 76, 60, 0.15);
+  border: 1px solid rgba(231, 76, 60, 0.3);
+}
+
+.queue-card-badge-idle {
+  color: #888;
+  background: rgba(136, 136, 136, 0.15);
+  border: 1px solid rgba(136, 136, 136, 0.3);
+}
+
+.queue-card-time {
+  font-size: 11px;
+  color: #666;
+  margin-left: auto;
+  flex-shrink: 0;
+  font-family: system-ui, sans-serif;
+}
+
+.queue-card-terminal {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.queue-card-terminal .terminal-container {
+  flex: 1;
+  min-height: 0;
+}
+
+.queue-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--chrome);
+  border-top: 1px solid var(--border-dim);
+  flex-shrink: 0;
+}
+
+.queue-card-trigger-text {
+  flex: 1;
+  font-size: 12px;
+  color: #888;
+  font-family: "SF Mono", "Menlo", "Monaco", "Consolas", monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.queue-card-dismiss {
+  background: none;
+  border: 1px solid #444;
+  color: #888;
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-family: system-ui, sans-serif;
+  font-weight: 500;
+  transition: color 0.15s, border-color 0.15s;
+  flex-shrink: 0;
+}
+
+.queue-card-dismiss:hover {
+  color: var(--cursor-color);
+  border-color: var(--cursor-color);
+}
+
+/* ==========================================================================
    Animations
    ========================================================================== */
 

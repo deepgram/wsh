@@ -156,15 +156,53 @@ function renderLine(
 
 interface TerminalProps {
   session: string;
+  client?: import("../api/ws").WshClient;
 }
 
-export function Terminal({ session }: TerminalProps) {
+function measureChar(container: HTMLElement): { w: number; h: number } {
+  const span = document.createElement("span");
+  span.className = "term-line";
+  span.textContent = "X";
+  span.style.position = "absolute";
+  span.style.visibility = "hidden";
+  container.appendChild(span);
+  const rect = span.getBoundingClientRect();
+  container.removeChild(span);
+  return { w: rect.width, h: rect.height };
+}
+
+export function Terminal({ session, client }: TerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const userScrolledRef = useRef(false);
 
   // Subscribe only to this session's signal (not all sessions)
   const screen = getScreenSignal(session).value;
   const disconnected = connectionState.value !== "connected";
+
+  // Resize PTY to match container dimensions
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || !client) return;
+
+    let prevCols = 0;
+    let prevRows = 0;
+
+    const observer = new ResizeObserver(() => {
+      const { w, h } = measureChar(el);
+      if (w === 0 || h === 0) return;
+      const cols = Math.floor(el.clientWidth / w);
+      const rows = Math.floor(el.clientHeight / h);
+      if (cols < 1 || rows < 1) return;
+      if (cols === prevCols && rows === prevRows) return;
+      prevCols = cols;
+      prevRows = rows;
+      client.resize(session, cols, rows).catch((e) => {
+        console.error(`Failed to resize session "${session}":`, e);
+      });
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [session, client]);
 
   // Track manual scrolling
   useEffect(() => {

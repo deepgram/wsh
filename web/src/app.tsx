@@ -125,12 +125,25 @@ export function App() {
     };
   }, []);
 
-  // Keyboard shortcut for overview toggle
+  // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "o") {
         e.preventDefault();
         viewMode.value = viewMode.value === "overview" ? "focused" : "overview";
+      }
+      // Ctrl+[ / Ctrl+] to switch sessions
+      if ((e.metaKey || e.ctrlKey) && (e.key === "[" || e.key === "]")) {
+        e.preventDefault();
+        const order = sessionOrder.value;
+        const current = focusedSession.value;
+        if (order.length < 2 || !current) return;
+        const idx = order.indexOf(current);
+        if (idx < 0) return;
+        const next = e.key === "]"
+          ? order[(idx + 1) % order.length]
+          : order[(idx - 1 + order.length) % order.length];
+        focusedSession.value = next;
       }
     };
     window.addEventListener("keydown", handleKeyDown);
@@ -239,12 +252,17 @@ function handleLifecycleEvent(client: WshClient, raw: any): void {
   switch (raw.event) {
     case "session_created": {
       const name = raw.params?.name;
-      if (!name || sessions.value.includes(name)) break;
-      sessions.value = [...sessions.value, name];
-      sessionOrder.value = [...sessionOrder.value, name];
-      setupSession(client, name).catch((e) => {
-        console.error(`Failed to set up new session "${name}":`, e);
-      });
+      if (!name) break;
+      if (!sessions.value.includes(name)) {
+        sessions.value = [...sessions.value, name];
+        sessionOrder.value = [...sessionOrder.value, name];
+      }
+      // Always set up if not already subscribed (handles race with eager update)
+      if (!unsubscribes.has(name)) {
+        setupSession(client, name).catch((e) => {
+          console.error(`Failed to set up new session "${name}":`, e);
+        });
+      }
       break;
     }
 
