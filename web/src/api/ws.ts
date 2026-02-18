@@ -388,6 +388,10 @@ export class WshClient {
     await this.request("send_input", { data }, session);
   }
 
+  async resize(session: string, cols: number, rows: number): Promise<void> {
+    await this.request("resize", { cols, rows }, session);
+  }
+
   subscribe(
     session: string,
     events: EventType[],

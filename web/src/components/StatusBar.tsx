@@ -114,6 +114,17 @@ export function StatusBar({ client }: StatusBarProps) {
                 />
               </svg>
             </button>
+            <a
+              class="status-btn"
+              href="#/queue"
+              title="Triage queue"
+            >
+              <svg width="14" height="14" viewBox="0 0 14 14">
+                <rect x="1" y="1" width="12" height="3" rx="1" stroke="currentColor" stroke-width="1" fill="none" />
+                <rect x="2" y="5.5" width="10" height="3" rx="1" stroke="currentColor" stroke-width="0.8" fill="none" opacity="0.6" />
+                <rect x="3" y="10" width="8" height="3" rx="1" stroke="currentColor" stroke-width="0.6" fill="none" opacity="0.3" />
+              </svg>
+            </a>
             <button
               class={`overview-toggle ${mode === "overview" ? "active" : ""}`}
               onClick={toggleOverview}

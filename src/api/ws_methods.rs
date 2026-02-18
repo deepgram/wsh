@@ -188,6 +188,13 @@ pub enum InputEncoding {
     Base64,
 }
 
+/// Parameters for the `resize` method.
+#[derive(Debug, Deserialize)]
+pub struct ResizeParams {
+    pub cols: u16,
+    pub rows: u16,
+}
+
 // ---------------------------------------------------------------------------
 // Overlay param types
 // ---------------------------------------------------------------------------
@@ -617,6 +624,39 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                     "Input send timed out.",
                 ),
             }
+        }
+        "resize" => {
+            let params: ResizeParams = match parse_params(req) {
+                Ok(p) => p,
+                Err(e) => return e,
+            };
+            if params.cols == 0 || params.rows == 0 {
+                return WsResponse::error(
+                    id,
+                    method,
+                    "invalid_request",
+                    "cols and rows must be positive.",
+                );
+            }
+            // Resize the PTY
+            if let Err(e) = session.pty.lock().resize(params.rows, params.cols) {
+                return WsResponse::error(
+                    id,
+                    method,
+                    "resize_failed",
+                    &format!("PTY resize failed: {}.", e),
+                );
+            }
+            // Resize the parser (terminal state machine)
+            if let Err(e) = session.parser.resize(params.cols as usize, params.rows as usize).await {
+                return WsResponse::error(
+                    id,
+                    method,
+                    "resize_failed",
+                    &format!("Parser resize failed: {}.", e),
+                );
+            }
+            WsResponse::success(id, method, serde_json::json!({}))
         }
         "list_panels" => {
             let mode = *session.screen_mode.read();
