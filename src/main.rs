@@ -311,23 +311,57 @@ async fn run_server(
 
     let app = api::router(state, token);
 
-    // Oneshot channel for server shutdown (Ctrl+C or ephemeral exit)
-    let (server_shutdown_tx, server_shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    // Cancellation token for HTTP server shutdown (supports multiple listeners)
+    let http_cancel = tokio_util::sync::CancellationToken::new();
 
     let listener = tokio::net::TcpListener::bind(bind)
         .await
         .map_err(WshError::Io)?;
     tracing::info!(addr = %bind, "HTTP/WS server listening");
 
+    // When binding to IPv4 loopback, also listen on IPv6 loopback.
+    // Browsers (especially Firefox) may resolve "localhost" to ::1 and
+    // wait ~30-60s for a TCP timeout before falling back to 127.0.0.1.
+    let ipv6_listener = if bind.ip() == std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST) {
+        let v6_addr = std::net::SocketAddr::new(
+            std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST),
+            bind.port(),
+        );
+        match tokio::net::TcpListener::bind(v6_addr).await {
+            Ok(l) => {
+                tracing::info!(addr = %v6_addr, "HTTP/WS server listening (IPv6 loopback)");
+                Some(l)
+            }
+            Err(e) => {
+                tracing::debug!(?e, addr = %v6_addr, "IPv6 loopback bind failed (non-fatal)");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let app_v6 = app.clone();
+    let cancel4 = http_cancel.clone();
     let http_handle = tokio::spawn(async move {
         if let Err(e) = axum::serve(listener, app)
-            .with_graceful_shutdown(async {
-                server_shutdown_rx.await.ok();
-            })
+            .with_graceful_shutdown(cancel4.cancelled_owned())
             .await
         {
             tracing::error!(?e, "HTTP server error");
         }
+    });
+
+    let http6_handle = ipv6_listener.map(|l| {
+        let cancel6 = http_cancel.clone();
+        tokio::spawn(async move {
+            if let Err(e) = axum::serve(l, app_v6)
+                .with_graceful_shutdown(cancel6.cancelled_owned())
+                .await
+            {
+                tracing::error!(?e, "HTTP server error (IPv6)");
+            }
+        })
     });
 
     // Start Unix socket server
@@ -439,8 +473,18 @@ async fn run_server(
     }
 
     // 1. Stop accepting new connections
-    let _ = server_shutdown_tx.send(());
+    http_cancel.cancel();
     socket_cancel.cancel();
+
+    // Remove the socket file immediately. Once the socket listener is
+    // cancelled it will never accept again, so the file is just a stale
+    // marker. Removing it early prevents a new spawn attempt from seeing
+    // the file, deleting it, failing to bind TCP (still held), and
+    // orphaning this server in an unreachable zombie state.
+    if socket_path_for_cleanup.exists() {
+        let _ = std::fs::remove_file(&socket_path_for_cleanup);
+        tracing::debug!(path = %socket_path_for_cleanup.display(), "removed socket file");
+    }
 
     // 2. Signal existing WS handlers to close
     shutdown.shutdown();
@@ -461,23 +505,34 @@ async fn run_server(
     // 4. Drain sessions (detach clients, SIGHUP children, schedule SIGKILL)
     let kill_handle = sessions.drain();
 
-    // 5. Await server tasks
-    if let Err(e) = http_handle.await {
-        tracing::warn!(?e, "HTTP server task panicked");
-    }
-    if let Err(e) = socket_handle.await {
-        tracing::warn!(?e, "socket server task panicked");
+    // 5. Await server tasks with a timeout. axum's graceful shutdown
+    //    waits for all in-flight connections to complete, which can block
+    //    indefinitely if a WebSocket or SSE connection is stuck (half-open
+    //    TCP, unresponsive client, etc.). Without this timeout the server
+    //    holds the TCP port forever in a zombie state — unreachable (socket
+    //    gone) but undying (port still bound).
+    if tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        async {
+            if let Err(e) = socket_handle.await {
+                tracing::warn!(?e, "socket server task panicked");
+            }
+            if let Err(e) = http_handle.await {
+                tracing::warn!(?e, "HTTP server task panicked");
+            }
+            if let Some(h) = http6_handle {
+                if let Err(e) = h.await {
+                    tracing::warn!(?e, "HTTP server task (IPv6) panicked");
+                }
+            }
+        },
+    ).await.is_err() {
+        tracing::warn!("server tasks did not exit within 5s, abandoning");
     }
 
     // 6. Wait for SIGKILL escalation to complete (if any sessions were drained)
     if let Some(handle) = kill_handle {
         let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
-    }
-
-    // Remove the socket file so a subsequent server can bind
-    if socket_path_for_cleanup.exists() {
-        let _ = std::fs::remove_file(&socket_path_for_cleanup);
-        tracing::debug!(path = %socket_path_for_cleanup.display(), "removed socket file");
     }
 
     tracing::info!("wsh server exiting");
