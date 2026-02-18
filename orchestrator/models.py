@@ -55,11 +55,13 @@ class ContextEntry:
     ts: str = field(default_factory=utcnow_iso)
     refs: Dict[str, Any] = field(default_factory=dict)
     human_attention_needed: bool = False
+    id: Optional[str] = None
 
     def __post_init__(self) -> None:
         if isinstance(self.kind, str):
             self.kind = EventKind(self.kind) if self.kind in set(k.value for k in EventKind) else self.kind
-        self.id = str(uuid.uuid4())
+        if self.id is None:
+            self.id = str(uuid.uuid4())
         self.ts = utcnow_iso() if not self.ts else self.ts
 
     @property
@@ -83,6 +85,7 @@ class ContextEntry:
             ts=data.get("ts", utcnow_iso()),
             refs=data.get("refs", {}),
             human_attention_needed=data.get("human_attention_needed", False),
+            id=data.get("id"),
         )
 
 

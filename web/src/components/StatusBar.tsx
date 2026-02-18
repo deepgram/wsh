@@ -118,6 +118,17 @@ export function StatusBar({ client }: StatusBarProps) {
                 <rect x="8" y="8" width="6" height="6" fill="currentColor" rx="1" />
               </svg>
             </button>
+            <a
+              href="#/queue"
+              class="status-btn"
+              title="Triage queue"
+            >
+              <svg width="14" height="14" viewBox="0 0 14 14">
+                <rect x="1" y="1" width="12" height="3" rx="1" fill="currentColor" />
+                <rect x="2" y="5.5" width="10" height="3" rx="1" fill="currentColor" opacity="0.5" />
+                <rect x="3" y="10" width="8" height="3" rx="1" fill="currentColor" opacity="0.25" />
+              </svg>
+            </a>
           </>
         )}
       </div>

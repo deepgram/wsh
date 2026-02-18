@@ -8,6 +8,7 @@ from typing import List, Optional
 
 from .config import OrchestratorConfig
 from .engine import Orchestrator
+from .server import run_server
 from .wsh_client import WshClientError
 
 
@@ -49,6 +50,11 @@ def create_parser() -> argparse.ArgumentParser:
     pull.add_argument("session_name")
 
     list_sessions = sub.add_parser("list", help="list active sessions from wsh")
+
+    serve = sub.add_parser("serve", help="run the queue HTTP+WebSocket server")
+    serve.add_argument("--host", default="127.0.0.1", help="bind address (default: 127.0.0.1)")
+    serve.add_argument("--port", type=int, default=9090, help="bind port (default: 9090)")
+
     return parser
 
 
@@ -69,6 +75,10 @@ def main() -> int:
     orchestrator = Orchestrator(apply_config(args))
 
     try:
+        if args.command == "serve":
+            run_server(apply_config(args), host=args.host, port=args.port)
+            return 0
+
         if args.command == "init":
             project = orchestrator.ensure_project(args.project_id, args.name, args.goal, branch=args.branch)
             print(json.dumps(project.__dict__, indent=2))

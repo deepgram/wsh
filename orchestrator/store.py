@@ -5,7 +5,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-from .models import ContextEntry, ProjectContext, ProjectSnapshot, SessionContext, utcnow_iso
+from .models import ContextEntry, EventKind, ProjectContext, ProjectSnapshot, SessionContext, utcnow_iso
 
 
 class ContextStore:
@@ -28,6 +28,9 @@ class ContextStore:
 
     def _session_file(self, project_id: str) -> Path:
         return self._project_dir(project_id) / "sessions.json"
+
+    def _resolved_file(self, project_id: str) -> Path:
+        return self._project_dir(project_id) / "resolved_ids.json"
 
     def ensure_project(self, context: ProjectContext) -> None:
         directory = self._project_dir(context.project_id)
@@ -123,4 +126,45 @@ class ContextStore:
             return {}
         payload = json.loads(path.read_text(encoding="utf-8"))
         return payload if isinstance(payload, dict) else {}
+
+    def get_resolved_ids(self, project_id: str) -> set:
+        path = self._resolved_file(project_id)
+        if not path.exists():
+            return set()
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return set(data) if isinstance(data, list) else set()
+
+    def resolve_entry(self, project_id: str, entry_id: str, action: str, text: str = "") -> None:
+        resolved = self.get_resolved_ids(project_id)
+        resolved.add(entry_id)
+        directory = self._project_dir(project_id)
+        directory.mkdir(parents=True, exist_ok=True)
+        self._resolved_file(project_id).write_text(
+            json.dumps(sorted(resolved), indent=2),
+            encoding="utf-8",
+        )
+        self.append_entry(
+            ContextEntry(
+                project_id=project_id,
+                session_name="human",
+                actor="human",
+                kind=EventKind.STATUS,
+                text=f"Resolved ({action}): {text}" if text else f"Resolved ({action})",
+                refs={"resolves_id": entry_id, "action": action},
+            )
+        )
+
+    def get_queue(self) -> List[ContextEntry]:
+        entries: List[ContextEntry] = []
+        for project_id in self.list_projects():
+            resolved = self.get_resolved_ids(project_id)
+            for event in self.get_events(project_id, limit=1000):
+                if event.id in resolved:
+                    continue
+                if (event.human_attention_needed
+                        or event.kind_value == EventKind.APPROVAL.value
+                        or event.kind_value == EventKind.ERROR.value):
+                    entries.append(event)
+        entries.sort(key=lambda e: e.ts, reverse=True)
+        return entries
 
