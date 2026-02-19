@@ -582,6 +582,7 @@ mod tests {
             env: None,
             rows: 24,
             cols: 80,
+            tags: vec![],
         };
         let resp = client.create_session(msg).await.unwrap();
         assert_eq!(resp.name, "client-test");
@@ -741,6 +742,7 @@ mod tests {
             env: None,
             rows: 24,
             cols: 80,
+            tags: vec![],
         };
         let _resp = client.create_session(msg).await.unwrap();
 

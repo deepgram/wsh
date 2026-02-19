@@ -1011,6 +1011,7 @@ async fn run_default(cli: Cli) -> Result<(), WshError> {
         env: None,
         rows,
         cols,
+        tags: vec![],  // Will be wired to CLI --tag flag in Task 8
     };
 
     let resp = c.create_session(msg).await.map_err(|e| {

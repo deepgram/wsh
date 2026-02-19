@@ -211,6 +211,16 @@ async fn handle_create_session<S: AsyncRead + AsyncWrite + Unpin>(
     .map_err(io::Error::other)?
     .map_err(io::Error::other)?;
 
+    // Validate and set tags before inserting into registry
+    if !msg.tags.is_empty() {
+        for tag in &msg.tags {
+            crate::session::validate_tag(tag).map_err(|e| {
+                io::Error::new(io::ErrorKind::InvalidInput, format!("invalid tag: {}", e))
+            })?;
+        }
+        *session.tags.write() = msg.tags.into_iter().collect();
+    }
+
     let name = match sessions.insert(msg.name, session.clone()) {
         Ok(name) => name,
         Err(e) => {
@@ -368,6 +378,8 @@ async fn handle_list_sessions<S: AsyncRead + AsyncWrite + Unpin>(
             .filter_map(|name| {
                 let session = sessions.get(&name)?;
                 let (rows, cols) = session.terminal_size.get();
+                let mut tags: Vec<String> = session.tags.read().iter().cloned().collect();
+                tags.sort();
                 Some(SessionInfoMsg {
                     name,
                     pid: session.pid,
@@ -375,6 +387,7 @@ async fn handle_list_sessions<S: AsyncRead + AsyncWrite + Unpin>(
                     rows,
                     cols,
                     clients: session.clients(),
+                    tags,
                 })
             })
             .collect(),
@@ -827,6 +840,7 @@ mod tests {
             env: None,
             rows: 24,
             cols: 80,
+            tags: vec![],
         };
         let frame = Frame::control(FrameType::CreateSession, &msg).unwrap();
         frame.write_to(&mut stream).await.unwrap();
@@ -927,6 +941,7 @@ mod tests {
             env: None,
             rows: 24,
             cols: 80,
+            tags: vec![],
         };
         let frame = Frame::control(FrameType::CreateSession, &msg).unwrap();
         frame.write_to(&mut stream).await.unwrap();
@@ -970,6 +985,7 @@ mod tests {
             env: None,
             rows: 24,
             cols: 80,
+            tags: vec![],
         };
         Frame::control(FrameType::CreateSession, &msg)
             .unwrap()
@@ -1005,6 +1021,7 @@ mod tests {
             env: None,
             rows: 24,
             cols: 80,
+            tags: vec![],
         };
         Frame::control(FrameType::CreateSession, &msg)
             .unwrap()
@@ -1250,6 +1267,7 @@ mod tests {
             env: None,
             rows: 24,
             cols: 80,
+            tags: vec![],
         };
         Frame::control(FrameType::CreateSession, &msg)
             .unwrap()
@@ -1377,6 +1395,7 @@ mod tests {
             env: None,
             rows: 24,
             cols: 80,
+            tags: vec![],
         };
         Frame::control(FrameType::CreateSession, &msg)
             .unwrap()

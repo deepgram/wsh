@@ -225,6 +225,8 @@ pub struct CreateSessionMsg {
     pub env: Option<std::collections::HashMap<String, String>>,
     pub rows: u16,
     pub cols: u16,
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 /// Server → Client: response after session creation.
@@ -310,6 +312,8 @@ pub struct SessionInfoMsg {
     pub rows: u16,
     pub cols: u16,
     pub clients: usize,
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 /// Client → Server: request to kill (destroy) a session.
@@ -525,6 +529,7 @@ mod tests {
             env: None,
             rows: 24,
             cols: 80,
+            tags: vec![],
         };
         let frame = Frame::control(FrameType::CreateSession, &msg).unwrap();
         assert_eq!(frame.frame_type, FrameType::CreateSession);
@@ -689,6 +694,7 @@ mod tests {
                     rows: 24,
                     cols: 80,
                     clients: 1,
+                    tags: vec![],
                 },
                 SessionInfoMsg {
                     name: "beta".to_string(),
@@ -697,6 +703,7 @@ mod tests {
                     rows: 0,
                     cols: 0,
                     clients: 0,
+                    tags: vec![],
                 },
             ],
         };
