@@ -254,8 +254,10 @@ export function Terminal({ session, client }: TerminalProps) {
     if (screen.scrollbackComplete || screen.scrollbackLoading) return;
     if (screen.alternateActive) return;
 
-    // Number of scrollback lines available = firstLineIndex
-    const scrollbackAvailable = screen.firstLineIndex;
+    // Derive scrollback available from totalLines and rows — these are kept
+    // current by line events, unlike firstLineIndex which only updates on
+    // sync/diff/reset.
+    const scrollbackAvailable = Math.max(0, screen.totalLines - screen.rows);
     if (scrollbackAvailable <= 0) return;
     if (screen.scrollbackOffset >= scrollbackAvailable) {
       updateScreen(session, { scrollbackComplete: true });
@@ -274,14 +276,31 @@ export function Terminal({ session, client }: TerminalProps) {
       .then((resp) => {
         const sig = getScreenSignal(session);
         const current = sig.value;
+        const currentAvailable = Math.max(0, current.totalLines - current.rows);
+
+        // If the server returned 0 lines, our request was likely based on stale
+        // state (e.g., a resize happened between request and response, absorbing
+        // scrollback into the larger PTY).  Don't mark as complete — only set it
+        // if the *current* state also shows no scrollback available.
+        if (resp.lines.length === 0) {
+          sig.value = {
+            ...current,
+            scrollbackLoading: false,
+            scrollbackComplete: currentAvailable <= 0,
+            totalLines: resp.total_lines,
+          };
+          return;
+        }
+
         // Prepend new lines before existing scrollback
         const newScrollback = [...resp.lines, ...current.scrollbackLines];
         const newOffset = current.scrollbackOffset + resp.lines.length;
+        const complete = newOffset >= currentAvailable || resp.lines.length < limit;
         sig.value = {
           ...current,
           scrollbackLines: newScrollback,
           scrollbackOffset: newOffset,
-          scrollbackComplete: newOffset >= current.firstLineIndex || resp.lines.length < limit,
+          scrollbackComplete: complete,
           scrollbackLoading: false,
           totalLines: resp.total_lines,
         };
@@ -289,7 +308,7 @@ export function Terminal({ session, client }: TerminalProps) {
       .catch(() => {
         updateScreen(session, { scrollbackLoading: false });
       });
-  }, [client, session, screen.scrollbackComplete, screen.scrollbackLoading, screen.alternateActive, screen.firstLineIndex, screen.scrollbackOffset]);
+  }, [client, session, screen.scrollbackComplete, screen.scrollbackLoading, screen.alternateActive, screen.totalLines, screen.rows, screen.scrollbackOffset]);
 
   // Track manual scrolling + trigger scrollback fetch near top
   useEffect(() => {
@@ -304,8 +323,25 @@ export function Terminal({ session, client }: TerminalProps) {
         fetchScrollback();
       }
     };
+    // Wheel events fire even when there's no overflow (unlike scroll events).
+    // This is critical: when the terminal content exactly fits the container
+    // (server rows == visible rows), there's no scrollbar and scroll events
+    // never fire. The user scrolling up with the wheel/trackpad should still
+    // trigger scrollback loading.
+    const handleWheel = (e: WheelEvent) => {
+      if (e.deltaY < 0 && el.scrollTop === 0) {
+        // Mark as user-scrolled so auto-scroll doesn't snap back to bottom
+        // when scrollback lines are prepended and the component re-renders.
+        userScrolledRef.current = true;
+        fetchScrollback();
+      }
+    };
     el.addEventListener("scroll", handleScroll);
-    return () => el.removeEventListener("scroll", handleScroll);
+    el.addEventListener("wheel", handleWheel, { passive: true });
+    return () => {
+      el.removeEventListener("scroll", handleScroll);
+      el.removeEventListener("wheel", handleWheel);
+    };
   }, [fetchScrollback]);
 
   // Auto-scroll to bottom when new content arrives (only in normal mode, only if at bottom)

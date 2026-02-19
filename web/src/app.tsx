@@ -350,6 +350,12 @@ function handleEvent(client: WshClient, session: string, raw: any): void {
       if (!screen) break;
       // Preserve existing scrollback cache across sync/diff updates
       const current = getScreen(session);
+      const newTotalLines = screen.total_lines ?? current.totalLines;
+      const newAvailable = Math.max(0, newTotalLines - screen.rows);
+      // Reset scrollbackComplete when new unfetched scrollback becomes available
+      const complete = current.scrollbackComplete && newAvailable > current.scrollbackOffset
+        ? false
+        : current.scrollbackComplete;
       setFullScreen(session, {
         lines: screen.lines,
         cursor: screen.cursor,
@@ -357,10 +363,10 @@ function handleEvent(client: WshClient, session: string, raw: any): void {
         cols: screen.cols,
         rows: screen.rows,
         firstLineIndex: screen.first_line_index,
-        totalLines: screen.total_lines ?? current.totalLines,
+        totalLines: newTotalLines,
         scrollbackLines: current.scrollbackLines,
         scrollbackOffset: current.scrollbackOffset,
-        scrollbackComplete: current.scrollbackComplete,
+        scrollbackComplete: complete,
         scrollbackLoading: current.scrollbackLoading,
       });
       break;
@@ -369,7 +375,14 @@ function handleEvent(client: WshClient, session: string, raw: any): void {
     case "line":
       updateLine(session, raw.index, raw.line);
       if (raw.total_lines !== undefined) {
-        updateScreen(session, { totalLines: raw.total_lines });
+        const current = getScreen(session);
+        const newAvailable = Math.max(0, raw.total_lines - current.rows);
+        // Reset scrollbackComplete when new unfetched scrollback becomes available
+        const resetComplete = current.scrollbackComplete && newAvailable > current.scrollbackOffset;
+        updateScreen(session, {
+          totalLines: raw.total_lines,
+          ...(resetComplete ? { scrollbackComplete: false } : {}),
+        });
       }
       break;
 
