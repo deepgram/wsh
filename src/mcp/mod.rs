@@ -164,6 +164,10 @@ impl WshMcpServer {
                 "maximum number of sessions reached".to_string(),
                 None,
             ),
+            RegistryError::InvalidTag(msg) => ErrorData::invalid_params(
+                format!("invalid tag: {msg}"),
+                None,
+            ),
         })?;
 
         // spawn_with_options calls fork()/exec() — run on blocking pool.
@@ -198,6 +202,10 @@ impl WshMcpServer {
                         ),
                         RegistryError::MaxSessionsReached => ErrorData::internal_error(
                             "maximum number of sessions reached".to_string(),
+                            None,
+                        ),
+                        RegistryError::InvalidTag(msg) => ErrorData::invalid_params(
+                            format!("invalid tag: {msg}"),
                             None,
                         ),
                     });
@@ -318,6 +326,10 @@ impl WshMcpServer {
                         ),
                         RegistryError::MaxSessionsReached => ErrorData::internal_error(
                             "maximum number of sessions reached".to_string(),
+                            None,
+                        ),
+                        RegistryError::InvalidTag(msg) => ErrorData::invalid_params(
+                            format!("invalid tag: {msg}"),
                             None,
                         ),
                     })?;

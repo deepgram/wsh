@@ -537,6 +537,7 @@ pub enum SessionEvent {
     Created { name: String },
     Renamed { old_name: String, new_name: String },
     Destroyed { name: String },
+    TagsChanged { name: String, added: Vec<String>, removed: Vec<String> },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -547,6 +548,8 @@ pub enum RegistryError {
     NotFound(String),
     #[error("maximum number of sessions reached")]
     MaxSessionsReached,
+    #[error("invalid tag: {0}")]
+    InvalidTag(String),
 }
 
 struct RegistryInner {
@@ -639,6 +642,13 @@ impl SessionRegistry {
         };
 
         session.name = assigned_name.clone();
+        // Index initial tags
+        {
+            let session_tags = session.tags.read();
+            for tag in session_tags.iter() {
+                inner.tags_index.entry(tag.clone()).or_default().insert(assigned_name.clone());
+            }
+        }
         inner.sessions.insert(assigned_name.clone(), session);
 
         // Send event (ignore error if there are no receivers).
@@ -690,6 +700,13 @@ impl SessionRegistry {
 
         session.name = assigned_name.clone();
         let cloned = session.clone();
+        // Index initial tags
+        {
+            let session_tags = session.tags.read();
+            for tag in session_tags.iter() {
+                inner.tags_index.entry(tag.clone()).or_default().insert(assigned_name.clone());
+            }
+        }
         inner.sessions.insert(assigned_name.clone(), session);
 
         let _ = self.events_tx.send(SessionEvent::Created {
@@ -708,10 +725,22 @@ impl SessionRegistry {
     /// Remove a session by name, returning the removed session if found.
     ///
     /// Emits a `SessionEvent::Destroyed` event when a session is removed.
+    /// Also cleans up the tags_index for any tags the session had.
     pub fn remove(&self, name: &str) -> Option<Session> {
         let mut inner = self.inner.write();
         let removed = inner.sessions.remove(name);
         if let Some(ref session) = removed {
+            // Clean up tags_index while still holding the write lock
+            let session_tags = session.tags.read();
+            for tag in session_tags.iter() {
+                if let Some(set) = inner.tags_index.get_mut(tag) {
+                    set.remove(name);
+                    if set.is_empty() {
+                        inner.tags_index.remove(tag);
+                    }
+                }
+            }
+            drop(session_tags);
             session.cancelled.cancel();
             let _ = self.events_tx.send(SessionEvent::Destroyed {
                 name: name.to_string(),
@@ -741,6 +770,17 @@ impl SessionRegistry {
         let mut session = inner.sessions.remove(old_name).unwrap();
         session.name = new_name.to_string();
         let cloned = session.clone();
+
+        // Update tags_index: replace old_name with new_name in each tag entry
+        let session_tags = session.tags.read();
+        for tag in session_tags.iter() {
+            if let Some(set) = inner.tags_index.get_mut(tag) {
+                set.remove(old_name);
+                set.insert(new_name.to_string());
+            }
+        }
+        drop(session_tags);
+
         inner.sessions.insert(new_name.to_string(), session);
 
         let _ = self.events_tx.send(SessionEvent::Renamed {
@@ -825,6 +865,7 @@ impl SessionRegistry {
         let sessions: Vec<Session> = {
             let mut inner = self.inner.write();
             let drained: Vec<(String, Session)> = inner.sessions.drain().collect();
+            inner.tags_index.clear();
             for (name, ref session) in &drained {
                 session.cancelled.cancel();
                 session.detach();
@@ -850,6 +891,78 @@ impl SessionRegistry {
     /// Subscribe to session lifecycle events.
     pub fn subscribe_events(&self) -> tokio_broadcast::Receiver<SessionEvent> {
         self.events_tx.subscribe()
+    }
+
+    /// Add tags to a session. Validates each tag, updates Session and reverse index atomically.
+    pub fn add_tags(&self, name: &str, tags: &[String]) -> Result<(), RegistryError> {
+        for tag in tags {
+            validate_tag(tag).map_err(RegistryError::InvalidTag)?;
+        }
+        let mut inner = self.inner.write();
+        // Clone the Arc<RwLock<HashSet>> to release the immutable borrow on inner.sessions,
+        // allowing us to mutably borrow inner.tags_index in the same scope.
+        let session_tags_arc = inner.sessions.get(name)
+            .ok_or_else(|| RegistryError::NotFound(name.to_string()))?
+            .tags.clone();
+        let mut session_tags = session_tags_arc.write();
+        let mut added = Vec::new();
+        for tag in tags {
+            if session_tags.insert(tag.clone()) {
+                inner.tags_index.entry(tag.clone()).or_default().insert(name.to_string());
+                added.push(tag.clone());
+            }
+        }
+        drop(session_tags);
+        drop(inner);
+        if !added.is_empty() {
+            let _ = self.events_tx.send(SessionEvent::TagsChanged {
+                name: name.to_string(), added, removed: vec![],
+            });
+        }
+        Ok(())
+    }
+
+    /// Remove tags from a session. Updates Session and reverse index atomically.
+    pub fn remove_tags(&self, name: &str, tags: &[String]) -> Result<(), RegistryError> {
+        let mut inner = self.inner.write();
+        // Clone the Arc<RwLock<HashSet>> to release the immutable borrow on inner.sessions,
+        // allowing us to mutably borrow inner.tags_index in the same scope.
+        let session_tags_arc = inner.sessions.get(name)
+            .ok_or_else(|| RegistryError::NotFound(name.to_string()))?
+            .tags.clone();
+        let mut session_tags = session_tags_arc.write();
+        let mut removed = Vec::new();
+        for tag in tags {
+            if session_tags.remove(tag) {
+                if let Some(set) = inner.tags_index.get_mut(tag) {
+                    set.remove(name);
+                    if set.is_empty() {
+                        inner.tags_index.remove(tag);
+                    }
+                }
+                removed.push(tag.clone());
+            }
+        }
+        drop(session_tags);
+        drop(inner);
+        if !removed.is_empty() {
+            let _ = self.events_tx.send(SessionEvent::TagsChanged {
+                name: name.to_string(), added: vec![], removed,
+            });
+        }
+        Ok(())
+    }
+
+    /// Return session names matching ANY of the given tags (union/OR semantics).
+    pub fn sessions_by_tags(&self, tags: &[String]) -> Vec<String> {
+        let inner = self.inner.read();
+        let mut result = HashSet::new();
+        for tag in tags {
+            if let Some(names) = inner.tags_index.get(tag) {
+                result.extend(names.iter().cloned());
+            }
+        }
+        result.into_iter().collect()
     }
 
     /// Monitor a session's child process exit and remove it from the registry.
@@ -944,6 +1057,17 @@ impl SessionRegistry {
             Some(name) => {
                 tracing::info!(session = %name, "session child process exited");
                 if let Some(session) = inner.sessions.remove(&name) {
+                    // Clean up tags_index
+                    let session_tags = session.tags.read();
+                    for tag in session_tags.iter() {
+                        if let Some(set) = inner.tags_index.get_mut(tag) {
+                            set.remove(&name);
+                            if set.is_empty() {
+                                inner.tags_index.remove(tag);
+                            }
+                        }
+                    }
+                    drop(session_tags);
                     session.cancelled.cancel();
                     session.detach();
                     let _ = self.events_tx.send(SessionEvent::Destroyed { name });
@@ -1326,5 +1450,156 @@ mod tests {
         assert!(validate_tag("has space").is_err());
         assert!(validate_tag(&"x".repeat(65)).is_err());
         assert!(validate_tag("special!char").is_err());
+    }
+
+    // ---- Tag operations tests ----
+
+    #[tokio::test]
+    async fn registry_add_tags() {
+        let registry = SessionRegistry::new();
+        registry.insert(Some("s1".into()), make_test_session("x")).unwrap();
+        registry.add_tags("s1", &["build".into(), "test".into()]).unwrap();
+        let s = registry.get("s1").unwrap();
+        let mut tags: Vec<String> = s.tags.read().iter().cloned().collect();
+        tags.sort();
+        assert_eq!(tags, vec!["build", "test"]);
+    }
+
+    #[tokio::test]
+    async fn registry_sessions_by_tags_union() {
+        let registry = SessionRegistry::new();
+        registry.insert(Some("s1".into()), make_test_session("x")).unwrap();
+        registry.insert(Some("s2".into()), make_test_session("x")).unwrap();
+        registry.insert(Some("s3".into()), make_test_session("x")).unwrap();
+        registry.add_tags("s1", &["build".into()]).unwrap();
+        registry.add_tags("s2", &["test".into()]).unwrap();
+        registry.add_tags("s3", &["build".into(), "test".into()]).unwrap();
+
+        let mut result = registry.sessions_by_tags(&["build".into()]);
+        result.sort();
+        assert_eq!(result, vec!["s1", "s3"]);
+
+        let mut result = registry.sessions_by_tags(&["build".into(), "test".into()]);
+        result.sort();
+        assert_eq!(result, vec!["s1", "s2", "s3"]);
+    }
+
+    #[tokio::test]
+    async fn registry_remove_cleans_index() {
+        let registry = SessionRegistry::new();
+        registry.insert(Some("s1".into()), make_test_session("x")).unwrap();
+        registry.add_tags("s1", &["build".into()]).unwrap();
+        registry.remove("s1");
+        assert!(registry.sessions_by_tags(&["build".into()]).is_empty());
+    }
+
+    #[tokio::test]
+    async fn registry_rename_updates_index() {
+        let registry = SessionRegistry::new();
+        registry.insert(Some("s1".into()), make_test_session("x")).unwrap();
+        registry.add_tags("s1", &["build".into()]).unwrap();
+        registry.rename("s1", "s2").unwrap();
+        let result = registry.sessions_by_tags(&["build".into()]);
+        assert!(result.contains(&"s2".to_string()));
+        assert!(!result.contains(&"s1".to_string()));
+    }
+
+    #[tokio::test]
+    async fn registry_remove_tags() {
+        let registry = SessionRegistry::new();
+        registry.insert(Some("s1".into()), make_test_session("x")).unwrap();
+        registry.add_tags("s1", &["build".into(), "test".into()]).unwrap();
+        registry.remove_tags("s1", &["build".into()]).unwrap();
+        let s = registry.get("s1").unwrap();
+        let tags: Vec<String> = s.tags.read().iter().cloned().collect();
+        assert_eq!(tags, vec!["test"]);
+        assert!(registry.sessions_by_tags(&["build".into()]).is_empty());
+    }
+
+    #[tokio::test]
+    async fn registry_insert_with_initial_tags() {
+        let registry = SessionRegistry::new();
+        let s = make_test_session("x");
+        *s.tags.write() = HashSet::from(["build".into(), "ci".into()]);
+        registry.insert(Some("s1".into()), s).unwrap();
+        let mut result = registry.sessions_by_tags(&["build".into()]);
+        result.sort();
+        assert_eq!(result, vec!["s1"]);
+    }
+
+    #[tokio::test]
+    async fn registry_add_tags_invalid() {
+        let registry = SessionRegistry::new();
+        registry.insert(Some("s1".into()), make_test_session("x")).unwrap();
+        assert!(registry.add_tags("s1", &["".into()]).is_err());
+        assert!(registry.add_tags("s1", &["invalid tag!".into()]).is_err());
+    }
+
+    #[tokio::test]
+    async fn registry_add_tags_not_found() {
+        let registry = SessionRegistry::new();
+        assert!(registry.add_tags("nonexistent", &["build".into()]).is_err());
+    }
+
+    #[tokio::test]
+    async fn registry_add_tags_emits_event() {
+        let registry = SessionRegistry::new();
+        let mut rx = registry.subscribe_events();
+        registry.insert(Some("s1".into()), make_test_session("x")).unwrap();
+        // Drain the Created event
+        let _ = rx.recv().await.unwrap();
+
+        registry.add_tags("s1", &["build".into(), "test".into()]).unwrap();
+        let ev = rx.recv().await.expect("should receive TagsChanged event");
+        match ev {
+            SessionEvent::TagsChanged { ref name, ref added, ref removed } => {
+                assert_eq!(name, "s1");
+                let mut added_sorted = added.clone();
+                added_sorted.sort();
+                assert_eq!(added_sorted, vec!["build", "test"]);
+                assert!(removed.is_empty());
+            }
+            _ => panic!("expected TagsChanged, got: {ev:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn registry_remove_tags_emits_event() {
+        let registry = SessionRegistry::new();
+        let mut rx = registry.subscribe_events();
+        registry.insert(Some("s1".into()), make_test_session("x")).unwrap();
+        registry.add_tags("s1", &["build".into(), "test".into()]).unwrap();
+        // Drain Created + TagsChanged events
+        let _ = rx.recv().await.unwrap();
+        let _ = rx.recv().await.unwrap();
+
+        registry.remove_tags("s1", &["build".into()]).unwrap();
+        let ev = rx.recv().await.expect("should receive TagsChanged event");
+        match ev {
+            SessionEvent::TagsChanged { ref name, ref added, ref removed } => {
+                assert_eq!(name, "s1");
+                assert!(added.is_empty());
+                assert_eq!(removed, &vec!["build".to_string()]);
+            }
+            _ => panic!("expected TagsChanged, got: {ev:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn registry_add_tags_idempotent() {
+        let registry = SessionRegistry::new();
+        registry.insert(Some("s1".into()), make_test_session("x")).unwrap();
+        registry.add_tags("s1", &["build".into()]).unwrap();
+
+        let mut rx = registry.subscribe_events();
+        // Adding the same tag again should not emit an event
+        registry.add_tags("s1", &["build".into()]).unwrap();
+
+        // Try to receive — should timeout since no event was emitted
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            rx.recv(),
+        ).await;
+        assert!(result.is_err(), "should not receive TagsChanged for duplicate add");
     }
 }

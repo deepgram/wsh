@@ -824,6 +824,12 @@ fn format_registry_event(
                 "params": { "name": name }
             })
         }
+        crate::session::SessionEvent::TagsChanged { name, added, removed } => {
+            serde_json::json!({
+                "event": "session_tags_changed",
+                "params": { "name": name, "added": added, "removed": removed }
+            })
+        }
     }
 }
 
@@ -1178,6 +1184,12 @@ async fn handle_server_ws_request(
                         "max_sessions_reached",
                         "Maximum number of sessions reached.",
                     ),
+                    RegistryError::InvalidTag(msg) => super::ws_methods::WsResponse::error(
+                        id,
+                        method,
+                        "invalid_tag",
+                        &format!("Invalid tag: {}.", msg),
+                    ),
                 });
             }
 
@@ -1237,6 +1249,12 @@ async fn handle_server_ws_request(
                             method,
                             "max_sessions_reached",
                             "Maximum number of sessions reached.",
+                        ),
+                        RegistryError::InvalidTag(msg) => super::ws_methods::WsResponse::error(
+                            id,
+                            method,
+                            "invalid_tag",
+                            &format!("Invalid tag: {}.", msg),
                         ),
                     });
                 }
@@ -1428,6 +1446,14 @@ async fn handle_server_ws_request(
                         method,
                         "max_sessions_reached",
                         "Maximum number of sessions reached.",
+                    ));
+                }
+                Err(RegistryError::InvalidTag(msg)) => {
+                    return Some(super::ws_methods::WsResponse::error(
+                        id,
+                        method,
+                        "invalid_tag",
+                        &format!("Invalid tag: {}.", msg),
                     ));
                 }
             }
@@ -2359,6 +2385,7 @@ pub(super) async fn session_create(
         RegistryError::NameExists(n) => ApiError::SessionNameConflict(n),
         RegistryError::NotFound(n) => ApiError::SessionNotFound(n),
         RegistryError::MaxSessionsReached => ApiError::MaxSessionsReached,
+        RegistryError::InvalidTag(msg) => ApiError::InvalidRequest(msg),
     })?;
 
     // Use a placeholder name for spawn; registry.insert will assign the real name.
@@ -2384,6 +2411,7 @@ pub(super) async fn session_create(
                 RegistryError::NameExists(n) => ApiError::SessionNameConflict(n),
                 RegistryError::NotFound(n) => ApiError::SessionNotFound(n),
                 RegistryError::MaxSessionsReached => ApiError::MaxSessionsReached,
+                RegistryError::InvalidTag(msg) => ApiError::InvalidRequest(msg),
             });
         }
     };
@@ -2414,6 +2442,7 @@ pub(super) async fn session_rename(
         RegistryError::NameExists(n) => ApiError::SessionNameConflict(n),
         RegistryError::NotFound(n) => ApiError::SessionNotFound(n),
         RegistryError::MaxSessionsReached => ApiError::MaxSessionsReached,
+        RegistryError::InvalidTag(msg) => ApiError::InvalidRequest(msg),
     })?;
 
     Ok(Json(build_session_info(&session)))
