@@ -29,6 +29,11 @@ pub struct CreateSessionParams {
     /// Environment variable overrides for the spawned process.
     #[schemars(description = "Additional environment variables for the spawned process.")]
     pub env: Option<HashMap<String, String>>,
+
+    /// Tags to assign to the session at creation time.
+    #[serde(default)]
+    #[schemars(description = "Tags to assign to the session at creation time.")]
+    pub tags: Vec<String>,
 }
 
 /// Parameters for the `wsh_list_sessions` tool.
@@ -37,6 +42,11 @@ pub struct ListSessionsParams {
     /// If provided, return details for a single session instead of all sessions.
     #[schemars(description = "If provided, return details for this specific session instead of listing all.")]
     pub session: Option<String>,
+
+    /// Filter sessions by tags (union/OR semantics). Only used when `session` is None.
+    #[serde(default)]
+    #[schemars(description = "Filter sessions by tags (union/OR semantics). Only used when session is not specified.")]
+    pub tag: Vec<String>,
 }
 
 /// Action to perform on a session.
@@ -49,6 +59,10 @@ pub enum ManageAction {
     Rename,
     /// Detach all streaming clients from the session.
     Detach,
+    /// Add tags to the session. Requires `tags`.
+    AddTags,
+    /// Remove tags from the session. Requires `tags`.
+    RemoveTags,
 }
 
 /// Parameters for the `wsh_manage_session` tool.
@@ -59,12 +73,17 @@ pub struct ManageSessionParams {
     pub session: String,
 
     /// The action to perform on the session.
-    #[schemars(description = "The action to perform: kill, rename, or detach.")]
+    #[schemars(description = "The action to perform: kill, rename, detach, add_tags, or remove_tags.")]
     pub action: ManageAction,
 
     /// New name for the session (required when action is 'rename').
     #[schemars(description = "New name for the session. Required when action is 'rename'.")]
     pub new_name: Option<String>,
+
+    /// Tags to add or remove (used with `add_tags` and `remove_tags` actions).
+    #[serde(default)]
+    #[schemars(description = "Tags to add or remove. Required when action is 'add_tags' or 'remove_tags'.")]
+    pub tags: Vec<String>,
 }
 
 // ── Terminal I/O parameter types ─────────────────────────────────
@@ -408,6 +427,7 @@ mod tests {
         assert!(params.cols.is_none());
         assert!(params.cwd.is_none());
         assert!(params.env.is_none());
+        assert!(params.tags.is_empty());
     }
 
     #[test]
@@ -444,6 +464,7 @@ mod tests {
         let json = serde_json::json!({});
         let params: ListSessionsParams = serde_json::from_value(json).unwrap();
         assert!(params.session.is_none());
+        assert!(params.tag.is_empty());
     }
 
     #[test]
@@ -495,6 +516,7 @@ mod tests {
         assert_eq!(params.session, "my-session");
         assert!(matches!(params.action, ManageAction::Kill));
         assert!(params.new_name.is_none());
+        assert!(params.tags.is_empty());
     }
 
     #[test]
@@ -533,6 +555,97 @@ mod tests {
         let json = serde_json::json!({"session": "my-session"});
         let result = serde_json::from_value::<ManageSessionParams>(json);
         assert!(result.is_err());
+    }
+
+    // ── CreateSessionParams with tags ───────────────────────────
+
+    #[test]
+    fn create_session_params_with_tags() {
+        let json = serde_json::json!({
+            "name": "tagged",
+            "tags": ["build", "ci"]
+        });
+        let params: CreateSessionParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.name.as_deref(), Some("tagged"));
+        assert_eq!(params.tags, vec!["build", "ci"]);
+    }
+
+    #[test]
+    fn create_session_params_tags_default_to_empty() {
+        let json = serde_json::json!({"name": "no-tags"});
+        let params: CreateSessionParams = serde_json::from_value(json).unwrap();
+        assert!(params.tags.is_empty());
+    }
+
+    // ── ListSessionsParams with tag filter ──────────────────────
+
+    #[test]
+    fn list_sessions_params_with_tag_filter() {
+        let json = serde_json::json!({"tag": ["build", "test"]});
+        let params: ListSessionsParams = serde_json::from_value(json).unwrap();
+        assert!(params.session.is_none());
+        assert_eq!(params.tag, vec!["build", "test"]);
+    }
+
+    #[test]
+    fn list_sessions_params_tag_defaults_to_empty() {
+        let json = serde_json::json!({"session": "s"});
+        let params: ListSessionsParams = serde_json::from_value(json).unwrap();
+        assert!(params.tag.is_empty());
+    }
+
+    // ── ManageAction tag variants ───────────────────────────────
+
+    #[test]
+    fn manage_action_add_tags() {
+        let json = serde_json::json!("add_tags");
+        let action: ManageAction = serde_json::from_value(json).unwrap();
+        assert!(matches!(action, ManageAction::AddTags));
+    }
+
+    #[test]
+    fn manage_action_remove_tags() {
+        let json = serde_json::json!("remove_tags");
+        let action: ManageAction = serde_json::from_value(json).unwrap();
+        assert!(matches!(action, ManageAction::RemoveTags));
+    }
+
+    // ── ManageSessionParams with tags ───────────────────────────
+
+    #[test]
+    fn manage_session_params_add_tags() {
+        let json = serde_json::json!({
+            "session": "my-session",
+            "action": "add_tags",
+            "tags": ["build", "ci"]
+        });
+        let params: ManageSessionParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.session, "my-session");
+        assert!(matches!(params.action, ManageAction::AddTags));
+        assert_eq!(params.tags, vec!["build", "ci"]);
+    }
+
+    #[test]
+    fn manage_session_params_remove_tags() {
+        let json = serde_json::json!({
+            "session": "my-session",
+            "action": "remove_tags",
+            "tags": ["old-tag"]
+        });
+        let params: ManageSessionParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.session, "my-session");
+        assert!(matches!(params.action, ManageAction::RemoveTags));
+        assert_eq!(params.tags, vec!["old-tag"]);
+    }
+
+    #[test]
+    fn manage_session_params_tags_default_to_empty() {
+        let json = serde_json::json!({
+            "session": "s",
+            "action": "kill"
+        });
+        let params: ManageSessionParams = serde_json::from_value(json).unwrap();
+        assert!(params.tags.is_empty());
     }
 
     // ── SendInputParams ─────────────────────────────────────────

@@ -135,6 +135,7 @@ impl WshMcpServer {
         Parameters(params): Parameters<CreateSessionParams>,
     ) -> Result<CallToolResult, ErrorData> {
         let param_name = params.name;
+        let tags = params.tags;
         let command = match params.command {
             Some(cmd) => SpawnCommand::Command {
                 command: cmd,
@@ -186,6 +187,16 @@ impl WshMcpServer {
                 )
             })?;
 
+        // Validate and set initial tags before registry insertion
+        if !tags.is_empty() {
+            for tag in &tags {
+                crate::session::validate_tag(tag).map_err(|e| {
+                    ErrorData::invalid_params(format!("invalid tag: {e}"), None)
+                })?;
+            }
+            *session.tags.write() = tags.into_iter().collect();
+        }
+
         let (assigned_name, session) =
             match self.state.sessions.insert_and_get(param_name, session.clone()) {
                 Ok(result) => result,
@@ -217,11 +228,14 @@ impl WshMcpServer {
             .sessions
             .monitor_child_exit(assigned_name.clone(), session.client_count.clone(), session.child_exited.clone(), child_exit_rx);
 
+        let mut result_tags: Vec<String> = session.tags.read().iter().cloned().collect();
+        result_tags.sort();
         let result = serde_json::json!({
             "name": assigned_name,
             "pid": session.pid,
             "rows": rows,
             "cols": cols,
+            "tags": result_tags,
         });
 
         Ok(CallToolResult::success(vec![Content::text(
@@ -239,6 +253,8 @@ impl WshMcpServer {
             // Single session detail
             let session = self.get_session(&name)?;
             let (rows, cols) = session.terminal_size.get();
+            let mut tags: Vec<String> = session.tags.read().iter().cloned().collect();
+            tags.sort();
             let result = serde_json::json!({
                 "name": session.name,
                 "pid": session.pid,
@@ -246,18 +262,25 @@ impl WshMcpServer {
                 "rows": rows,
                 "cols": cols,
                 "clients": session.clients(),
+                "tags": tags,
             });
             Ok(CallToolResult::success(vec![Content::text(
                 serde_json::to_string(&result).unwrap_or_default(),
             )]))
         } else {
-            // All sessions
-            let names = self.state.sessions.list();
+            // All sessions (optionally filtered by tags)
+            let names = if params.tag.is_empty() {
+                self.state.sessions.list()
+            } else {
+                self.state.sessions.sessions_by_tags(&params.tag)
+            };
             let sessions: Vec<serde_json::Value> = names
                 .into_iter()
                 .filter_map(|name| {
                     let session = self.state.sessions.get(&name)?;
                     let (rows, cols) = session.terminal_size.get();
+                    let mut tags: Vec<String> = session.tags.read().iter().cloned().collect();
+                    tags.sort();
                     Some(serde_json::json!({
                         "name": name,
                         "pid": session.pid,
@@ -265,6 +288,7 @@ impl WshMcpServer {
                         "rows": rows,
                         "cols": cols,
                         "clients": session.clients(),
+                        "tags": tags,
                     }))
                 })
                 .collect();
@@ -276,8 +300,8 @@ impl WshMcpServer {
         }
     }
 
-    /// Manage an existing session: kill, rename, or detach.
-    #[tool(description = "Manage a terminal session. Actions: 'kill' destroys the session, 'rename' changes its name (requires new_name), 'detach' disconnects all streaming clients.")]
+    /// Manage an existing session: kill, rename, detach, add_tags, or remove_tags.
+    #[tool(description = "Manage a terminal session. Actions: 'kill' destroys the session, 'rename' changes its name (requires new_name), 'detach' disconnects all streaming clients, 'add_tags' adds tags (requires tags), 'remove_tags' removes tags (requires tags).")]
     async fn wsh_manage_session(
         &self,
         Parameters(params): Parameters<ManageSessionParams>,
@@ -351,6 +375,70 @@ impl WshMcpServer {
                 let result = serde_json::json!({
                     "status": "detached",
                     "session": params.session,
+                });
+                Ok(CallToolResult::success(vec![Content::text(
+                    serde_json::to_string(&result).unwrap_or_default(),
+                )]))
+            }
+
+            ManageAction::AddTags => {
+                if params.tags.is_empty() {
+                    return Err(ErrorData::invalid_params(
+                        "tags field is required for add_tags action".to_string(),
+                        None,
+                    ));
+                }
+                self.state
+                    .sessions
+                    .add_tags(&params.session, &params.tags)
+                    .map_err(|e| match e {
+                        RegistryError::NotFound(n) => ErrorData::invalid_params(
+                            format!("session not found: {n}"),
+                            None,
+                        ),
+                        RegistryError::InvalidTag(e) => ErrorData::invalid_params(
+                            format!("invalid tag: {e}"),
+                            None,
+                        ),
+                        _ => ErrorData::internal_error(format!("{e}"), None),
+                    })?;
+                let session = self.get_session(&params.session)?;
+                let mut tags: Vec<String> = session.tags.read().iter().cloned().collect();
+                tags.sort();
+                let result = serde_json::json!({
+                    "status": "tags_added",
+                    "session": params.session,
+                    "tags": tags,
+                });
+                Ok(CallToolResult::success(vec![Content::text(
+                    serde_json::to_string(&result).unwrap_or_default(),
+                )]))
+            }
+
+            ManageAction::RemoveTags => {
+                if params.tags.is_empty() {
+                    return Err(ErrorData::invalid_params(
+                        "tags field is required for remove_tags action".to_string(),
+                        None,
+                    ));
+                }
+                self.state
+                    .sessions
+                    .remove_tags(&params.session, &params.tags)
+                    .map_err(|e| match e {
+                        RegistryError::NotFound(n) => ErrorData::invalid_params(
+                            format!("session not found: {n}"),
+                            None,
+                        ),
+                        _ => ErrorData::internal_error(format!("{e}"), None),
+                    })?;
+                let session = self.get_session(&params.session)?;
+                let mut tags: Vec<String> = session.tags.read().iter().cloned().collect();
+                tags.sort();
+                let result = serde_json::json!({
+                    "status": "tags_removed",
+                    "session": params.session,
+                    "tags": tags,
                 });
                 Ok(CallToolResult::success(vec![Content::text(
                     serde_json::to_string(&result).unwrap_or_default(),
