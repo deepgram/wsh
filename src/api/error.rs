@@ -55,6 +55,8 @@ pub enum ApiError {
     AlreadyInAltScreen,
     /// 409 - Session is not in alternate screen mode.
     NotInAltScreen,
+    /// 400 - Invalid tag value.
+    InvalidTag(String),
     /// 429 - Resource limit reached (too many overlays, panels, etc.).
     ResourceLimitReached(String),
     /// 500 - Catch-all internal error.
@@ -87,6 +89,7 @@ impl ApiError {
             ApiError::NotFocusable(_) => StatusCode::BAD_REQUEST,
             ApiError::AlreadyInAltScreen => StatusCode::CONFLICT,
             ApiError::NotInAltScreen => StatusCode::CONFLICT,
+            ApiError::InvalidTag(_) => StatusCode::BAD_REQUEST,
             ApiError::ResourceLimitReached(_) => StatusCode::TOO_MANY_REQUESTS,
             ApiError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -117,6 +120,7 @@ impl ApiError {
             ApiError::NotFocusable(_) => "not_focusable",
             ApiError::AlreadyInAltScreen => "already_in_alt_screen",
             ApiError::NotInAltScreen => "not_in_alt_screen",
+            ApiError::InvalidTag(_) => "invalid_tag",
             ApiError::ResourceLimitReached(_) => "resource_limit_reached",
             ApiError::InternalError(_) => "internal_error",
         }
@@ -163,6 +167,7 @@ impl ApiError {
             ApiError::NotInAltScreen => {
                 "Session is not in alternate screen mode.".to_string()
             }
+            ApiError::InvalidTag(detail) => format!("Invalid tag: {}.", detail),
             ApiError::ResourceLimitReached(detail) => {
                 format!("Resource limit reached: {}.", detail)
             }
@@ -584,5 +589,26 @@ mod tests {
             json["error"]["message"],
             "Session is not in alternate screen mode."
         );
+    }
+
+    // ── InvalidTag error tests ──────────────────────────────────────
+
+    #[tokio::test]
+    async fn invalid_tag_status() {
+        let (status, _) = response_parts(ApiError::InvalidTag("too long".into())).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn invalid_tag_code() {
+        let (_, json) = response_parts(ApiError::InvalidTag("too long".into())).await;
+        assert_eq!(json["error"]["code"], "invalid_tag");
+    }
+
+    #[tokio::test]
+    async fn invalid_tag_includes_detail() {
+        let (_, json) = response_parts(ApiError::InvalidTag("tag must not be empty".into())).await;
+        let msg = json["error"]["message"].as_str().unwrap();
+        assert_eq!(msg, "Invalid tag: tag must not be empty.");
     }
 }

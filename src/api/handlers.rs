@@ -2315,6 +2315,8 @@ pub(super) struct CreateSessionRequest {
     pub cols: Option<u16>,
     pub cwd: Option<String>,
     pub env: Option<std::collections::HashMap<String, String>>,
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -2325,10 +2327,13 @@ pub(super) struct SessionInfo {
     pub rows: u16,
     pub cols: u16,
     pub clients: usize,
+    pub tags: Vec<String>,
 }
 
 fn build_session_info(session: &crate::session::Session) -> SessionInfo {
     let (rows, cols) = session.terminal_size.get();
+    let mut tags: Vec<String> = session.tags.read().iter().cloned().collect();
+    tags.sort();
     SessionInfo {
         name: session.name.clone(),
         pid: session.pid,
@@ -2336,20 +2341,44 @@ fn build_session_info(session: &crate::session::Session) -> SessionInfo {
         rows,
         cols,
         clients: session.clients(),
+        tags,
     }
 }
 
 #[derive(Deserialize)]
-pub(super) struct RenameSessionRequest {
-    pub name: String,
+pub(super) struct UpdateSessionRequest {
+    /// New name for the session (optional, for rename)
+    pub name: Option<String>,
+    /// Tags to add (optional)
+    #[serde(default)]
+    pub add_tags: Vec<String>,
+    /// Tags to remove (optional)
+    #[serde(default)]
+    pub remove_tags: Vec<String>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct ListSessionsQuery {
+    /// Comma-separated list of tags, or repeated `?tag=a&tag=b` params.
+    #[serde(default)]
+    pub tag: Option<String>,
 }
 
 // ── Session management handlers ──────────────────────────────────
 
 pub(super) async fn session_list(
     State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<ListSessionsQuery>,
 ) -> Json<Vec<SessionInfo>> {
-    let names = state.sessions.list();
+    let tags: Vec<String> = params
+        .tag
+        .map(|t| t.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+        .unwrap_or_default();
+    let names = if tags.is_empty() {
+        state.sessions.list()
+    } else {
+        state.sessions.sessions_by_tags(&tags)
+    };
     let infos = names
         .into_iter()
         .filter_map(|name| {
@@ -2365,6 +2394,7 @@ pub(super) async fn session_create(
     Json(req): Json<CreateSessionRequest>,
 ) -> Result<(StatusCode, Json<SessionInfo>), ApiError> {
     let req_name = req.name;
+    let req_tags = req.tags;
     let command = match req.command {
         Some(cmd) => SpawnCommand::Command {
             command: cmd,
@@ -2403,6 +2433,15 @@ pub(super) async fn session_create(
     .map_err(|e| ApiError::SessionCreateFailed(e.to_string()))?
     .map_err(|e| ApiError::SessionCreateFailed(e.to_string()))?;
 
+    // Validate and set initial tags before inserting into registry,
+    // so that insert_and_get() properly indexes them.
+    if !req_tags.is_empty() {
+        for tag in &req_tags {
+            crate::session::validate_tag(tag).map_err(ApiError::InvalidTag)?;
+        }
+        *session.tags.write() = req_tags.into_iter().collect();
+    }
+
     let (assigned_name, session) = match state.sessions.insert_and_get(req_name, session.clone()) {
         Ok(result) => result,
         Err(e) => {
@@ -2433,18 +2472,42 @@ pub(super) async fn session_get(
     Ok(Json(build_session_info(&session)))
 }
 
-pub(super) async fn session_rename(
+pub(super) async fn session_update(
     State(state): State<AppState>,
     Path(name): Path<String>,
-    Json(req): Json<RenameSessionRequest>,
+    Json(req): Json<UpdateSessionRequest>,
 ) -> Result<Json<SessionInfo>, ApiError> {
-    let session = state.sessions.rename(&name, &req.name).map_err(|e| match e {
-        RegistryError::NameExists(n) => ApiError::SessionNameConflict(n),
-        RegistryError::NotFound(n) => ApiError::SessionNotFound(n),
-        RegistryError::MaxSessionsReached => ApiError::MaxSessionsReached,
-        RegistryError::InvalidTag(msg) => ApiError::InvalidRequest(msg),
-    })?;
+    // Handle rename if requested
+    let current_name = if let Some(new_name) = req.name {
+        state.sessions.rename(&name, &new_name).map_err(|e| match e {
+            RegistryError::NameExists(n) => ApiError::SessionNameConflict(n),
+            RegistryError::NotFound(n) => ApiError::SessionNotFound(n),
+            RegistryError::MaxSessionsReached => ApiError::MaxSessionsReached,
+            RegistryError::InvalidTag(e) => ApiError::InvalidTag(e),
+        })?;
+        new_name
+    } else {
+        name.clone()
+    };
 
+    // Handle tag additions
+    if !req.add_tags.is_empty() {
+        state.sessions.add_tags(&current_name, &req.add_tags).map_err(|e| match e {
+            RegistryError::NotFound(n) => ApiError::SessionNotFound(n),
+            RegistryError::InvalidTag(e) => ApiError::InvalidTag(e),
+            _ => ApiError::SessionNotFound(current_name.clone()),
+        })?;
+    }
+
+    // Handle tag removals
+    if !req.remove_tags.is_empty() {
+        state.sessions.remove_tags(&current_name, &req.remove_tags).map_err(|e| match e {
+            RegistryError::NotFound(n) => ApiError::SessionNotFound(n),
+            _ => ApiError::SessionNotFound(current_name.clone()),
+        })?;
+    }
+
+    let session = get_session(&state.sessions, &current_name)?;
     Ok(Json(build_session_info(&session)))
 }
 

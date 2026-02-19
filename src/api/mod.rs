@@ -136,7 +136,7 @@ pub fn router(state: AppState, token: Option<String>) -> Router {
         .route(
             "/sessions/:name",
             get(session_get)
-                .patch(session_rename)
+                .patch(session_update)
                 .delete(session_kill),
         )
         .route("/sessions/:name/detach", post(session_detach))
@@ -1782,5 +1782,461 @@ mod tests {
         let json: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
         assert_eq!(json.len(), 1);
         assert_eq!(json[0]["spans"][0]["text"], "Alt panel");
+    }
+
+    // ── Tag HTTP API tests ──────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_session_create_with_tags() {
+        let state = create_empty_state();
+        let app = router(state, None);
+
+        let body = serde_json::json!({"name": "tagged", "tags": ["build", "ci"]});
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["name"], "tagged");
+        let tags: Vec<String> = serde_json::from_value(json["tags"].clone()).unwrap();
+        assert_eq!(tags, vec!["build", "ci"]);
+    }
+
+    #[tokio::test]
+    async fn test_session_create_with_invalid_tag_returns_400() {
+        let state = create_empty_state();
+        let app = router(state, None);
+
+        let body = serde_json::json!({"name": "bad-tags", "tags": ["valid", "has space"]});
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"]["code"], "invalid_tag");
+    }
+
+    #[tokio::test]
+    async fn test_session_list_with_tag_filter() {
+        let state = create_empty_state();
+        let app = router(state.clone(), None);
+
+        // Create sessions with different tags
+        let body = serde_json::json!({"name": "alpha", "tags": ["build"]});
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = serde_json::json!({"name": "beta", "tags": ["test"]});
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = serde_json::json!({"name": "gamma", "tags": ["build", "test"]});
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Filter by "build" tag — should return alpha and gamma
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions?tag=build")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json.len(), 2);
+        let mut names: Vec<String> = json.iter().map(|v| v["name"].as_str().unwrap().to_string()).collect();
+        names.sort();
+        assert_eq!(names, vec!["alpha", "gamma"]);
+
+        // Filter by "test" tag — should return beta and gamma
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions?tag=test")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json.len(), 2);
+        let mut names: Vec<String> = json.iter().map(|v| v["name"].as_str().unwrap().to_string()).collect();
+        names.sort();
+        assert_eq!(names, vec!["beta", "gamma"]);
+    }
+
+    #[tokio::test]
+    async fn test_session_list_without_filter_returns_all() {
+        let state = create_empty_state();
+        let app = router(state.clone(), None);
+
+        // Create sessions with tags
+        let body = serde_json::json!({"name": "a", "tags": ["x"]});
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = serde_json::json!({"name": "b"});
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // List without filter — should return all
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_session_patch_add_tags() {
+        let state = create_empty_state();
+        let app = router(state, None);
+
+        // Create a session
+        let body = serde_json::json!({"name": "taggable"});
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Add tags via PATCH
+        let patch_body = serde_json::json!({"add_tags": ["build", "ci"]});
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri("/sessions/taggable")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&patch_body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let tags: Vec<String> = serde_json::from_value(json["tags"].clone()).unwrap();
+        assert_eq!(tags, vec!["build", "ci"]);
+    }
+
+    #[tokio::test]
+    async fn test_session_patch_remove_tags() {
+        let state = create_empty_state();
+        let app = router(state, None);
+
+        // Create a session with tags
+        let body = serde_json::json!({"name": "removable", "tags": ["a", "b", "c"]});
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Remove some tags via PATCH
+        let patch_body = serde_json::json!({"remove_tags": ["a", "c"]});
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri("/sessions/removable")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&patch_body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let tags: Vec<String> = serde_json::from_value(json["tags"].clone()).unwrap();
+        assert_eq!(tags, vec!["b"]);
+    }
+
+    #[tokio::test]
+    async fn test_session_get_includes_tags() {
+        let state = create_empty_state();
+        let app = router(state, None);
+
+        // Create a session with tags
+        let body = serde_json::json!({"name": "info-test", "tags": ["deploy"]});
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // GET session info
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/info-test")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["name"], "info-test");
+        let tags: Vec<String> = serde_json::from_value(json["tags"].clone()).unwrap();
+        assert_eq!(tags, vec!["deploy"]);
+    }
+
+    #[tokio::test]
+    async fn test_session_patch_rename_and_add_tags() {
+        let state = create_empty_state();
+        let app = router(state, None);
+
+        // Create a session
+        let body = serde_json::json!({"name": "original"});
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Rename and add tags in a single PATCH
+        let patch_body = serde_json::json!({"name": "renamed", "add_tags": ["new-tag"]});
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri("/sessions/original")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&patch_body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["name"], "renamed");
+        let tags: Vec<String> = serde_json::from_value(json["tags"].clone()).unwrap();
+        assert_eq!(tags, vec!["new-tag"]);
+
+        // Old name should be gone
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/original")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_session_patch_invalid_tag_returns_400() {
+        let state = create_empty_state();
+        let app = router(state, None);
+
+        // Create a session
+        let body = serde_json::json!({"name": "patch-bad"});
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Try adding an invalid tag
+        let patch_body = serde_json::json!({"add_tags": ["valid", ""]});
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri("/sessions/patch-bad")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&patch_body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"]["code"], "invalid_tag");
+    }
+
+    #[tokio::test]
+    async fn test_session_create_no_tags_has_empty_array() {
+        let state = create_empty_state();
+        let app = router(state, None);
+
+        let body = serde_json::json!({"name": "no-tags"});
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let tags = json["tags"].as_array().unwrap();
+        assert!(tags.is_empty());
     }
 }
