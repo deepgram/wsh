@@ -239,12 +239,18 @@ function handleLifecycleEvent(client: WshClient, raw: any): void {
   switch (raw.event) {
     case "session_created": {
       const name = raw.params?.name;
-      if (!name || sessions.value.includes(name)) break;
-      sessions.value = [...sessions.value, name];
-      sessionOrder.value = [...sessionOrder.value, name];
-      setupSession(client, name).catch((e) => {
-        console.error(`Failed to set up new session "${name}":`, e);
-      });
+      if (!name) break;
+      if (!sessions.value.includes(name)) {
+        sessions.value = [...sessions.value, name];
+        sessionOrder.value = [...sessionOrder.value, name];
+      }
+      // Always set up screen state and subscription if not already subscribed
+      // (handles eager state updates from handleNewSession in StatusBar)
+      if (!unsubscribes.has(name)) {
+        setupSession(client, name).catch((e) => {
+          console.error(`Failed to set up new session "${name}":`, e);
+        });
+      }
       break;
     }
 
