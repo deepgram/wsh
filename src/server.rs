@@ -159,11 +159,17 @@ async fn handle_client<S: AsyncRead + AsyncWrite + Unpin>(
         FrameType::GetToken => {
             handle_get_token(&mut stream, token).await
         }
+        FrameType::ManageTags => {
+            let msg: ManageTagsMsg = frame.parse_json().map_err(|e| {
+                io::Error::new(io::ErrorKind::InvalidData, e)
+            })?;
+            handle_manage_tags(&mut stream, sessions, msg).await
+        }
         other => {
             let err = ErrorMsg {
                 code: "invalid_initial_frame".to_string(),
                 message: format!(
-                    "expected CreateSession, AttachSession, ListSessions, KillSession, DetachSession, or GetToken, got {:?}",
+                    "expected CreateSession, AttachSession, ListSessions, KillSession, DetachSession, GetToken, or ManageTags, got {:?}",
                     other
                 ),
             };
@@ -471,6 +477,70 @@ async fn handle_get_token<S: AsyncRead + AsyncWrite + Unpin>(
     let resp_frame = Frame::control(FrameType::GetTokenResponse, &resp)
         .map_err(io::Error::other)?;
     resp_frame.write_to(stream).await?;
+    Ok(())
+}
+
+/// Handle a ManageTags request: add/remove tags on a session.
+async fn handle_manage_tags<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: &mut S,
+    sessions: SessionRegistry,
+    msg: ManageTagsMsg,
+) -> io::Result<()> {
+    // Verify session exists
+    let session = match sessions.get(&msg.session) {
+        Some(s) => s,
+        None => {
+            let err = ErrorMsg {
+                code: "session_not_found".to_string(),
+                message: format!("session not found: {}", msg.session),
+            };
+            let err_frame = Frame::control(FrameType::Error, &err)
+                .map_err(io::Error::other)?;
+            err_frame.write_to(stream).await?;
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("session not found: {}", msg.session),
+            ));
+        }
+    };
+
+    // Add tags
+    if !msg.add.is_empty() {
+        if let Err(e) = sessions.add_tags(&msg.session, &msg.add) {
+            let err = ErrorMsg {
+                code: "invalid_tag".to_string(),
+                message: format!("{}", e),
+            };
+            let err_frame = Frame::control(FrameType::Error, &err)
+                .map_err(io::Error::other)?;
+            err_frame.write_to(stream).await?;
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, e.to_string()));
+        }
+    }
+
+    // Remove tags
+    if !msg.remove.is_empty() {
+        if let Err(e) = sessions.remove_tags(&msg.session, &msg.remove) {
+            let err = ErrorMsg {
+                code: "invalid_tag".to_string(),
+                message: format!("{}", e),
+            };
+            let err_frame = Frame::control(FrameType::Error, &err)
+                .map_err(io::Error::other)?;
+            err_frame.write_to(stream).await?;
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, e.to_string()));
+        }
+    }
+
+    // Respond with current tags
+    let mut tags: Vec<String> = session.tags.read().iter().cloned().collect();
+    tags.sort();
+    let resp = ManageTagsResponseMsg { tags };
+    let resp_frame = Frame::control(FrameType::ManageTagsResponse, &resp)
+        .map_err(io::Error::other)?;
+    resp_frame.write_to(stream).await?;
+
+    tracing::info!(session = %msg.session, "tags managed via socket");
     Ok(())
 }
 
@@ -1524,6 +1594,194 @@ mod tests {
             "screen data should contain ANSI escape sequences, got: {:?}",
             screen_str,
         );
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[tokio::test]
+    async fn test_manage_tags_add_and_remove() {
+        let sessions = SessionRegistry::new();
+
+        let (session, rx) = Session::spawn(
+            "tag-test".to_string(),
+            SpawnCommand::default(),
+            24, 80,
+        ).unwrap();
+        let identity = session.client_count.clone();
+        let child_exited = session.child_exited.clone();
+        sessions.insert(Some("tag-test".to_string()), session).unwrap();
+        sessions.monitor_child_exit("tag-test".to_string(), identity, child_exited, rx);
+
+        let (path, _dir) = start_test_server(sessions.clone()).await;
+
+        // Add tags
+        let mut stream = UnixStream::connect(&path).await.unwrap();
+        let msg = ManageTagsMsg {
+            session: "tag-test".to_string(),
+            add: vec!["build".to_string(), "ci".to_string()],
+            remove: vec![],
+        };
+        Frame::control(FrameType::ManageTags, &msg)
+            .unwrap()
+            .write_to(&mut stream)
+            .await
+            .unwrap();
+
+        let resp = Frame::read_from(&mut stream).await.unwrap();
+        assert_eq!(resp.frame_type, FrameType::ManageTagsResponse);
+        let tags_resp: ManageTagsResponseMsg = resp.parse_json().unwrap();
+        assert_eq!(tags_resp.tags, vec!["build", "ci"]);
+
+        // Remove one tag
+        let mut stream2 = UnixStream::connect(&path).await.unwrap();
+        let msg2 = ManageTagsMsg {
+            session: "tag-test".to_string(),
+            add: vec![],
+            remove: vec!["build".to_string()],
+        };
+        Frame::control(FrameType::ManageTags, &msg2)
+            .unwrap()
+            .write_to(&mut stream2)
+            .await
+            .unwrap();
+
+        let resp2 = Frame::read_from(&mut stream2).await.unwrap();
+        assert_eq!(resp2.frame_type, FrameType::ManageTagsResponse);
+        let tags_resp2: ManageTagsResponseMsg = resp2.parse_json().unwrap();
+        assert_eq!(tags_resp2.tags, vec!["ci"]);
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[tokio::test]
+    async fn test_manage_tags_nonexistent_session() {
+        let sessions = SessionRegistry::new();
+        let (path, _dir) = start_test_server(sessions).await;
+
+        let mut stream = UnixStream::connect(&path).await.unwrap();
+        let msg = ManageTagsMsg {
+            session: "nonexistent".to_string(),
+            add: vec!["tag".to_string()],
+            remove: vec![],
+        };
+        Frame::control(FrameType::ManageTags, &msg)
+            .unwrap()
+            .write_to(&mut stream)
+            .await
+            .unwrap();
+
+        let resp = Frame::read_from(&mut stream).await.unwrap();
+        assert_eq!(resp.frame_type, FrameType::Error);
+        let err: ErrorMsg = resp.parse_json().unwrap();
+        assert_eq!(err.code, "session_not_found");
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[tokio::test]
+    async fn test_manage_tags_query_only() {
+        let sessions = SessionRegistry::new();
+
+        let (session, rx) = Session::spawn(
+            "tag-query".to_string(),
+            SpawnCommand::default(),
+            24, 80,
+        ).unwrap();
+        let identity = session.client_count.clone();
+        let child_exited = session.child_exited.clone();
+        sessions.insert(Some("tag-query".to_string()), session).unwrap();
+        sessions.monitor_child_exit("tag-query".to_string(), identity, child_exited, rx);
+
+        let (path, _dir) = start_test_server(sessions.clone()).await;
+
+        // Query tags (no add, no remove) — should return empty
+        let mut stream = UnixStream::connect(&path).await.unwrap();
+        let msg = ManageTagsMsg {
+            session: "tag-query".to_string(),
+            add: vec![],
+            remove: vec![],
+        };
+        Frame::control(FrameType::ManageTags, &msg)
+            .unwrap()
+            .write_to(&mut stream)
+            .await
+            .unwrap();
+
+        let resp = Frame::read_from(&mut stream).await.unwrap();
+        assert_eq!(resp.frame_type, FrameType::ManageTagsResponse);
+        let tags_resp: ManageTagsResponseMsg = resp.parse_json().unwrap();
+        assert!(tags_resp.tags.is_empty());
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[tokio::test]
+    async fn test_create_session_with_tags() {
+        let sessions = SessionRegistry::new();
+        let (path, _dir) = start_test_server(sessions.clone()).await;
+
+        let mut stream = UnixStream::connect(&path).await.unwrap();
+
+        let msg = CreateSessionMsg {
+            name: Some("tagged-session".to_string()),
+            command: None,
+            cwd: None,
+            env: None,
+            rows: 24,
+            cols: 80,
+            tags: vec!["build".to_string(), "ci".to_string()],
+        };
+        Frame::control(FrameType::CreateSession, &msg)
+            .unwrap()
+            .write_to(&mut stream)
+            .await
+            .unwrap();
+
+        let resp = Frame::read_from(&mut stream).await.unwrap();
+        assert_eq!(resp.frame_type, FrameType::CreateSessionResponse);
+
+        // Verify tags are set on the session
+        let session = sessions.get("tagged-session").unwrap();
+        let tags: Vec<String> = {
+            let mut t: Vec<String> = session.tags.read().iter().cloned().collect();
+            t.sort();
+            t
+        };
+        assert_eq!(tags, vec!["build", "ci"]);
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[tokio::test]
+    async fn test_list_sessions_includes_tags() {
+        let sessions = SessionRegistry::new();
+
+        let (session, rx) = Session::spawn(
+            "list-tags".to_string(),
+            SpawnCommand::default(),
+            24, 80,
+        ).unwrap();
+        let identity = session.client_count.clone();
+        let child_exited = session.child_exited.clone();
+        // Set tags before inserting
+        *session.tags.write() = ["deploy".to_string(), "alpha".to_string()].into_iter().collect();
+        sessions.insert(Some("list-tags".to_string()), session).unwrap();
+        sessions.monitor_child_exit("list-tags".to_string(), identity, child_exited, rx);
+
+        let (path, _dir) = start_test_server(sessions).await;
+
+        let mut stream = UnixStream::connect(&path).await.unwrap();
+        Frame::control(FrameType::ListSessions, &ListSessionsMsg {})
+            .unwrap()
+            .write_to(&mut stream)
+            .await
+            .unwrap();
+
+        let resp = Frame::read_from(&mut stream).await.unwrap();
+        assert_eq!(resp.frame_type, FrameType::ListSessionsResponse);
+        let list: ListSessionsResponseMsg = resp.parse_json().unwrap();
+        assert_eq!(list.sessions.len(), 1);
+        assert_eq!(list.sessions[0].tags, vec!["alpha", "deploy"]);
 
         std::fs::remove_file(&path).ok();
     }

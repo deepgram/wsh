@@ -252,6 +252,45 @@ impl Client {
         }
     }
 
+    /// Manage tags on a session via the server's Unix socket.
+    ///
+    /// Adds and/or removes tags, then returns the current tag set.
+    pub async fn manage_tags(
+        &mut self,
+        session: &str,
+        add: Vec<String>,
+        remove: Vec<String>,
+    ) -> io::Result<Vec<String>> {
+        let msg = ManageTagsMsg {
+            session: session.to_string(),
+            add,
+            remove,
+        };
+        let frame = Frame::control(FrameType::ManageTags, &msg)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        frame.write_to(&mut self.stream).await?;
+
+        let resp_frame = Frame::read_from(&mut self.stream).await?;
+        match resp_frame.frame_type {
+            FrameType::ManageTagsResponse => {
+                let resp: ManageTagsResponseMsg = resp_frame
+                    .parse_json()
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                Ok(resp.tags)
+            }
+            FrameType::Error => {
+                let err: ErrorMsg = resp_frame
+                    .parse_json()
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                Err(io::Error::other(format!("{}: {}", err.code, err.message)))
+            }
+            other => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unexpected response frame type: {:?}", other),
+            )),
+        }
+    }
+
     /// Enter the streaming I/O proxy loop.
     ///
     /// Consumes the client, splits the underlying stream, and runs a
@@ -906,6 +945,59 @@ mod tests {
 
         let mut client = Client::connect(&path).await.unwrap();
         let result = client.detach_session("no-such").await;
+        assert!(result.is_err());
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[tokio::test]
+    async fn test_client_manage_tags() {
+        let sessions = SessionRegistry::new();
+
+        let (s, rx) = crate::session::Session::spawn(
+            "tag-test".to_string(),
+            crate::pty::SpawnCommand::default(),
+            24, 80,
+        ).unwrap();
+        let identity = s.client_count.clone();
+        let child_exited = s.child_exited.clone();
+        sessions.insert(Some("tag-test".to_string()), s).unwrap();
+        sessions.monitor_child_exit("tag-test".to_string(), identity, child_exited, rx);
+
+        let (path, _dir) = start_test_server(sessions.clone()).await;
+
+        // Add tags
+        let mut client = Client::connect(&path).await.unwrap();
+        let tags = client.manage_tags(
+            "tag-test",
+            vec!["build".to_string(), "ci".to_string()],
+            vec![],
+        ).await.unwrap();
+        assert_eq!(tags, vec!["build", "ci"]);
+
+        // Remove one tag via a new connection
+        let mut client2 = Client::connect(&path).await.unwrap();
+        let tags2 = client2.manage_tags(
+            "tag-test",
+            vec![],
+            vec!["build".to_string()],
+        ).await.unwrap();
+        assert_eq!(tags2, vec!["ci"]);
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[tokio::test]
+    async fn test_client_manage_tags_nonexistent() {
+        let sessions = SessionRegistry::new();
+        let (path, _dir) = start_test_server(sessions).await;
+
+        let mut client = Client::connect(&path).await.unwrap();
+        let result = client.manage_tags(
+            "no-such",
+            vec!["tag".to_string()],
+            vec![],
+        ).await;
         assert!(result.is_err());
 
         std::fs::remove_file(&path).ok();

@@ -61,6 +61,10 @@ struct Cli {
     #[arg(long)]
     name: Option<String>,
 
+    /// Tags for the initial session (can be specified multiple times)
+    #[arg(long = "tag")]
+    tags: Vec<String>,
+
     /// Use alternate screen buffer (restores previous screen on exit, but
     /// disables native terminal scrollback while wsh is running)
     #[arg(long)]
@@ -164,6 +168,24 @@ enum Commands {
         socket: Option<PathBuf>,
     },
 
+    /// Manage tags on a session
+    Tag {
+        /// Session name
+        name: String,
+
+        /// Tags to add
+        #[arg(long = "add")]
+        add: Vec<String>,
+
+        /// Tags to remove
+        #[arg(long = "remove")]
+        remove: Vec<String>,
+
+        /// Path to the Unix domain socket
+        #[arg(long)]
+        socket: Option<PathBuf>,
+    },
+
     /// Start an MCP server over stdio (for AI hosts like Claude Desktop)
     Mcp {
         /// Address to bind the HTTP/WebSocket API server (for auto-spawn)
@@ -251,6 +273,9 @@ async fn main() -> Result<(), WshError> {
         }
         Some(Commands::Persist { value, bind, token }) => {
             run_persist(value, bind, token).await
+        }
+        Some(Commands::Tag { name, add, remove, socket }) => {
+            run_tag(name, add, remove, socket).await
         }
         Some(Commands::Mcp { bind, socket, token }) => {
             run_mcp(bind, socket, token).await
@@ -1011,7 +1036,7 @@ async fn run_default(cli: Cli) -> Result<(), WshError> {
         env: None,
         rows,
         cols,
-        tags: vec![],  // Will be wired to CLI --tag flag in Task 8
+        tags: cli.tags.clone(),
     };
 
     let resp = c.create_session(msg).await.map_err(|e| {
@@ -1158,8 +1183,8 @@ async fn run_list(socket: Option<PathBuf>) -> Result<(), WshError> {
         println!("No active sessions.");
     } else {
         println!(
-            "{:<20} {:<8} {:<20} {:<12} CLIENTS",
-            "NAME", "PID", "COMMAND", "SIZE"
+            "{:<20} {:<8} {:<20} {:<12} {:<8} {}",
+            "NAME", "PID", "COMMAND", "SIZE", "CLIENTS", "TAGS"
         );
         for s in &sessions {
             let pid_str = match s.pid {
@@ -1167,9 +1192,10 @@ async fn run_list(socket: Option<PathBuf>) -> Result<(), WshError> {
                 None => "-".to_string(),
             };
             let size = format!("{}x{}", s.cols, s.rows);
+            let tags_str = s.tags.join(", ");
             println!(
-                "{:<20} {:<8} {:<20} {:<12} {}",
-                s.name, pid_str, s.command, size, s.clients
+                "{:<20} {:<8} {:<20} {:<12} {:<8} {}",
+                s.name, pid_str, s.command, size, s.clients, tags_str
             );
         }
     }
@@ -1220,6 +1246,42 @@ async fn run_detach(name: String, socket: Option<PathBuf>) -> Result<(), WshErro
     }
 
     println!("Session '{}' detached.", name);
+    Ok(())
+}
+
+async fn run_tag(
+    name: String,
+    add: Vec<String>,
+    remove: Vec<String>,
+    socket: Option<PathBuf>,
+) -> Result<(), WshError> {
+    let socket_path = socket.unwrap_or_else(server::default_socket_path);
+    let mut c = match client::Client::connect(&socket_path).await {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!(
+                "wsh tag: failed to connect to server at {}: {}",
+                socket_path.display(),
+                e
+            );
+            std::process::exit(1);
+        }
+    };
+
+    match c.manage_tags(&name, add, remove).await {
+        Ok(tags) => {
+            if tags.is_empty() {
+                println!("Session '{}': no tags", name);
+            } else {
+                println!("Session '{}': {}", name, tags.join(", "));
+            }
+        }
+        Err(e) => {
+            eprintln!("wsh tag: {}", e);
+            std::process::exit(1);
+        }
+    }
+
     Ok(())
 }
 

@@ -38,6 +38,10 @@ pub enum FrameType {
     OverlaySync = 0x12,
     PanelSync = 0x13,
 
+    // Tag management frames (JSON payload)
+    ManageTags = 0x16,
+    ManageTagsResponse = 0x17,
+
     // Keepalive frames (empty payload)
     Ping = 0x14,
     Pong = 0x15,
@@ -65,6 +69,8 @@ impl FrameType {
             0x11 => Some(Self::StdinInput),
             0x12 => Some(Self::OverlaySync),
             0x13 => Some(Self::PanelSync),
+            0x16 => Some(Self::ManageTags),
+            0x17 => Some(Self::ManageTagsResponse),
             0x14 => Some(Self::Ping),
             0x15 => Some(Self::Pong),
             _ => None,
@@ -350,6 +356,22 @@ pub struct GetTokenResponseMsg {
     pub token: Option<String>,
 }
 
+/// Client → Server: request to manage tags on a session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ManageTagsMsg {
+    pub session: String,
+    #[serde(default)]
+    pub add: Vec<String>,
+    #[serde(default)]
+    pub remove: Vec<String>,
+}
+
+/// Server → Client: response with the current tags after management.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ManageTagsResponseMsg {
+    pub tags: Vec<String>,
+}
+
 /// Server → Client: full overlay state sync.
 ///
 /// Sent when any overlay changes, contains ALL current overlays.
@@ -420,6 +442,8 @@ mod tests {
             FrameType::StdinInput,
             FrameType::OverlaySync,
             FrameType::PanelSync,
+            FrameType::ManageTags,
+            FrameType::ManageTagsResponse,
             FrameType::Ping,
             FrameType::Pong,
         ];
@@ -434,7 +458,7 @@ mod tests {
     fn frame_type_invalid_byte() {
         assert!(FrameType::from_u8(0xFF).is_none());
         assert!(FrameType::from_u8(0x00).is_none());
-        assert!(FrameType::from_u8(0x16).is_none());
+        assert!(FrameType::from_u8(0x18).is_none());
     }
 
     #[test]
@@ -785,5 +809,40 @@ mod tests {
         let f3 = Frame::read_from(&mut cursor).await.unwrap();
         assert_eq!(f3.frame_type, FrameType::Detach);
         assert!(f3.payload.is_empty());
+    }
+
+    #[test]
+    fn control_frame_manage_tags() {
+        let msg = ManageTagsMsg {
+            session: "my-session".to_string(),
+            add: vec!["build".to_string(), "ci".to_string()],
+            remove: vec!["old-tag".to_string()],
+        };
+        let frame = Frame::control(FrameType::ManageTags, &msg).unwrap();
+        assert_eq!(frame.frame_type, FrameType::ManageTags);
+        let decoded: ManageTagsMsg = frame.parse_json().unwrap();
+        assert_eq!(decoded.session, "my-session");
+        assert_eq!(decoded.add, vec!["build", "ci"]);
+        assert_eq!(decoded.remove, vec!["old-tag"]);
+    }
+
+    #[test]
+    fn control_frame_manage_tags_response() {
+        let msg = ManageTagsResponseMsg {
+            tags: vec!["build".to_string(), "ci".to_string()],
+        };
+        let frame = Frame::control(FrameType::ManageTagsResponse, &msg).unwrap();
+        let decoded: ManageTagsResponseMsg = frame.parse_json().unwrap();
+        assert_eq!(decoded.tags, vec!["build", "ci"]);
+    }
+
+    #[test]
+    fn control_frame_manage_tags_defaults() {
+        // Verify serde defaults work for add/remove
+        let json = serde_json::json!({"session": "s1"});
+        let msg: ManageTagsMsg = serde_json::from_value(json).unwrap();
+        assert_eq!(msg.session, "s1");
+        assert!(msg.add.is_empty());
+        assert!(msg.remove.is_empty());
     }
 }
