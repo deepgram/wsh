@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use parking_lot::RwLock;
@@ -16,6 +16,20 @@ use crate::pty::{Pty, PtyError, SpawnCommand};
 use crate::shutdown::ShutdownCoordinator;
 use crate::terminal::TerminalSize;
 
+/// Validate a tag string. Tags must be 1-64 chars, alphanumeric/hyphens/underscores/dots.
+pub fn validate_tag(tag: &str) -> Result<(), String> {
+    if tag.is_empty() {
+        return Err("tag must not be empty".to_string());
+    }
+    if tag.len() > 64 {
+        return Err(format!("tag too long ({} chars, max 64)", tag.len()));
+    }
+    if !tag.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.') {
+        return Err(format!("tag contains invalid characters: {tag}"));
+    }
+    Ok(())
+}
+
 /// A single terminal session with all associated state.
 ///
 /// Each `Session` owns the PTY, parser, I/O channels, and auxiliary stores
@@ -31,6 +45,8 @@ pub struct Session {
     pub command: String,
     /// Number of currently connected streaming clients (WebSocket, socket, etc.).
     pub client_count: Arc<AtomicUsize>,
+    /// User-defined tags for organizing and filtering sessions.
+    pub tags: Arc<RwLock<HashSet<String>>>,
     pub input_tx: mpsc::Sender<Bytes>,
     pub output_rx: broadcast::Sender<Bytes>,
     pub shutdown: ShutdownCoordinator,
@@ -440,6 +456,7 @@ impl Session {
             pid,
             command: command_display,
             client_count: Arc::new(AtomicUsize::new(0)),
+            tags: Arc::new(RwLock::new(HashSet::new())),
             input_tx,
             output_rx: broker.sender(),
             shutdown,
@@ -536,6 +553,7 @@ struct RegistryInner {
     sessions: HashMap<String, Session>,
     next_id: u64,
     max_sessions: Option<usize>,
+    tags_index: HashMap<String, HashSet<String>>,
 }
 
 /// Manages multiple sessions by name.
@@ -573,6 +591,7 @@ impl SessionRegistry {
                 sessions: HashMap::new(),
                 next_id: 0,
                 max_sessions,
+                tags_index: HashMap::new(),
             })),
             events_tx,
         }
@@ -957,6 +976,7 @@ mod tests {
             pid: None,
             command: "test".to_string(),
             client_count: Arc::new(AtomicUsize::new(0)),
+            tags: Arc::new(RwLock::new(HashSet::new())),
             child_exited: Arc::new(AtomicBool::new(false)),
             input_tx,
             output_rx: broker.sender(),
@@ -1289,5 +1309,22 @@ mod tests {
         .await;
         assert!(result.is_ok(), "detach signal should be received");
         assert!(result.unwrap().is_ok(), "detach signal should not be an error");
+    }
+
+    #[test]
+    fn validate_tag_accepts_valid() {
+        assert!(validate_tag("build").is_ok());
+        assert!(validate_tag("my-tag_1.0").is_ok());
+        assert!(validate_tag("a").is_ok());
+        assert!(validate_tag(&"x".repeat(64)).is_ok());
+    }
+
+    #[test]
+    fn validate_tag_rejects_invalid() {
+        assert!(validate_tag("").is_err());
+        assert!(validate_tag(" spaces ").is_err());
+        assert!(validate_tag("has space").is_err());
+        assert!(validate_tag(&"x".repeat(65)).is_err());
+        assert!(validate_tag("special!char").is_err());
     }
 }

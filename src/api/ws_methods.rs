@@ -1176,6 +1176,7 @@ mod tests {
             pid: None,
             command: "test".to_string(),
             client_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            tags: std::sync::Arc::new(parking_lot::RwLock::new(std::collections::HashSet::new())),
             child_exited: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             input_tx,
             output_rx: broker.sender(),
