@@ -84,3 +84,13 @@ export interface WsResponse {
 }
 
 export type EventType = "lines" | "cursor" | "mode" | "diffs";
+
+export interface SessionInfo {
+  name: string;
+  pid: number | null;
+  command: string;
+  rows: number;
+  cols: number;
+  clients: number;
+  tags: string[];
+}

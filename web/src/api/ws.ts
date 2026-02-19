@@ -1,4 +1,4 @@
-import type { WsRequest, WsResponse, EventType, ScreenResponse, ScrollbackResponse } from "./types";
+import type { WsRequest, WsResponse, EventType, ScreenResponse, ScrollbackResponse, SessionInfo } from "./types";
 
 type PendingRequest = {
   resolve: (value: unknown) => void;
@@ -362,18 +362,39 @@ export class WshClient {
 
   // --- Convenience methods ---
 
-  async createSession(name?: string): Promise<{ name: string }> {
-    const result = await this.request("create_session", { name });
-    return result as { name: string };
+  async createSession(name?: string, tags?: string[]): Promise<SessionInfo> {
+    const params: Record<string, unknown> = {};
+    if (name) params.name = name;
+    if (tags && tags.length > 0) params.tags = tags;
+    const result = await this.request("create_session", params);
+    return result as SessionInfo;
   }
 
-  async listSessions(): Promise<Array<{ name: string }>> {
-    const result = await this.request("list_sessions");
-    return result as Array<{ name: string }>;
+  async listSessions(tags?: string[]): Promise<SessionInfo[]> {
+    const params = tags && tags.length > 0 ? { tag: tags } : undefined;
+    const result = await this.request("list_sessions", params);
+    return result as SessionInfo[];
   }
 
   async killSession(name: string): Promise<void> {
     await this.request("kill_session", { name });
+  }
+
+  async updateSession(name: string, updates: {
+    name?: string;
+    add_tags?: string[];
+    remove_tags?: string[];
+  }): Promise<SessionInfo> {
+    const result = await this.request("update_session", updates, name);
+    return result as SessionInfo;
+  }
+
+  async awaitQuiesce(session: string, timeout?: number, tags?: string[]): Promise<{ session: string }> {
+    const params: Record<string, unknown> = {};
+    if (timeout !== undefined) params.max_wait = timeout;
+    if (tags && tags.length > 0) params.tags = tags;
+    const result = await this.request("await_quiesce", params, session);
+    return result as { session: string };
   }
 
   async getScreen(
