@@ -1125,6 +1125,8 @@ async fn handle_server_ws_request(
                 cols: Option<u16>,
                 cwd: Option<String>,
                 env: Option<std::collections::HashMap<String, String>>,
+                #[serde(default)]
+                tags: Vec<String>,
             }
             let params: CreateParams = match &req.params {
                 Some(v) => match serde_json::from_value(v.clone()) {
@@ -1145,6 +1147,7 @@ async fn handle_server_ws_request(
                     cols: None,
                     cwd: None,
                     env: None,
+                    tags: vec![],
                 },
             };
 
@@ -1193,6 +1196,23 @@ async fn handle_server_ws_request(
                 });
             }
 
+            // Save tags before spawn_blocking consumes params
+            let initial_tags = params.tags;
+
+            // Validate tags early
+            if !initial_tags.is_empty() {
+                for tag in &initial_tags {
+                    if let Err(e) = crate::session::validate_tag(tag) {
+                        return Some(super::ws_methods::WsResponse::error(
+                            id,
+                            method,
+                            "invalid_tag",
+                            &format!("Invalid tag: {}.", e),
+                        ));
+                    }
+                }
+            }
+
             let param_name = params.name;
             let cwd = params.cwd;
             let env = params.env;
@@ -1219,14 +1239,21 @@ async fn handle_server_ws_request(
                 }
             };
 
+            // Set initial tags before registry insertion
+            if !initial_tags.is_empty() {
+                *session.tags.write() = initial_tags.into_iter().collect();
+            }
+
             match state.sessions.insert_and_get(param_name, session.clone()) {
                 Ok((assigned_name, _session)) => {
                     // Monitor child exit so the session is auto-removed.
                     state.sessions.monitor_child_exit(assigned_name.clone(), session.client_count.clone(), session.child_exited.clone(), child_exit_rx);
+                    let mut tags: Vec<String> = session.tags.read().iter().cloned().collect();
+                    tags.sort();
                     return Some(super::ws_methods::WsResponse::success(
                         id,
                         method,
-                        serde_json::json!({ "name": assigned_name }),
+                        serde_json::json!({ "name": assigned_name, "tags": tags }),
                     ));
                 }
                 Err(e) => {
@@ -1262,12 +1289,28 @@ async fn handle_server_ws_request(
         }
 
         "list_sessions" => {
-            let names = state.sessions.list();
+            #[derive(Deserialize)]
+            struct ListParams {
+                #[serde(default)]
+                tag: Vec<String>,
+            }
+            let params: ListParams = match &req.params {
+                Some(v) => serde_json::from_value(v.clone()).unwrap_or(ListParams { tag: vec![] }),
+                None => ListParams { tag: vec![] },
+            };
+
+            let names = if params.tag.is_empty() {
+                state.sessions.list()
+            } else {
+                state.sessions.sessions_by_tags(&params.tag)
+            };
             let sessions: Vec<serde_json::Value> = names
                 .into_iter()
                 .filter_map(|name| {
                     let session = state.sessions.get(&name)?;
                     let (rows, cols) = session.terminal_size.get();
+                    let mut tags: Vec<String> = session.tags.read().iter().cloned().collect();
+                    tags.sort();
                     Some(serde_json::json!({
                         "name": name,
                         "pid": session.pid,
@@ -1275,6 +1318,7 @@ async fn handle_server_ws_request(
                         "rows": rows,
                         "cols": cols,
                         "clients": session.clients(),
+                        "tags": tags,
                     }))
                 })
                 .collect();
@@ -1412,16 +1456,18 @@ async fn handle_server_ws_request(
             };
 
             match state.sessions.rename(&params.name, &params.new_name) {
-                Ok(_session) => {
+                Ok(session) => {
                     // Update subscription key and shared name if it exists
                     if let Some(handle) = sub_handles.remove(&params.name) {
                         *handle.shared_name.lock() = params.new_name.clone();
                         sub_handles.insert(params.new_name.clone(), handle);
                     }
+                    let mut tags: Vec<String> = session.tags.read().iter().cloned().collect();
+                    tags.sort();
                     return Some(super::ws_methods::WsResponse::success(
                         id,
                         method,
-                        serde_json::json!({ "name": params.new_name }),
+                        serde_json::json!({ "name": params.new_name, "tags": tags }),
                     ));
                 }
                 Err(RegistryError::NameExists(n)) => {
@@ -1457,6 +1503,88 @@ async fn handle_server_ws_request(
                     ));
                 }
             }
+        }
+
+        "update_tags" => {
+            #[derive(Deserialize)]
+            struct UpdateTagsParams {
+                session: String,
+                #[serde(default)]
+                add: Vec<String>,
+                #[serde(default)]
+                remove: Vec<String>,
+            }
+            let params: UpdateTagsParams = match &req.params {
+                Some(v) => match serde_json::from_value(v.clone()) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        return Some(super::ws_methods::WsResponse::error(
+                            id,
+                            method,
+                            "invalid_request",
+                            &format!("Invalid params: {}.", e),
+                        ));
+                    }
+                },
+                None => {
+                    return Some(super::ws_methods::WsResponse::error(
+                        id,
+                        method,
+                        "invalid_request",
+                        "Missing params.",
+                    ));
+                }
+            };
+
+            if !params.add.is_empty() {
+                if let Err(e) = state.sessions.add_tags(&params.session, &params.add) {
+                    return Some(super::ws_methods::WsResponse::error(
+                        id,
+                        method,
+                        "invalid_request",
+                        &format!("Failed to add tags: {}.", e),
+                    ));
+                }
+            }
+
+            if !params.remove.is_empty() {
+                if let Err(e) = state.sessions.remove_tags(&params.session, &params.remove) {
+                    return Some(super::ws_methods::WsResponse::error(
+                        id,
+                        method,
+                        "invalid_request",
+                        &format!("Failed to remove tags: {}.", e),
+                    ));
+                }
+            }
+
+            let session = match state.sessions.get(&params.session) {
+                Some(s) => s,
+                None => {
+                    return Some(super::ws_methods::WsResponse::error(
+                        id,
+                        method,
+                        "session_not_found",
+                        &format!("Session not found: {}.", params.session),
+                    ));
+                }
+            };
+            let (rows, cols) = session.terminal_size.get();
+            let mut tags: Vec<String> = session.tags.read().iter().cloned().collect();
+            tags.sort();
+            return Some(super::ws_methods::WsResponse::success(
+                id,
+                method,
+                serde_json::json!({
+                    "name": session.name,
+                    "pid": session.pid,
+                    "command": session.command,
+                    "rows": rows,
+                    "cols": cols,
+                    "clients": session.clients(),
+                    "tags": tags,
+                }),
+            ));
         }
 
         "set_server_mode" => {
