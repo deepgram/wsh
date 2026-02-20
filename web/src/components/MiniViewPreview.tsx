@@ -10,30 +10,40 @@ function lineToText(line: FormattedLine): string {
 
 /**
  * Render a scaled-down replica of the full terminal screen.
- * Renders all visible lines at a base font size, then uses CSS
- * transform to scale down to fit the container.
+ *
+ * The inner div is positioned absolutely and rendered at full font size
+ * with no constraints, so it expands to its natural width/height. A
+ * ResizeObserver then measures the container and inner sizes, computing
+ * a scale factor to shrink the entire terminal to fit the container.
+ * This produces a true "thumbnail" showing all rows and columns.
  */
 export function MiniTermContent({ session }: { session: string }) {
   const screen = getScreenSignal(session).value;
   const containerRef = useRef<HTMLDivElement>(null);
   const innerRef = useRef<HTMLDivElement>(null);
-  const [scale, setScale] = useState(1);
+  const [scale, setScale] = useState(0.1);
 
   useEffect(() => {
     const container = containerRef.current;
     const inner = innerRef.current;
     if (!container || !inner) return;
 
-    const ro = new ResizeObserver(() => {
+    const update = () => {
       const cw = container.clientWidth;
       const ch = container.clientHeight;
+      // scrollWidth/Height on an absolutely-positioned element reflects
+      // the true unconstrained content size.
       const iw = inner.scrollWidth;
       const ih = inner.scrollHeight;
-      if (iw > 0 && ih > 0) {
+      if (iw > 0 && ih > 0 && cw > 0 && ch > 0) {
         setScale(Math.min(cw / iw, ch / ih, 1));
       }
-    });
+    };
+
+    const ro = new ResizeObserver(update);
     ro.observe(container);
+    // Also observe inner in case content changes without container resize
+    ro.observe(inner);
     return () => ro.disconnect();
   }, [screen.lines.length]);
 

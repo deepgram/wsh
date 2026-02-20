@@ -1307,6 +1307,9 @@ html, body, #app {
 }
 
 .mini-term-inner {
+  position: absolute;
+  top: 0;
+  left: 0;
   font-family: var(--font-mono, "JetBrains Mono", "Fira Code", monospace);
   font-size: 12px;
   line-height: 1.2;
