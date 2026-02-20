@@ -167,6 +167,21 @@ export function Sidebar({ client, collapsed, onToggleCollapse }: SidebarProps) {
           </div>
         ))}
       </div>
+      <div class="sidebar-hints">
+        <button
+          class="sidebar-hint"
+          onClick={() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "K", ctrlKey: true, shiftKey: true, bubbles: true }))}
+        >
+          <kbd>^⇧K</kbd> palette
+        </button>
+        <span class="sidebar-hint-sep">&middot;</span>
+        <button
+          class="sidebar-hint"
+          onClick={() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "/", ctrlKey: true, shiftKey: true, bubbles: true }))}
+        >
+          <kbd>^⇧/</kbd> shortcuts
+        </button>
+      </div>
       <div class="sidebar-footer">
         <div class={`status-dot ${connState}`} title={connState} />
         <ThemePicker />

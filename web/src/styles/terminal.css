@@ -1021,6 +1021,41 @@ html, body, #app {
   border-color: var(--accent, #666);
 }
 
+.sidebar-hints {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 12px 4px;
+  flex-shrink: 0;
+}
+
+.sidebar-hint {
+  background: none;
+  border: none;
+  color: var(--fg, #ccc);
+  opacity: 0.4;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0;
+  transition: opacity 0.15s;
+}
+
+.sidebar-hint:hover {
+  opacity: 0.8;
+}
+
+.sidebar-hint kbd {
+  font-family: inherit;
+  font-size: inherit;
+  opacity: 0.7;
+}
+
+.sidebar-hint-sep {
+  opacity: 0.25;
+  font-size: 11px;
+}
+
 /* Theme Picker */
 
 .theme-picker {
