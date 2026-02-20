@@ -147,3 +147,17 @@ export function dismissQueueEntry(tag: string, session: string): void {
   queues[tag] = queue;
   quiescenceQueues.value = queues;
 }
+
+export function getGroupStatusCounts(group: Group): { running: number; idle: number } {
+  const statuses = sessionStatuses.value;
+  let idle = 0;
+  let running = 0;
+  for (const s of group.sessions) {
+    if (statuses.get(s) === "quiescent") {
+      idle++;
+    } else {
+      running++;
+    }
+  }
+  return { running, idle };
+}
