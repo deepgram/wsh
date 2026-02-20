@@ -197,6 +197,123 @@ html, body, #app {
   min-height: 0;
 }
 
+/* Session pane title bar */
+.pane-title-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--border, #333);
+  flex-shrink: 0;
+  min-height: 24px;
+  background: var(--chrome, rgba(0, 0, 0, 0.15));
+}
+
+.pane-title-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pane-title-name {
+  font-size: 11px;
+  color: var(--fg, #ccc);
+  cursor: text;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pane-title-name:hover {
+  text-decoration: underline;
+}
+
+.pane-rename-input {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--accent, #666);
+  border-radius: 3px;
+  padding: 1px 4px;
+  font-size: 11px;
+  color: var(--fg, #ccc);
+  outline: none;
+  font-family: inherit;
+  min-width: 60px;
+}
+
+.pane-title-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.pane-tag-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-size: 10px;
+  color: var(--fg, #ccc);
+}
+
+.pane-tag-remove {
+  background: none;
+  border: none;
+  color: var(--fg, #ccc);
+  opacity: 0.4;
+  cursor: pointer;
+  padding: 0 1px;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.pane-tag-remove:hover {
+  opacity: 1;
+  color: #f87171;
+}
+
+.pane-tag-add-wrap {
+  position: relative;
+}
+
+.pane-tag-add-btn {
+  background: none;
+  border: 1px solid var(--border, #333);
+  color: var(--fg, #ccc);
+  opacity: 0.4;
+  cursor: pointer;
+  padding: 0 4px;
+  font-size: 11px;
+  line-height: 1.4;
+  border-radius: 3px;
+  transition: opacity 0.15s;
+}
+
+.pane-tag-add-btn:hover {
+  opacity: 0.8;
+  border-color: var(--accent, #666);
+}
+
+.pane-tag-popover {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 200;
+  margin-top: 2px;
+}
+
+.pane-tag-popover .tag-editor {
+  position: relative;
+  top: auto;
+  left: auto;
+  right: auto;
+  min-width: 180px;
+}
+
 /* ==========================================================================
    Carousel (Focused Mode)
    ========================================================================== */
