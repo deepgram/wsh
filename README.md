@@ -81,13 +81,18 @@ Your terminal is there — live, interactive, fully synced. Type in the browser,
 
 This ships inside the `wsh` binary. No separate install, no configuration, no dependencies. It exists because once your terminal has a structured API, a production-quality browser client is a *side effect*. Everything here — session management, multiple view modes, mobile support, themes — is just an API client. The same API that AI agents use to drive your terminal. The web UI is the most visceral proof of what that API makes possible.
 
-**Multiple sessions.** Create, switch, rename, and kill sessions from the browser. Swipe between them in focused mode, see them all at once in an overview grid, or tile two or more side-by-side with resizable split panes.
+**Sidebar + main content layout.** A persistent sidebar shows live mini-previews of all sessions, organized into groups by tag. Drag sessions between groups to reassign tags. A resize handle separates the sidebar from the main content area. Three view modes for the main content:
+- **Carousel** — 3D depth effect, navigate between sessions with arrow keys
+- **Tiled** — auto-grid layout that adapts to the number of sessions
+- **Queue** — quiescence-driven FIFO, surfaces sessions as they become idle
 
 **Full terminal rendering.** 256-color and true-color ANSI, bold/italic/underline/strikethrough, alternate screen buffer — vim, htop, lazygit, and every other TUI works as expected.
 
-**Mobile-first.** Touch gestures, native scrolling, a modifier bar for Ctrl/Esc/arrows. Your terminal, from your phone, for real.
+**Keyboard-driven.** Command palette (Super+K), shortcut cheat sheet (Super+?), view mode switching (Super+F/G/Q), session navigation (Super+1-9), sidebar toggle (Super+B), and more. "Super" is Meta on Mac, Ctrl+Shift fallback on other platforms.
 
-**Themes.** Glass (frosted macOS feel), Neon (cyberpunk with scanlines), Minimal (clean and understated). Cycle with one click.
+**Mobile adaptation.** Bottom sheet on phones (<640px), overlay sidebar on tablets (640-1024px), persistent sidebar on desktop (>1024px). Touch gestures, native scrolling, a modifier bar for Ctrl/Esc/arrows.
+
+**Themes.** Glass, Neon, Minimal, Tokyo Night, Catppuccin, Dracula — plus a High Contrast mode for accessibility. Cycle with one click or via the command palette.
 
 ### Remote Access
 
@@ -509,9 +514,14 @@ web/                             # Browser-based terminal client (Preact + TypeS
 ├── src/
 │   ├── app.tsx                  # Main application component
 │   ├── api/ws.ts                # WebSocket client and reconnection logic
-│   ├── components/              # Terminal, InputBar, SessionCarousel, StatusBar, etc.
-│   ├── state/sessions.ts        # Global reactive state (Preact Signals)
-│   └── styles/                  # terminal.css, themes.css (glass, neon, minimal)
+│   ├── components/              # LayoutShell, Sidebar, MainContent, DepthCarousel,
+│   │                            #   AutoGrid, QueueView, CommandPalette, ShortcutSheet,
+│   │                            #   ThemePicker, TagEditor, BottomSheet, Terminal, etc.
+│   ├── state/
+│   │   ├── sessions.ts          # Session reactive state (Preact Signals)
+│   │   ├── groups.ts            # Tag-based group computation and sidebar state
+│   │   └── terminal.ts          # Terminal rendering utilities
+│   └── styles/                  # terminal.css, themes.css (6 themes + high contrast)
 ├── index.html                   # Entry point
 └── vite.config.ts               # Build config (output to web-dist/ → embedded in binary)
 

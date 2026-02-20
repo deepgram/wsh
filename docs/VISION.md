@@ -260,7 +260,7 @@ When binding to any non-localhost address, `wsh` requires a bearer token for all
 
 `wsh` ships with a web-based terminal client as one demonstration of the API's power. It connects over WebSocket and renders terminal state using web-native technologies -- reflowing HTML in normal mode, fixed character grid for full-screen TUIs.
 
-The web UI is designed for mobile: native scrolling, touch-friendly text selection, a modifier bar for special keys (Ctrl, Esc, arrows), and responsive layout. It's a production-quality interface for accessing your terminal from a phone or tablet.
+The web UI features a sidebar with live mini-previews of all sessions organized by tag, three view modes (carousel with 3D depth, auto-grid tiling, and quiescence-driven queue), a command palette, keyboard shortcuts, drag-and-drop tag management, and six themes. It adapts to screen size: bottom sheet on phones, overlay sidebar on tablets, persistent sidebar on desktop. Touch gestures, native scrolling, and a modifier bar for special keys make it a production-quality interface for accessing your terminal from any device.
 
 But architecturally, it's just another API client -- no different from an AI agent or an automation script. It demonstrates what `wsh` makes possible; it is not the point.
 
@@ -302,7 +302,7 @@ The core is built: PTY management, terminal state machine, HTTP/WebSocket API, s
 **Future: New Modalities**
 
 - **Voice integration**: Speech-to-text input and text-to-speech output summaries for hands-free terminal interaction
-- **Web UI enhancements**: Session switching, gesture input, plugin architecture for context-aware UI
+- **Web UI enhancements**: Plugin architecture for context-aware UI extensions
 - **Distributed operation**: Manage `wsh` sessions across multiple machines from a single control plane
 
 ---
