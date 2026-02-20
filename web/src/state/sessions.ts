@@ -15,16 +15,10 @@ const initialZoom = Number.isFinite(storedZoom) ? Math.max(0.5, Math.min(2.0, st
 export const sessions = signal<string[]>([]);
 export const focusedSession = signal<string | null>(null);
 export const sessionOrder = signal<string[]>([]);
-export const viewMode = signal<"focused" | "overview" | "tiled">("focused");
-export const tileLayout = signal<{
-  sessions: string[];
-  sizes: number[];
-} | null>(null);
 export const connectionState = signal<
   "connecting" | "connected" | "disconnected"
 >("disconnected");
 export const theme = signal<Theme>(storedTheme);
-export const tileSelection = signal<string[]>([]);
 export const authToken = signal<string | null>(storedAuthToken);
 export const authRequired = signal<boolean>(false);
 export const authError = signal<string | null>(null);
@@ -39,29 +33,6 @@ export const sidebarCollapsed = signal<boolean>(
 
 // Per-session info cache (tags, pid, command, etc.)
 export const sessionInfoMap = signal<Map<string, SessionInfo>>(new Map());
-
-export function toggleTileSelection(session: string): void {
-  const current = tileSelection.value;
-  const idx = current.indexOf(session);
-  if (idx >= 0) {
-    tileSelection.value = current.filter((s) => s !== session);
-  } else {
-    tileSelection.value = [...current, session];
-  }
-}
-
-export function clearTileSelection(): void {
-  tileSelection.value = [];
-}
-
-export function cycleTheme(): Theme {
-  const order: Theme[] = ["glass", "neon", "minimal", "tokyo-night", "catppuccin", "dracula"];
-  const idx = order.indexOf(theme.value);
-  const next = order[(idx + 1) % order.length];
-  theme.value = next;
-  localStorage.setItem("wsh-theme", next);
-  return next;
-}
 
 export function setTheme(t: Theme): void {
   theme.value = t;

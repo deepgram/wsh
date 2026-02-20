@@ -1,5 +1,5 @@
 import { useRef, useEffect } from "preact/hooks";
-import { focusedSession, connectionState, viewMode } from "../state/sessions";
+import { focusedSession, connectionState } from "../state/sessions";
 import { getScreen } from "../state/terminal";
 import type { WshClient } from "../api/ws";
 import type { FormattedLine } from "../api/types";
@@ -105,7 +105,6 @@ export function InputBar({ session, client }: InputBarProps) {
   useEffect(() => {
     if (
       isFocused &&
-      viewMode.value === "focused" &&
       window.matchMedia("(pointer: fine)").matches
     ) {
       inputRef.current?.focus();

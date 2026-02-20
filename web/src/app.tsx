@@ -5,9 +5,6 @@ import {
   sessions,
   focusedSession,
   sessionOrder,
-  viewMode,
-  tileLayout,
-  tileSelection,
   connectionState,
   theme,
   authToken,
@@ -331,7 +328,6 @@ function handleLifecycleEvent(client: WshClient, raw: any): void {
       });
       sessionInfoMap.value = createdMap;
       // Always set up screen state and subscription if not already subscribed
-      // (handles eager state updates from handleNewSession in StatusBar)
       if (!unsubscribes.has(name)) {
         setupSession(client, name).catch((e) => {
           console.error(`Failed to set up new session "${name}":`, e);
@@ -357,24 +353,6 @@ function handleLifecycleEvent(client: WshClient, raw: any): void {
       sessionInfoMap.value = destroyedMap;
       if (focusedSession.value === name) {
         focusedSession.value = sessionOrder.value[0] ?? null;
-      }
-      // Clean up tile selection
-      if (tileSelection.value.includes(name)) {
-        tileSelection.value = tileSelection.value.filter((s) => s !== name);
-      }
-      // Clean up tile layout
-      if (tileLayout.value?.sessions.includes(name)) {
-        const remaining = tileLayout.value.sessions.filter((s) => s !== name);
-        if (remaining.length < 2) {
-          tileLayout.value = null;
-          viewMode.value = "focused";
-        } else {
-          const evenSize = 1 / remaining.length;
-          tileLayout.value = {
-            sessions: remaining,
-            sizes: remaining.map(() => evenSize),
-          };
-        }
       }
       break;
     }
@@ -430,14 +408,6 @@ function handleLifecycleEvent(client: WshClient, raw: any): void {
 
       if (focusedSession.value === oldName) {
         focusedSession.value = newName;
-      }
-      if (tileLayout.value?.sessions.includes(oldName)) {
-        tileLayout.value = {
-          ...tileLayout.value,
-          sessions: tileLayout.value.sessions.map((s) =>
-            s === oldName ? newName : s,
-          ),
-        };
       }
       break;
     }
