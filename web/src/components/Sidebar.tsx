@@ -1,10 +1,9 @@
-import { useCallback, useState } from "preact/hooks";
+import { useCallback } from "preact/hooks";
 import type { WshClient } from "../api/ws";
-import { dragState, dropTargetTag, startSessionDrag, handleGroupDragOver, handleGroupDragLeave, handleGroupDrop, endDrag } from "../hooks/useDragDrop";
-import { groups, selectedGroups, sessionStatuses, type SessionStatus } from "../state/groups";
+import { dragState, dropTargetTag, handleGroupDragOver, handleGroupDragLeave, handleGroupDrop, endDrag } from "../hooks/useDragDrop";
+import { groups, selectedGroups, collapsedGroups, toggleGroupCollapsed, getGroupStatusCounts } from "../state/groups";
 import { connectionState } from "../state/sessions";
-import { MiniViewPreview } from "./MiniViewPreview";
-import { TagEditor } from "./TagEditor";
+import { ThumbnailCell } from "./ThumbnailCell";
 import { ThemePicker } from "./ThemePicker";
 
 interface SidebarProps {
@@ -13,24 +12,12 @@ interface SidebarProps {
   onToggleCollapse: () => void;
 }
 
-function statusLabel(status: SessionStatus | undefined): string {
-  return status === "quiescent" ? "Idle" : "Running";
-}
-
-function StatusDot({ status }: { status: SessionStatus | undefined }) {
-  const cls = status === "quiescent" ? "status-dot-green"
-    : "status-dot-amber";
-  return <span class={`mini-status-dot ${cls}`} aria-label={statusLabel(status)} />;
-}
-
 export function Sidebar({ client, collapsed, onToggleCollapse }: SidebarProps) {
   const allGroups = groups.value;
   const selected = selectedGroups.value;
   const connState = connectionState.value;
-  const statuses = sessionStatuses.value;
   const _dragState = dragState.value;
   const dropTarget = dropTargetTag.value;
-  const [editingSession, setEditingSession] = useState<string | null>(null);
 
   const handleGroupClick = useCallback((tag: string, e: MouseEvent) => {
     if (e.ctrlKey || e.metaKey) {
@@ -93,74 +80,52 @@ export function Sidebar({ client, collapsed, onToggleCollapse }: SidebarProps) {
         </button>
       </div>
       <div class="sidebar-groups">
-        {allGroups.map((g) => (
-          <div
-            key={g.tag}
-            class={`sidebar-group ${selected.includes(g.tag) ? "selected" : ""} ${dropTarget === g.tag ? "drop-target" : ""}`}
-            onClick={(e: MouseEvent) => handleGroupClick(g.tag, e)}
-            onDragOver={(e: DragEvent) => handleGroupDragOver(g.tag, e)}
-            onDragLeave={handleGroupDragLeave}
-            onDrop={(e: DragEvent) => handleGroupDrop(g.tag, e, client)}
-            role="button"
-            aria-label={`Group: ${g.label}, ${g.sessions.length} sessions`}
-            aria-selected={selected.includes(g.tag)}
-          >
-            <div class="sidebar-group-header">
-              <span class="sidebar-group-label">{g.label}</span>
-              <span class="sidebar-group-count">{g.sessions.length}</span>
-              {g.badgeCount > 0 && <span class="sidebar-badge" aria-label={`${g.badgeCount} sessions need attention`}>{g.badgeCount}</span>}
-            </div>
-            {/* Mini view mode preview */}
-            {g.sessions.length > 0 && (
-              <div class="sidebar-preview-area">
-                <MiniViewPreview group={g} />
-              </div>
-            )}
-            {/* Session list for drag-to-tag and context menu */}
-            {g.sessions.length > 0 && (
-              <div class="sidebar-session-list">
-                {g.sessions.map((s) => (
-                  <div
-                    key={s}
-                    class="sidebar-session-item"
-                    draggable
-                    onDragStart={(e: DragEvent) => startSessionDrag(s, e)}
-                    onDragEnd={endDrag}
-                    onContextMenu={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); setEditingSession(s); }}
-                  >
-                    <StatusDot status={statuses.get(s)} />
-                    <span class="sidebar-session-name">{s}</span>
-                    <button
-                      class="tag-edit-btn"
-                      onClick={(e: MouseEvent) => { e.stopPropagation(); setEditingSession(s); }}
-                      title="Edit tags"
-                    >
-                      +
-                    </button>
-                    {editingSession === s && (
-                      <TagEditor
-                        session={s}
-                        client={client}
-                        onClose={() => setEditingSession(null)}
-                      />
-                    )}
+        {allGroups.map((g) => {
+          const isCollapsed = collapsedGroups.value.has(g.tag);
+          const { running, idle } = getGroupStatusCounts(g);
+          const sortedSessions = [...g.sessions].sort();
+
+          return (
+            <div
+              key={g.tag}
+              class={`sidebar-group ${selected.includes(g.tag) ? "selected" : ""} ${dropTarget === g.tag ? "drop-target" : ""}`}
+              onClick={(e: MouseEvent) => handleGroupClick(g.tag, e)}
+              onDragOver={(e: DragEvent) => handleGroupDragOver(g.tag, e)}
+              onDragLeave={handleGroupDragLeave}
+              onDrop={(e: DragEvent) => handleGroupDrop(g.tag, e, client)}
+              role="button"
+              aria-label={`Group: ${g.label}, ${g.sessions.length} sessions`}
+              aria-selected={selected.includes(g.tag)}
+            >
+              <div class="sidebar-group-header">
+                <span
+                  class={`sidebar-group-chevron ${isCollapsed ? "" : "expanded"}`}
+                  onClick={(e: MouseEvent) => { e.stopPropagation(); toggleGroupCollapsed(g.tag); }}
+                >
+                  &#9656;
+                </span>
+                <span class="sidebar-group-label">{g.label}</span>
+                {isCollapsed && g.sessions.length > 0 && (
+                  <div class="sidebar-status-chips">
+                    {idle > 0 && <span class="sidebar-status-chip idle">{idle}</span>}
+                    {running > 0 && <span class="sidebar-status-chip running">{running}</span>}
                   </div>
-                ))}
+                )}
+                {!isCollapsed && (
+                  <span class="sidebar-group-count">{g.sessions.length}</span>
+                )}
+                {g.badgeCount > 0 && <span class="sidebar-badge" aria-label={`${g.badgeCount} sessions need attention`}>{g.badgeCount}</span>}
               </div>
-            )}
-            {/* Timestamp */}
-            {g.sessions.length > 0 && (
-              <div class="sidebar-group-timestamp">
-                {(() => {
-                  // Show "Last active" based on group activity
-                  const hasQuiescent = g.sessions.some((s) => statuses.get(s) === "quiescent");
-                  if (hasQuiescent) return "Idle";
-                  return "Active";
-                })()}
-              </div>
-            )}
-          </div>
-        ))}
+              {!isCollapsed && sortedSessions.length > 0 && (
+                <div class="thumb-grid">
+                  {sortedSessions.map((s) => (
+                    <ThumbnailCell key={s} session={s} client={client} />
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
       <div class="sidebar-hints">
         <button
@@ -186,12 +151,10 @@ export function Sidebar({ client, collapsed, onToggleCollapse }: SidebarProps) {
         </button>
       </div>
       <div class="sr-only" aria-live="polite">
-        {allGroups.map((g) =>
-          g.sessions.map((s) => {
-            const st = statuses.get(s);
-            return `${s}: ${statusLabel(st)}`;
-          })
-        ).flat().join(". ")}
+        {allGroups.map((g) => {
+          const { running, idle } = getGroupStatusCounts(g);
+          return `${g.label}: ${running} running, ${idle} idle`;
+        }).join(". ")}
       </div>
     </div>
   );
