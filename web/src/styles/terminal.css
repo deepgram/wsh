@@ -1313,6 +1313,170 @@ html, body, #app {
   opacity: 0.4;
 }
 
+/* Thumbnail grid */
+.thumb-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(calc(50% - 2px), 1fr));
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.thumb-cell {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  border-radius: 4px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.25);
+  cursor: pointer;
+  transition: box-shadow 0.15s;
+}
+
+.thumb-cell:hover {
+  box-shadow: 0 0 0 1px var(--accent, #666);
+}
+
+.thumb-cell.focused {
+  box-shadow: 0 0 0 1px var(--accent, #666);
+}
+
+.thumb-preview {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+/* Status dot — resting state, lower-right */
+.thumb-status-dot {
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  z-index: 1;
+}
+
+/* Hover overlay — bottom bar */
+.thumb-overlay {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  background: rgba(0, 0, 0, 0.65);
+  z-index: 2;
+}
+
+.thumb-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 9px;
+  color: var(--fg, #ccc);
+  cursor: text;
+}
+
+.thumb-name:hover {
+  text-decoration: underline;
+}
+
+.thumb-rename-input {
+  flex: 1;
+  min-width: 0;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--accent, #666);
+  border-radius: 2px;
+  padding: 1px 4px;
+  font-size: 9px;
+  color: var(--fg, #ccc);
+  outline: none;
+  font-family: inherit;
+}
+
+/* Tag button — upper-right on hover */
+.thumb-tag-btn {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  background: rgba(0, 0, 0, 0.6);
+  border: none;
+  color: var(--fg, #ccc);
+  opacity: 0.7;
+  cursor: pointer;
+  padding: 1px 4px;
+  font-size: 10px;
+  line-height: 1;
+  border-radius: 3px;
+  z-index: 2;
+  transition: opacity 0.1s;
+}
+
+.thumb-tag-btn:hover {
+  opacity: 1;
+}
+
+/* Tag popover — anchored to upper-right */
+.thumb-tag-popover {
+  position: absolute;
+  top: 20px;
+  right: 3px;
+  z-index: 200;
+}
+
+.thumb-tag-popover .tag-editor {
+  position: relative;
+  top: auto;
+  left: auto;
+  right: auto;
+  min-width: 160px;
+}
+
+/* Collapsed group header chips */
+.sidebar-status-chips {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.sidebar-status-chip {
+  font-size: 9px;
+  font-weight: 600;
+  border-radius: 8px;
+  padding: 1px 5px;
+  min-width: 14px;
+  text-align: center;
+  line-height: 1.4;
+  color: var(--bg, #000);
+}
+
+.sidebar-status-chip.idle {
+  background: #4ade80;
+}
+
+.sidebar-status-chip.running {
+  background: #fbbf24;
+}
+
+/* Group collapse chevron */
+.sidebar-group-chevron {
+  font-size: 8px;
+  color: var(--fg, #ccc);
+  opacity: 0.5;
+  transition: transform 0.15s;
+  flex-shrink: 0;
+  width: 10px;
+  text-align: center;
+}
+
+.sidebar-group-chevron.expanded {
+  transform: rotate(90deg);
+}
+
 /* Session list (below preview) */
 .sidebar-session-list {
   margin-top: 4px;
