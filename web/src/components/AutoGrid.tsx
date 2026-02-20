@@ -105,11 +105,11 @@ export function AutoGrid({ sessions, client }: AutoGridProps) {
     setDragTarget(null);
   }, []);
 
-  // Keyboard navigation: Ctrl+Shift+Arrows to move focus between cells
+  // Keyboard navigation: Ctrl+Shift+Arrows or Ctrl+Shift+HJKL to move focus between cells
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (!e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey) return;
-      if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
+      if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "h", "j", "k", "l", "H", "J", "K", "L"].includes(e.key)) return;
 
       e.preventDefault();
 
@@ -129,15 +129,23 @@ export function AutoGrid({ sessions, client }: AutoGridProps) {
 
       switch (e.key) {
         case "ArrowLeft":
+        case "h":
+        case "H":
           newCol = Math.max(0, col - 1);
           break;
         case "ArrowRight":
+        case "l":
+        case "L":
           newCol = Math.min(cols - 1, col + 1);
           break;
         case "ArrowUp":
+        case "k":
+        case "K":
           newRow = Math.max(0, row - 1);
           break;
         case "ArrowDown":
+        case "j":
+        case "J":
           newRow = Math.min(layout.length - 1, row + 1);
           break;
       }

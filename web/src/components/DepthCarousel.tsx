@@ -29,16 +29,16 @@ export function DepthCarousel({ sessions, client }: DepthCarouselProps) {
     focusedSession.value = sessions[newIndex];
   }, [currentIndex, sessions]);
 
-  // Keyboard navigation: Ctrl+Shift+Left/Right
+  // Keyboard navigation: Ctrl+Shift+Left/Right or Ctrl+Shift+H/L
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (!e.ctrlKey || !e.shiftKey) return;
       if (e.altKey || e.metaKey) return;
 
-      if (e.key === "ArrowLeft") {
+      if (e.key === "ArrowLeft" || e.key === "h" || e.key === "H") {
         e.preventDefault();
         navigate(-1);
-      } else if (e.key === "ArrowRight") {
+      } else if (e.key === "ArrowRight" || e.key === "l" || e.key === "L") {
         e.preventDefault();
         navigate(1);
       }

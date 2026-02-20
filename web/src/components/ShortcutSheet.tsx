@@ -14,8 +14,8 @@ const CATEGORIES: ShortcutCategory[] = [
   {
     label: "Navigation",
     shortcuts: [
-      { keys: "Ctrl+Shift+Left/Right", description: "Carousel rotate / Grid navigate" },
-      { keys: "Ctrl+Shift+Up/Down", description: "Grid navigate rows" },
+      { keys: "Ctrl+Shift+Left/Right or H/L", description: "Carousel rotate / Grid navigate" },
+      { keys: "Ctrl+Shift+Up/Down or K/J", description: "Grid navigate rows" },
       { keys: "Ctrl+Shift+1-9", description: "Jump to Nth session" },
       { keys: "Ctrl+Shift+Tab", description: "Next sidebar group" },
     ],
