@@ -1310,7 +1310,6 @@ html, body, #app {
   position: absolute;
   top: 0;
   left: 0;
-  width: max-content;
   font-family: var(--font-mono, "JetBrains Mono", "Fira Code", monospace);
   font-size: 12px;
   line-height: 1.2;
