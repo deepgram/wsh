@@ -361,7 +361,7 @@ async fn test_socket_initial_frame_timeout() {
 
     // Start the socket server
     tokio::spawn(async move {
-        wsh::server::serve(sessions, &path_clone, cancel_clone, None)
+        wsh::server::serve(sessions, &path_clone, cancel_clone, None, tokio_util::sync::CancellationToken::new())
             .await
             .unwrap();
     });

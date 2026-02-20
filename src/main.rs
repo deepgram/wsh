@@ -186,6 +186,13 @@ enum Commands {
         socket: Option<PathBuf>,
     },
 
+    /// Stop the running wsh server
+    Stop {
+        /// Path to the Unix domain socket
+        #[arg(long)]
+        socket: Option<PathBuf>,
+    },
+
     /// Start an MCP server over stdio (for AI hosts like Claude Desktop)
     Mcp {
         /// Address to bind the HTTP/WebSocket API server (for auto-spawn)
@@ -276,6 +283,9 @@ async fn main() -> Result<(), WshError> {
         }
         Some(Commands::Tag { name, add, remove, socket }) => {
             run_tag(name, add, remove, socket).await
+        }
+        Some(Commands::Stop { socket }) => {
+            run_stop(socket).await
         }
         Some(Commands::Mcp { bind, socket, token }) => {
             run_mcp(bind, socket, token).await
@@ -406,8 +416,10 @@ async fn run_server(
     let socket_sessions = sessions.clone();
     let socket_cancel = tokio_util::sync::CancellationToken::new();
     let socket_cancel_clone = socket_cancel.clone();
+    let shutdown_request = tokio_util::sync::CancellationToken::new();
+    let shutdown_request_clone = shutdown_request.clone();
     let socket_handle = tokio::spawn(async move {
-        if let Err(e) = server::serve(socket_sessions, &socket_path, socket_cancel_clone, socket_token).await {
+        if let Err(e) = server::serve(socket_sessions, &socket_path, socket_cancel_clone, socket_token, shutdown_request_clone).await {
             tracing::error!(?e, "Unix socket server error");
         }
     });
@@ -491,7 +503,7 @@ async fn run_server(
         }
     });
 
-    // Wait for Ctrl+C, SIGTERM, or ephemeral shutdown
+    // Wait for Ctrl+C, SIGTERM, ephemeral shutdown, or `wsh stop` request
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .expect("failed to register SIGTERM handler");
     tokio::select! {
@@ -505,6 +517,9 @@ async fn run_server(
             if let Ok(true) = result {
                 tracing::debug!("ephemeral shutdown triggered");
             }
+        }
+        _ = shutdown_request.cancelled() => {
+            tracing::info!("shutdown requested via 'wsh stop'");
         }
     }
 
@@ -1282,6 +1297,47 @@ async fn run_tag(
         }
     }
 
+    Ok(())
+}
+
+async fn run_stop(socket: Option<PathBuf>) -> Result<(), WshError> {
+    let socket_path = socket.unwrap_or_else(server::default_socket_path);
+    let mut c = match client::Client::connect(&socket_path).await {
+        Ok(c) => c,
+        Err(e) => {
+            match e.kind() {
+                std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound => {
+                    println!("No server running.");
+                    return Ok(());
+                }
+                _ => {
+                    eprintln!(
+                        "wsh stop: failed to connect to server at {}: {}",
+                        socket_path.display(),
+                        e
+                    );
+                    std::process::exit(1);
+                }
+            }
+        }
+    };
+
+    if let Err(e) = c.shutdown_server().await {
+        eprintln!("wsh stop: {}", e);
+        std::process::exit(1);
+    }
+
+    // Wait for the socket file to disappear (server cleanup)
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    while socket_path.exists() {
+        if tokio::time::Instant::now() > deadline {
+            eprintln!("wsh stop: server acknowledged shutdown but socket file still exists after 10s");
+            std::process::exit(1);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    println!("Server stopped.");
     Ok(())
 }
 

@@ -27,6 +27,7 @@ pub async fn serve(
     socket_path: &Path,
     cancel: tokio_util::sync::CancellationToken,
     token: Option<String>,
+    shutdown_request: tokio_util::sync::CancellationToken,
 ) -> io::Result<()> {
     // Remove stale socket file if it exists, but check for active server first.
     // Uses spawn_blocking to avoid blocking the tokio runtime on the connect() syscall
@@ -82,8 +83,9 @@ pub async fn serve(
                     Ok((stream, _addr)) => {
                         let sessions = sessions.clone();
                         let token = token.clone();
+                        let shutdown_request = shutdown_request.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = handle_client(stream, sessions, token).await {
+                            if let Err(e) = handle_client(stream, sessions, token, shutdown_request).await {
                                 tracing::debug!(?e, "client connection ended");
                             }
                         });
@@ -118,6 +120,7 @@ async fn handle_client<S: AsyncRead + AsyncWrite + Unpin>(
     mut stream: S,
     sessions: SessionRegistry,
     token: Option<String>,
+    shutdown_request: tokio_util::sync::CancellationToken,
 ) -> io::Result<()> {
     // Read initial control frame (with timeout to reject idle connections)
     let frame = tokio::time::timeout(
@@ -165,11 +168,14 @@ async fn handle_client<S: AsyncRead + AsyncWrite + Unpin>(
             })?;
             handle_manage_tags(&mut stream, sessions, msg).await
         }
+        FrameType::ShutdownServer => {
+            handle_shutdown_server(&mut stream, shutdown_request).await
+        }
         other => {
             let err = ErrorMsg {
                 code: "invalid_initial_frame".to_string(),
                 message: format!(
-                    "expected CreateSession, AttachSession, ListSessions, KillSession, DetachSession, GetToken, or ManageTags, got {:?}",
+                    "expected CreateSession, AttachSession, ListSessions, KillSession, DetachSession, GetToken, ManageTags, or ShutdownServer, got {:?}",
                     other
                 ),
             };
@@ -544,6 +550,20 @@ async fn handle_manage_tags<S: AsyncRead + AsyncWrite + Unpin>(
     Ok(())
 }
 
+/// Handle a ShutdownServer request: ack then cancel the server.
+async fn handle_shutdown_server<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: &mut S,
+    shutdown_request: tokio_util::sync::CancellationToken,
+) -> io::Result<()> {
+    let resp = ShutdownServerResponseMsg {};
+    let resp_frame = Frame::control(FrameType::ShutdownServerResponse, &resp)
+        .map_err(io::Error::other)?;
+    resp_frame.write_to(stream).await?;
+    tracing::info!("shutdown requested via socket, signaling server");
+    shutdown_request.cancel();
+    Ok(())
+}
+
 /// Send initial overlay and panel state to a newly connected client.
 ///
 /// Called after sending CreateSessionResponse or AttachSessionResponse,
@@ -880,8 +900,9 @@ mod tests {
         let path = socket_path.clone();
 
         let cancel = tokio_util::sync::CancellationToken::new();
+        let shutdown_request = tokio_util::sync::CancellationToken::new();
         tokio::spawn(async move {
-            serve(sessions, &socket_path, cancel, token).await.unwrap();
+            serve(sessions, &socket_path, cancel, token, shutdown_request).await.unwrap();
         });
 
         // Wait for socket to appear

@@ -42,6 +42,10 @@ pub enum FrameType {
     ManageTags = 0x16,
     ManageTagsResponse = 0x17,
 
+    // Server lifecycle frames (JSON payload)
+    ShutdownServer = 0x18,
+    ShutdownServerResponse = 0x19,
+
     // Keepalive frames (empty payload)
     Ping = 0x14,
     Pong = 0x15,
@@ -71,6 +75,8 @@ impl FrameType {
             0x13 => Some(Self::PanelSync),
             0x16 => Some(Self::ManageTags),
             0x17 => Some(Self::ManageTagsResponse),
+            0x18 => Some(Self::ShutdownServer),
+            0x19 => Some(Self::ShutdownServerResponse),
             0x14 => Some(Self::Ping),
             0x15 => Some(Self::Pong),
             _ => None,
@@ -372,6 +378,14 @@ pub struct ManageTagsResponseMsg {
     pub tags: Vec<String>,
 }
 
+/// Client → Server: request to shut down the server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShutdownServerMsg {}
+
+/// Server → Client: acknowledgment before shutdown.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShutdownServerResponseMsg {}
+
 /// Server → Client: full overlay state sync.
 ///
 /// Sent when any overlay changes, contains ALL current overlays.
@@ -444,6 +458,8 @@ mod tests {
             FrameType::PanelSync,
             FrameType::ManageTags,
             FrameType::ManageTagsResponse,
+            FrameType::ShutdownServer,
+            FrameType::ShutdownServerResponse,
             FrameType::Ping,
             FrameType::Pong,
         ];
@@ -458,7 +474,7 @@ mod tests {
     fn frame_type_invalid_byte() {
         assert!(FrameType::from_u8(0xFF).is_none());
         assert!(FrameType::from_u8(0x00).is_none());
-        assert!(FrameType::from_u8(0x18).is_none());
+        assert!(FrameType::from_u8(0x1A).is_none());
     }
 
     #[test]

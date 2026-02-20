@@ -291,6 +291,29 @@ impl Client {
         }
     }
 
+    /// Request the server to shut down gracefully.
+    pub async fn shutdown_server(&mut self) -> io::Result<()> {
+        let msg = ShutdownServerMsg {};
+        let frame = Frame::control(FrameType::ShutdownServer, &msg)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        frame.write_to(&mut self.stream).await?;
+
+        let resp_frame = Frame::read_from(&mut self.stream).await?;
+        match resp_frame.frame_type {
+            FrameType::ShutdownServerResponse => Ok(()),
+            FrameType::Error => {
+                let err: ErrorMsg = resp_frame
+                    .parse_json()
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                Err(io::Error::other(format!("{}: {}", err.code, err.message)))
+            }
+            other => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unexpected response frame type: {:?}", other),
+            )),
+        }
+    }
+
     /// Enter the streaming I/O proxy loop.
     ///
     /// Consumes the client, splits the underlying stream, and runs a
@@ -593,7 +616,8 @@ mod tests {
 
         tokio::spawn(async move {
             let cancel = tokio_util::sync::CancellationToken::new();
-            server::serve(sessions, &socket_path, cancel, token).await.unwrap();
+            let shutdown_request = tokio_util::sync::CancellationToken::new();
+            server::serve(sessions, &socket_path, cancel, token, shutdown_request).await.unwrap();
         });
 
         // Wait for socket to appear
