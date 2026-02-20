@@ -22,7 +22,7 @@ export const viewModePerGroup = signal<Record<string, ViewMode>>(storedViewModes
 
 export const quiescenceQueues = signal<Record<string, QueueEntry[]>>({});
 
-export type SessionStatus = "running" | "quiescent" | "exited";
+export type SessionStatus = "running" | "quiescent";
 export const sessionStatuses = signal<Map<string, SessionStatus>>(new Map());
 
 export const tileLayouts = signal<Record<string, {
@@ -52,7 +52,7 @@ export const groups = computed<Group[]>(() => {
 
   const allSessions = Array.from(infoMap.keys());
   const allBadge = allSessions.filter(
-    (s) => statuses.get(s) === "quiescent" || statuses.get(s) === "exited"
+    (s) => statuses.get(s) === "quiescent"
   ).length;
   result.push({
     tag: "all",
@@ -66,7 +66,7 @@ export const groups = computed<Group[]>(() => {
   for (const tag of sortedTags) {
     const sessions = tagGroups.get(tag)!;
     const badge = sessions.filter(
-      (s) => statuses.get(s) === "quiescent" || statuses.get(s) === "exited"
+      (s) => statuses.get(s) === "quiescent"
     ).length;
     result.push({
       tag,
@@ -79,7 +79,7 @@ export const groups = computed<Group[]>(() => {
 
   if (untagged.length > 0) {
     const badge = untagged.filter(
-      (s) => statuses.get(s) === "quiescent" || statuses.get(s) === "exited"
+      (s) => statuses.get(s) === "quiescent"
     ).length;
     result.push({
       tag: "untagged",

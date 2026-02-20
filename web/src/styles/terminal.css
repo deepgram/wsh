@@ -1364,10 +1364,6 @@ html, body, #app {
   background: #fbbf24;
 }
 
-.status-dot-grey {
-  background: #6b7280;
-}
-
 /* Drag and Drop */
 
 .sidebar-group.drop-target {

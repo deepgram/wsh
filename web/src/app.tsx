@@ -356,20 +356,6 @@ function handleLifecycleEvent(client: WshClient, raw: any): void {
       break;
     }
 
-    case "session_exited": {
-      // Process exited but session object still exists
-      const exitedName = raw.params?.name;
-      if (exitedName) {
-        const exitedMap = new Map(sessionInfoMap.value);
-        const exitedInfo = exitedMap.get(exitedName);
-        if (exitedInfo) {
-          exitedMap.set(exitedName, { ...exitedInfo, pid: null });
-          sessionInfoMap.value = exitedMap;
-        }
-      }
-      break;
-    }
-
     case "session_renamed": {
       const oldName = raw.params?.old_name;
       const newName = raw.params?.new_name;

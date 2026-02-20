@@ -154,8 +154,6 @@ export function Sidebar({ client, collapsed, onToggleCollapse }: SidebarProps) {
                 {(() => {
                   // Show "Last active" based on group activity
                   const hasQuiescent = g.sessions.some((s) => statuses.get(s) === "quiescent");
-                  const allExited = g.sessions.every((s) => statuses.get(s) === "exited");
-                  if (allExited) return "Exited";
                   if (hasQuiescent) return "Idle";
                   return "Active";
                 })()}
