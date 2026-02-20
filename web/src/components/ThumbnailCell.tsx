@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from "preact/hooks";
 import type { WshClient } from "../api/ws";
 import { sessionStatuses, type SessionStatus } from "../state/groups";
 import { focusedSession } from "../state/sessions";
+import { startSessionDrag, endDrag } from "../hooks/useDragDrop";
 import { MiniTermContent } from "./MiniViewPreview";
 import { TagEditor } from "./TagEditor";
 
@@ -65,6 +66,9 @@ export function ThumbnailCell({ session, client }: ThumbnailCellProps) {
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => { setHovered(false); if (!showTagEditor) setRenaming(false); }}
       onClick={handleThumbClick}
+      draggable
+      onDragStart={(e: DragEvent) => startSessionDrag(session, e)}
+      onDragEnd={endDrag}
       role="button"
       aria-label={`Session ${session}, ${statusLabel(status)}`}
     >
