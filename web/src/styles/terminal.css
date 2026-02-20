@@ -1155,24 +1155,31 @@ html, body, #app {
   border-radius: 4px;
   overflow: hidden;
   background: rgba(0, 0, 0, 0.25);
+  height: 64px;
   padding: 3px;
 }
 
 .mini-term-content {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.mini-term-inner {
   font-family: var(--font-mono, "JetBrains Mono", "Fira Code", monospace);
-  font-size: 3.5px;
+  font-size: 12px;
   line-height: 1.2;
   padding: 1px;
   color: var(--fg, #ccc);
-  overflow: hidden;
   white-space: pre;
+  pointer-events: none;
 }
 
 .mini-term-line {
   overflow: hidden;
   text-overflow: clip;
   white-space: nowrap;
-  height: 4.2px;
 }
 
 .mini-view-empty {
@@ -1188,7 +1195,7 @@ html, body, #app {
   display: flex;
   align-items: stretch;
   gap: 2px;
-  min-height: 24px;
+  height: 100%;
   overflow: hidden;
 }
 
@@ -1212,19 +1219,22 @@ html, body, #app {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  height: 100%;
 }
 
 .mini-grid-row {
   display: flex;
   gap: 2px;
+  flex: 1;
+  min-height: 0;
 }
 
 .mini-grid-cell {
   flex: 1;
+  min-width: 0;
   background: rgba(0, 0, 0, 0.3);
   border-radius: 2px;
   overflow: hidden;
-  min-height: 16px;
 }
 
 /* Mini queue */
@@ -1232,6 +1242,7 @@ html, body, #app {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  height: 100%;
 }
 
 .mini-queue-bar {
@@ -1246,6 +1257,8 @@ html, body, #app {
 }
 
 .mini-queue-current {
+  flex: 1;
+  min-height: 0;
   background: rgba(0, 0, 0, 0.3);
   border-radius: 2px;
   overflow: hidden;
@@ -1601,6 +1614,9 @@ html, body, #app {
 .carousel-thumb {
   flex-shrink: 0;
   width: 120px;
+  height: 68px;
+  display: flex;
+  flex-direction: column;
   border-radius: 4px;
   overflow: hidden;
   cursor: pointer;
@@ -1634,6 +1650,11 @@ html, body, #app {
 
 .carousel-thumb.active .carousel-thumb-label {
   opacity: 1;
+}
+
+.carousel-thumb > .mini-term-content {
+  flex: 1;
+  min-height: 0;
 }
 
 /* Active session — full remaining height */

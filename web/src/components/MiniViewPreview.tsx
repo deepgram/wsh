@@ -1,3 +1,4 @@
+import { useRef, useEffect, useState } from "preact/hooks";
 import { getScreenSignal } from "../state/terminal";
 import { getViewModeForGroup, quiescenceQueues } from "../state/groups";
 import { focusedSession } from "../state/sessions";
@@ -14,17 +15,46 @@ function lineToText(line: FormattedLine): string {
   return line.map((s) => s.text).join("");
 }
 
-/** Render a tiny terminal content block showing bottom N lines. */
-export function MiniTermContent({ session, maxLines = 6 }: { session: string; maxLines?: number }) {
+/**
+ * Render a scaled-down replica of the full terminal screen.
+ * Renders all visible lines at a base font size, then uses CSS
+ * transform to scale down to fit the container.
+ */
+export function MiniTermContent({ session }: { session: string }) {
   const screen = getScreenSignal(session).value;
-  // Show the bottom N lines (most recent activity) instead of top
-  const start = Math.max(0, screen.lines.length - maxLines);
-  const lines = screen.lines.slice(start, start + maxLines);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const innerRef = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState(1);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    const inner = innerRef.current;
+    if (!container || !inner) return;
+
+    const ro = new ResizeObserver(() => {
+      const cw = container.clientWidth;
+      const ch = container.clientHeight;
+      const iw = inner.scrollWidth;
+      const ih = inner.scrollHeight;
+      if (iw > 0 && ih > 0) {
+        setScale(Math.min(cw / iw, ch / ih, 1));
+      }
+    });
+    ro.observe(container);
+    return () => ro.disconnect();
+  }, [screen.lines.length]);
+
   return (
-    <div class="mini-term-content">
-      {lines.map((line: FormattedLine, i: number) => (
-        <div key={i} class="mini-term-line">{lineToText(line)}</div>
-      ))}
+    <div class="mini-term-content" ref={containerRef}>
+      <div
+        class="mini-term-inner"
+        ref={innerRef}
+        style={{ transform: `scale(${scale})`, transformOrigin: "top left" }}
+      >
+        {screen.lines.map((line: FormattedLine, i: number) => (
+          <div key={i} class="mini-term-line">{lineToText(line)}</div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -38,7 +68,7 @@ function MiniCarousel({ sessions }: { sessions: string[] }) {
     <div class="mini-carousel">
       {sessions.map((s, i) => (
         <div key={s} class={`mini-carousel-thumb ${i === idx ? "active" : ""}`}>
-          <MiniTermContent session={s} maxLines={3} />
+          <MiniTermContent session={s} />
         </div>
       ))}
     </div>
@@ -59,7 +89,7 @@ function MiniGrid({ sessions }: { sessions: string[] }) {
         <div key={ri} class="mini-grid-row">
           {row.map((s) => (
             <div key={s} class="mini-grid-cell">
-              <MiniTermContent session={s} maxLines={3} />
+              <MiniTermContent session={s} />
             </div>
           ))}
         </div>
@@ -81,7 +111,7 @@ function MiniQueue({ sessions, groupTag }: { sessions: string[]; groupTag: strin
       </div>
       {currentSession && (
         <div class="mini-queue-current">
-          <MiniTermContent session={currentSession} maxLines={4} />
+          <MiniTermContent session={currentSession} />
         </div>
       )}
       {sessions.length > 1 && (

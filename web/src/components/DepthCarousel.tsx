@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import type { WshClient } from "../api/ws";
 import { focusedSession } from "../state/sessions";
 import { MiniTermContent } from "./MiniViewPreview";
@@ -124,7 +124,7 @@ export function DepthCarousel({ sessions, client }: DepthCarouselProps) {
               class={`carousel-thumb ${i === currentIndex ? "active" : ""}`}
               onClick={() => { focusedSession.value = s; }}
             >
-              <MiniTermContent session={s} maxLines={4} />
+              <MiniTermContent session={s} />
               <div class="carousel-thumb-label">{s}</div>
             </div>
           ))}
