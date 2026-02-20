@@ -2013,3 +2013,227 @@ html, body, #app {
     animation: none !important;
   }
 }
+
+/* ======================================================================
+   Mobile Layout
+   ====================================================================== */
+
+/* Mobile: bottom sheet replaces sidebar */
+.layout-mobile {
+  flex-direction: column;
+}
+
+.layout-mobile .layout-main {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Bottom sheet tab bar */
+.bottom-sheet-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--chrome, #1a1a1a);
+  border-top: 1px solid var(--border, #333);
+  flex-shrink: 0;
+  cursor: pointer;
+  user-select: none;
+}
+
+.bottom-sheet-group-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg, #ccc);
+}
+
+.bottom-sheet-new-btn {
+  background: none;
+  border: 1px solid var(--border, #333);
+  color: var(--fg, #ccc);
+  cursor: pointer;
+  padding: 2px 8px;
+  font-size: 14px;
+  border-radius: 6px;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.bottom-sheet-new-btn:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--accent, #666);
+}
+
+.bottom-sheet-chevron {
+  font-size: 10px;
+  color: var(--fg, #ccc);
+  opacity: 0.5;
+}
+
+/* Backdrop */
+.bottom-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 150;
+}
+
+/* Expanded panel */
+.bottom-sheet-panel {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  max-height: 60vh;
+  background: var(--chrome, #1a1a1a);
+  border-top: 1px solid var(--border, #333);
+  border-radius: 12px 12px 0 0;
+  padding: 8px 0;
+  z-index: 151;
+  overflow-y: auto;
+}
+
+.bottom-sheet-handle {
+  width: 32px;
+  height: 4px;
+  background: var(--fg, #ccc);
+  opacity: 0.2;
+  border-radius: 2px;
+  margin: 0 auto 8px;
+}
+
+.bottom-sheet-groups {
+  padding: 0 8px;
+}
+
+.bottom-sheet-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.bottom-sheet-group:hover,
+.bottom-sheet-group:active {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.bottom-sheet-group.selected {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.bottom-sheet-group-label {
+  font-size: 14px;
+  color: var(--fg, #ccc);
+  flex: 1;
+}
+
+.bottom-sheet-group-count {
+  font-size: 12px;
+  color: var(--fg, #ccc);
+  opacity: 0.4;
+}
+
+/* Focus-visible for bottom sheet */
+.bottom-sheet-new-btn:focus-visible,
+.bottom-sheet-group:focus-visible {
+  outline: 2px solid var(--accent, var(--cursor-color));
+  outline-offset: 2px;
+}
+
+/* ======================================================================
+   Tablet Layout
+   ====================================================================== */
+
+.layout-tablet {
+  position: relative;
+}
+
+.layout-overlay-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 50;
+}
+
+.layout-sidebar-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 280px;
+  background: var(--chrome, #1a1a1a);
+  border-right: 1px solid var(--border, #333);
+  z-index: 51;
+  overflow: hidden;
+}
+
+.layout-tablet-menu-btn {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 40;
+  background: var(--chrome, #1a1a1a);
+  border: 1px solid var(--border, #333);
+  color: var(--fg, #ccc);
+  cursor: pointer;
+  padding: 4px 8px;
+  font-size: 16px;
+  line-height: 1;
+  border-radius: 6px;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.layout-tablet-menu-btn:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--accent, #666);
+}
+
+.layout-tablet-menu-btn:focus-visible {
+  outline: 2px solid var(--accent, var(--cursor-color));
+  outline-offset: 2px;
+}
+
+/* ======================================================================
+   Responsive Breakpoints
+   ====================================================================== */
+
+/* Mobile: < 640px */
+@media (max-width: 640px) {
+  .auto-grid-row {
+    flex-direction: column;
+  }
+
+  .auto-grid-cell {
+    min-height: 200px;
+  }
+
+  /* Queue: compact strip */
+  .queue-thumbnails {
+    max-height: 40px;
+  }
+
+  .queue-thumb {
+    width: 60px;
+    height: 30px;
+  }
+
+  /* Main header: tighter */
+  .main-header {
+    padding: 4px 8px;
+    min-height: 28px;
+  }
+
+  .main-group-name {
+    font-size: 11px;
+  }
+}
+
+/* Tablet: 641px - 1024px */
+@media (min-width: 641px) and (max-width: 1024px) {
+  .auto-grid {
+    max-height: none;
+  }
+}

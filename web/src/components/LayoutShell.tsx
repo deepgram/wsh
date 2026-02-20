@@ -1,19 +1,40 @@
-import { useRef, useCallback, useEffect } from "preact/hooks";
+import { useRef, useCallback, useEffect, useState } from "preact/hooks";
 import { sidebarWidth, sidebarCollapsed } from "../state/sessions";
 import type { WshClient } from "../api/ws";
 import { Sidebar } from "./Sidebar";
 import { MainContent } from "./MainContent";
+import { BottomSheet } from "./BottomSheet";
 
 interface LayoutShellProps {
   client: WshClient;
 }
 
+type LayoutMode = "desktop" | "tablet" | "mobile";
+
 export function LayoutShell({ client }: LayoutShellProps) {
+  const [layoutMode, setLayoutMode] = useState<LayoutMode>("desktop");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const dragging = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const collapsed = sidebarCollapsed.value;
   const width = sidebarWidth.value;
+
+  // Detect layout mode
+  useEffect(() => {
+    const checkLayout = () => {
+      if (window.innerWidth < 640) {
+        setLayoutMode("mobile");
+      } else if (window.innerWidth < 1024) {
+        setLayoutMode("tablet");
+      } else {
+        setLayoutMode("desktop");
+      }
+    };
+    checkLayout();
+    window.addEventListener("resize", checkLayout);
+    return () => window.removeEventListener("resize", checkLayout);
+  }, []);
 
   const handleMouseDown = useCallback((e: MouseEvent) => {
     e.preventDefault();
@@ -51,6 +72,45 @@ export function LayoutShell({ client }: LayoutShellProps) {
     localStorage.setItem("wsh-sidebar-collapsed", String(sidebarCollapsed.value));
   }, []);
 
+  if (layoutMode === "mobile") {
+    return (
+      <div class="layout-shell layout-mobile">
+        <div class="layout-main">
+          <MainContent client={client} />
+        </div>
+        <BottomSheet client={client} />
+      </div>
+    );
+  }
+
+  if (layoutMode === "tablet") {
+    return (
+      <div class="layout-shell layout-tablet">
+        {sidebarOpen && (
+          <>
+            <div class="layout-overlay-backdrop" onClick={() => setSidebarOpen(false)} />
+            <div class="layout-sidebar-overlay">
+              <Sidebar client={client} collapsed={false} onToggleCollapse={() => setSidebarOpen(false)} />
+            </div>
+          </>
+        )}
+        {!sidebarOpen && (
+          <button
+            class="layout-tablet-menu-btn"
+            onClick={() => setSidebarOpen(true)}
+            title="Open sidebar"
+          >
+            &#9776;
+          </button>
+        )}
+        <div class="layout-main">
+          <MainContent client={client} />
+        </div>
+      </div>
+    );
+  }
+
+  // Desktop mode (existing layout)
   return (
     <div class="layout-shell" ref={containerRef}>
       <div
