@@ -21,10 +21,7 @@ import {
   removeScreen,
   getScreen,
 } from "./state/terminal";
-import { SessionCarousel } from "./components/SessionCarousel";
-import { SessionGrid } from "./components/SessionGrid";
-import { TiledLayout } from "./components/TiledLayout";
-import { StatusBar } from "./components/StatusBar";
+import { LayoutShell } from "./components/LayoutShell";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 
 // Track unsubscribe functions for per-session subscriptions
@@ -141,22 +138,18 @@ export function App() {
   const currentTheme = theme.value;
   useEffect(() => {
     const root = document.documentElement;
-    root.classList.remove("theme-glass", "theme-neon", "theme-minimal");
+    root.className = ""; // clear all classes
     root.classList.add(`theme-${currentTheme}`);
   }, [currentTheme]);
 
   // Read connectionState to subscribe to changes (re-render when client connects)
   const _connState = connectionState.value;
-  const mode = viewMode.value;
   const needsAuth = authRequired.value;
   const client = clientRef.current;
 
   if (!client) {
     return (
-      <>
-        <div class="loading">Connecting...</div>
-        <StatusBar client={null} />
-      </>
+      <div class="loading">Connecting...</div>
     );
   }
 
@@ -165,14 +158,9 @@ export function App() {
   }
 
   return (
-    <>
-      <ErrorBoundary>
-        {mode === "focused" && <SessionCarousel client={client} />}
-        {mode === "overview" && <SessionGrid client={client} />}
-        {mode === "tiled" && <TiledLayout client={client} />}
-      </ErrorBoundary>
-      <StatusBar client={client} />
-    </>
+    <ErrorBoundary>
+      <LayoutShell client={client} />
+    </ErrorBoundary>
   );
 }
 
