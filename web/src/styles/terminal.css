@@ -1443,3 +1443,140 @@ html, body, #app {
   color: var(--fg, #ccc);
   opacity: 0.6;
 }
+
+/* ======================================================================
+   Queue View (Quiescence Queue)
+   ====================================================================== */
+
+.queue-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.queue-top-bar {
+  display: flex;
+  gap: 12px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border, #333);
+  flex-shrink: 0;
+  overflow-x: auto;
+  align-items: flex-start;
+}
+
+.queue-pending,
+.queue-handled {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.queue-pending {
+  flex: 1;
+}
+
+.queue-handled {
+  flex: 1;
+}
+
+.queue-section-label {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--fg, #ccc);
+  opacity: 0.4;
+  font-weight: 600;
+}
+
+.queue-thumbnails {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+}
+
+.queue-thumbnails.muted {
+  opacity: 0.5;
+}
+
+.queue-thumb {
+  width: 80px;
+  height: 40px;
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid var(--border, #333);
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: border-color 0.15s;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.queue-thumb:hover {
+  border-color: var(--accent, #666);
+}
+
+.queue-thumb.active {
+  border-color: var(--accent, #666);
+  box-shadow: 0 0 0 1px var(--accent, #666);
+}
+
+.queue-thumb.handled {
+  opacity: 0.4;
+}
+
+.queue-center {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  position: relative;
+}
+
+.queue-center > :first-child {
+  flex: 1;
+  min-height: 0;
+}
+
+.queue-dismiss-bar {
+  display: flex;
+  justify-content: center;
+  padding: 6px;
+  flex-shrink: 0;
+}
+
+.queue-dismiss-btn {
+  background: var(--accent, #4ade80);
+  color: var(--bg, #000);
+  border: none;
+  border-radius: 6px;
+  padding: 6px 20px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.queue-dismiss-btn:hover {
+  opacity: 0.85;
+}
+
+.queue-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  opacity: 0.4;
+}
+
+.queue-empty-icon {
+  font-size: 36px;
+  color: var(--accent, #4ade80);
+}
+
+.queue-empty-text {
+  font-size: 14px;
+  color: var(--fg, #ccc);
+}
