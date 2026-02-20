@@ -43,6 +43,51 @@ html, body, #app {
 }
 
 /* ==========================================================================
+   Themed Scrollbars
+   ========================================================================== */
+
+/* Webkit (Chrome, Safari, Edge) */
+.sidebar-groups::-webkit-scrollbar,
+.palette-list::-webkit-scrollbar,
+.shortcut-categories::-webkit-scrollbar,
+.queue-thumbnails::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.sidebar-groups::-webkit-scrollbar-track,
+.palette-list::-webkit-scrollbar-track,
+.shortcut-categories::-webkit-scrollbar-track,
+.queue-thumbnails::-webkit-scrollbar-track {
+  background: var(--border, #333);
+  border-radius: 3px;
+}
+
+.sidebar-groups::-webkit-scrollbar-thumb,
+.palette-list::-webkit-scrollbar-thumb,
+.shortcut-categories::-webkit-scrollbar-thumb,
+.queue-thumbnails::-webkit-scrollbar-thumb {
+  background: rgba(var(--fg-rgb, 224, 224, 224), 0.2);
+  border-radius: 3px;
+}
+
+.sidebar-groups::-webkit-scrollbar-thumb:hover,
+.palette-list::-webkit-scrollbar-thumb:hover,
+.shortcut-categories::-webkit-scrollbar-thumb:hover,
+.queue-thumbnails::-webkit-scrollbar-thumb:hover {
+  background: rgba(var(--fg-rgb, 224, 224, 224), 0.35);
+}
+
+/* Firefox */
+.sidebar-groups,
+.palette-list,
+.shortcut-categories,
+.queue-thumbnails {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) var(--border, #333);
+}
+
+/* ==========================================================================
    Terminal
    ========================================================================== */
 
@@ -449,7 +494,7 @@ html, body, #app {
   border: 1px solid #444;
   color: #888;
   cursor: pointer;
-  border-radius: 3px;
+  border-radius: 6px;
   padding: 3px 5px;
   display: flex;
   align-items: center;
@@ -480,7 +525,7 @@ html, body, #app {
   border: 1px solid #444;
   color: #888;
   cursor: pointer;
-  border-radius: 3px;
+  border-radius: 6px;
   padding: 3px 5px;
   display: flex;
   align-items: center;
@@ -657,7 +702,7 @@ html, body, #app {
 .error-boundary button {
   padding: 0.4rem 1rem;
   border: 1px solid #555;
-  border-radius: 4px;
+  border-radius: 6px;
   background: transparent;
   color: inherit;
   cursor: pointer;
@@ -734,7 +779,7 @@ html, body, #app {
   background: var(--cursor-color);
   color: var(--bg, #0a0a0f);
   border: none;
-  border-radius: 4px;
+  border-radius: 6px;
   padding: 10px;
   font-size: 14px;
   font-weight: 600;
@@ -949,7 +994,7 @@ html, body, #app {
   cursor: pointer;
   padding: 2px 8px;
   font-size: 14px;
-  border-radius: 4px;
+  border-radius: 6px;
   margin-left: auto;
   transition: background 0.15s, border-color 0.15s;
 }
@@ -1236,7 +1281,7 @@ html, body, #app {
   padding: 2px 6px;
   font-size: 12px;
   line-height: 1;
-  border-radius: 3px;
+  border-radius: 4px;
   transition: opacity 0.15s, background 0.15s;
 }
 
@@ -1310,7 +1355,7 @@ html, body, #app {
   width: 100%;
   background: rgba(0, 0, 0, 0.3);
   border: 1px solid var(--border, #333);
-  border-radius: 3px;
+  border-radius: 4px;
   padding: 3px 6px;
   font-size: 11px;
   color: var(--fg, #ccc);
@@ -1478,7 +1523,7 @@ html, body, #app {
   color: var(--fg, #ccc);
   cursor: pointer;
   padding: 4px 8px;
-  border-radius: 4px;
+  border-radius: 6px;
   font-size: 12px;
   transition: background 0.15s;
 }
@@ -1649,7 +1694,7 @@ html, body, #app {
   width: min(520px, 90vw);
   background: var(--chrome, #1a1a1a);
   border: 1px solid var(--border, #333);
-  border-radius: 10px;
+  border-radius: 8px;
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
   overflow: hidden;
 }
@@ -1765,7 +1810,7 @@ html, body, #app {
   max-height: 80vh;
   background: var(--chrome, #1a1a1a);
   border: 1px solid var(--border, #333);
-  border-radius: 10px;
+  border-radius: 8px;
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
   display: flex;
   flex-direction: column;
@@ -1876,4 +1921,95 @@ html, body, #app {
   color: var(--fg, #ccc);
   opacity: 0.3;
   text-align: center;
+}
+
+/* ======================================================================
+   Focus-Visible Indicators (keyboard navigation)
+   ====================================================================== */
+
+.sidebar-group:focus-visible,
+.sidebar-collapse-btn:focus-visible,
+.sidebar-expand-btn:focus-visible,
+.sidebar-new-session-btn:focus-visible,
+.sidebar-icon:focus-visible,
+.view-mode-btn:focus-visible,
+.carousel-nav-btn:focus-visible,
+.queue-dismiss-btn:focus-visible,
+.queue-thumb:focus-visible,
+.tag-editor-suggestion:focus-visible,
+.tag-editor-remove:focus-visible,
+.tag-edit-btn:focus-visible,
+.theme-picker-btn:focus-visible,
+.theme-picker-option:focus-visible,
+.palette-item:focus-visible,
+.shortcut-sheet-close:focus-visible,
+.status-btn:focus-visible,
+.overview-toggle:focus-visible,
+.tile-maximize:focus-visible,
+.tile-close:focus-visible,
+.tile-select-circle:focus-visible,
+.tile-action-btn:focus-visible,
+.thumbnail-close:focus-visible,
+.carousel-prev:focus-visible,
+.carousel-next:focus-visible,
+.page-dot:focus-visible,
+.auth-prompt-btn:focus-visible,
+.auth-prompt-clear:focus-visible,
+.error-boundary button:focus-visible {
+  outline: 2px solid var(--accent, var(--cursor-color));
+  outline-offset: 2px;
+}
+
+/* Focus-visible for inputs (tighter offset) */
+.auth-prompt-input:focus-visible,
+.tag-editor-input:focus-visible,
+.palette-input:focus-visible,
+.shortcut-filter:focus-visible,
+.input-bar input:focus-visible {
+  outline: 2px solid var(--accent, var(--cursor-color));
+  outline-offset: 0px;
+}
+
+/* ======================================================================
+   Reduced Motion
+   ====================================================================== */
+
+@media (prefers-reduced-motion: reduce) {
+  /* Disable all transitions globally */
+  * {
+    transition-duration: 0.01s !important;
+  }
+
+  /* Disable carousel 3D transitions */
+  .carousel-slide {
+    transition: none !important;
+  }
+
+  /* Disable cursor blink */
+  .term-cursor {
+    animation: none !important;
+  }
+
+  /* Disable fade-in animations */
+  .session-grid-backdrop,
+  .tile-action-btn,
+  .auth-prompt,
+  .theme-toast {
+    animation: none !important;
+  }
+
+  /* Disable neon pulse animations */
+  .status-dot.connecting {
+    animation: none !important;
+  }
+
+  /* Disable neon scanlines overlay */
+  .theme-neon #app::after {
+    display: none !important;
+  }
+
+  /* Disable neon cursor pulse */
+  .theme-neon .term-cursor {
+    animation: none !important;
+  }
 }
