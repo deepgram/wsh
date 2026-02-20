@@ -88,7 +88,7 @@ This ships inside the `wsh` binary. No separate install, no configuration, no de
 
 **Full terminal rendering.** 256-color and true-color ANSI, bold/italic/underline/strikethrough, alternate screen buffer — vim, htop, lazygit, and every other TUI works as expected.
 
-**Keyboard-driven.** Command palette (Super+K), shortcut cheat sheet (Super+?), view mode switching (Super+F/G/Q), session navigation (Super+1-9), sidebar toggle (Super+B), and more. "Super" is Meta on Mac, Ctrl+Shift fallback on other platforms.
+**Keyboard-driven.** Command palette (Ctrl+Shift+K), shortcut cheat sheet (Ctrl+Shift+/), view mode switching (Ctrl+Shift+F/G/Q), session navigation (Ctrl+Shift+1-9), sidebar toggle (Ctrl+Shift+B), and more. All shortcuts use Ctrl+Shift as the modifier — no conflicts with window managers or browser shortcuts.
 
 **Mobile adaptation.** Bottom sheet on phones (<640px), overlay sidebar on tablets (640-1024px), persistent sidebar on desktop (>1024px). Touch gestures, native scrolling, a modifier bar for Ctrl/Esc/arrows.
 

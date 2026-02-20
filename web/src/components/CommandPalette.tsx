@@ -129,6 +129,22 @@ export function CommandPalette({ client, onClose }: CommandPaletteProps) {
       });
     }
 
+    // Tag session actions
+    for (const name of sessions.value) {
+      result.push({
+        type: "action",
+        label: `Tag: ${name}`,
+        description: "Add or remove tags for this session",
+        action: () => {
+          const tag = prompt(`Enter tag for session "${name}":`);
+          if (tag?.trim()) {
+            client.updateSession(name, { add_tags: [tag.trim()] }).catch(() => {});
+          }
+          onClose();
+        },
+      });
+    }
+
     return result;
   }, [client, onClose]);
 

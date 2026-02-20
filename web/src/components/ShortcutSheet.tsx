@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "preact/hooks";
+import { useState, useRef, useEffect, useCallback } from "preact/hooks";
 
 interface Shortcut {
   keys: string;
@@ -67,6 +67,16 @@ export function ShortcutSheet({ onClose }: ShortcutSheetProps) {
     return () => window.removeEventListener("keydown", handler, true);
   }, [onClose]);
 
+  // Delegate typing to filter input when user starts typing in the dialog
+  const handleSheetKeyDown = useCallback((e: KeyboardEvent) => {
+    if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      const filterInput = containerRef.current?.querySelector(".shortcut-filter") as HTMLInputElement | null;
+      if (filterInput && document.activeElement !== filterInput) {
+        filterInput.focus();
+      }
+    }
+  }, []);
+
   const lower = filter.toLowerCase();
   const filteredCategories = CATEGORIES.map((cat) => ({
     ...cat,
@@ -79,7 +89,7 @@ export function ShortcutSheet({ onClose }: ShortcutSheetProps) {
 
   return (
     <div class="shortcut-backdrop" onClick={onClose}>
-      <div class="shortcut-sheet" ref={containerRef} onClick={(e: MouseEvent) => e.stopPropagation()} role="dialog" aria-label="Keyboard shortcuts">
+      <div class="shortcut-sheet" ref={containerRef} onKeyDown={handleSheetKeyDown} onClick={(e: MouseEvent) => e.stopPropagation()} role="dialog" aria-label="Keyboard shortcuts">
         <div class="shortcut-sheet-header">
           <span class="shortcut-sheet-title">Keyboard Shortcuts</span>
           <button class="shortcut-sheet-close" onClick={onClose}>&times;</button>
@@ -90,7 +100,6 @@ export function ShortcutSheet({ onClose }: ShortcutSheetProps) {
           placeholder="Filter shortcuts..."
           value={filter}
           onInput={(e) => setFilter((e.target as HTMLInputElement).value)}
-          autoFocus
         />
         <div class="shortcut-categories">
           {filteredCategories.map((cat) => (

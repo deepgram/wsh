@@ -1,9 +1,9 @@
-import { useCallback, useEffect } from "preact/hooks";
+import { useCallback, useEffect, useState } from "preact/hooks";
 import type { WshClient } from "../api/ws";
 import { quiescenceQueues, enqueueSession, dismissQueueEntry } from "../state/groups";
 import { focusedSession } from "../state/sessions";
 import { SessionPane } from "./SessionPane";
-import { MiniTerminal } from "./MiniTerminal";
+import { MiniTermContent } from "./MiniViewPreview";
 
 interface QueueViewProps {
   sessions: string[];
@@ -20,9 +20,14 @@ export function QueueView({ sessions, groupTag, client }: QueueViewProps) {
   const queuedNames = new Set(queue.map((e) => e.session));
   const active = sessions.filter((s) => !queuedNames.has(s));
 
-  // Current session to display (first pending)
-  const currentEntry = pending[0] || null;
-  const currentSession = currentEntry?.session || null;
+  // Manual selection overrides automatic queue order
+  const [manualSelection, setManualSelection] = useState<string | null>(null);
+
+  // Current session to display (manual override or first pending)
+  const autoSession = pending[0]?.session || null;
+  const currentSession = manualSelection && sessions.includes(manualSelection)
+    ? manualSelection
+    : autoSession;
 
   // Focus the current queued session
   useEffect(() => {
@@ -72,11 +77,12 @@ export function QueueView({ sessions, groupTag, client }: QueueViewProps) {
   // Dismiss current session
   const handleDismiss = useCallback(() => {
     if (!currentSession) return;
-    dismissQueueEntry(groupTag, currentSession);
-
-    // Re-subscribe to quiescence for the dismissed session
-    // (it will be picked up by the effect above on re-render)
-  }, [groupTag, currentSession]);
+    const isPending = pending.some((e) => e.session === currentSession);
+    if (isPending) {
+      dismissQueueEntry(groupTag, currentSession);
+    }
+    setManualSelection(null);
+  }, [groupTag, currentSession, pending]);
 
   // Ctrl+Shift+Enter to dismiss
   useEffect(() => {
@@ -101,9 +107,9 @@ export function QueueView({ sessions, groupTag, client }: QueueViewProps) {
               <div
                 key={e.session}
                 class={`queue-thumb ${e.session === currentSession ? "active" : ""}`}
-                onClick={() => { focusedSession.value = e.session; }}
+                onClick={() => setManualSelection(e.session)}
               >
-                <MiniTerminal session={e.session} />
+                <MiniTermContent session={e.session} />
               </div>
             ))}
           </div>
@@ -112,13 +118,15 @@ export function QueueView({ sessions, groupTag, client }: QueueViewProps) {
           <span class="queue-section-label">Active ({active.length + handled.length})</span>
           <div class="queue-thumbnails muted">
             {active.map((s) => (
-              <div key={s} class="queue-thumb">
-                <MiniTerminal session={s} />
+              <div key={s} class={`queue-thumb ${s === currentSession ? "active" : ""}`}
+                onClick={() => setManualSelection(s)}>
+                <MiniTermContent session={s} />
               </div>
             ))}
             {handled.map((e) => (
-              <div key={e.session} class="queue-thumb handled">
-                <MiniTerminal session={e.session} />
+              <div key={e.session} class={`queue-thumb handled ${e.session === currentSession ? "active" : ""}`}
+                onClick={() => setManualSelection(e.session)}>
+                <MiniTermContent session={e.session} />
               </div>
             ))}
           </div>

@@ -1147,50 +1147,164 @@ html, body, #app {
   font-weight: 300;
 }
 
-/* Mini terminal previews */
+/* Mini view mode previews */
 
-.sidebar-preview-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 3px;
+.sidebar-preview-area {
   margin-top: 6px;
   margin-bottom: 4px;
-}
-
-.sidebar-preview-cell {
-  position: relative;
-  border-radius: 3px;
+  border-radius: 4px;
   overflow: hidden;
-  background: rgba(0, 0, 0, 0.3);
+  background: rgba(0, 0, 0, 0.25);
+  padding: 3px;
 }
 
-.mini-terminal {
+.mini-term-content {
   font-family: var(--font-mono, "JetBrains Mono", "Fira Code", monospace);
-  font-size: 4px;
+  font-size: 3.5px;
   line-height: 1.2;
-  padding: 2px;
+  padding: 1px;
   color: var(--fg, #ccc);
   overflow: hidden;
   white-space: pre;
-  min-height: 20px;
 }
 
 .mini-term-line {
   overflow: hidden;
   text-overflow: clip;
   white-space: nowrap;
-  height: 4.8px;
+  height: 4.2px;
 }
 
-/* Status dots for mini-previews */
+.mini-view-empty {
+  font-size: 8px;
+  color: var(--fg, #ccc);
+  opacity: 0.4;
+  text-align: center;
+  padding: 8px 0;
+}
+
+/* Mini carousel */
+.mini-carousel {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  min-height: 24px;
+}
+
+.mini-carousel-center {
+  flex: 3;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.mini-carousel-side {
+  flex: 1;
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 2px;
+  overflow: hidden;
+  opacity: 0.5;
+}
+
+/* Mini grid */
+.mini-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mini-grid-row {
+  display: flex;
+  gap: 2px;
+}
+
+.mini-grid-cell {
+  flex: 1;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 2px;
+  overflow: hidden;
+  min-height: 16px;
+}
+
+/* Mini queue */
+.mini-queue {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mini-queue-bar {
+  font-size: 7px;
+  color: var(--fg, #ccc);
+  opacity: 0.5;
+  padding: 1px 2px;
+}
+
+.mini-queue-count {
+  font-weight: 500;
+}
+
+.mini-queue-current {
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 2px;
+  overflow: hidden;
+  border-left: 2px solid var(--accent, #666);
+}
+
+.mini-queue-others {
+  display: flex;
+  gap: 2px;
+}
+
+.mini-queue-thumb {
+  flex: 1;
+  height: 6px;
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 1px;
+  opacity: 0.4;
+}
+
+/* Session list (below preview) */
+.sidebar-session-list {
+  margin-top: 4px;
+}
+
+.sidebar-session-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  position: relative;
+  cursor: grab;
+  font-size: 9px;
+  color: var(--fg, #ccc);
+  opacity: 0.7;
+}
+
+.sidebar-session-item:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.sidebar-session-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.sidebar-session-item:active {
+  cursor: grabbing;
+}
+
+/* Status dots */
 
 .mini-status-dot {
-  position: absolute;
-  bottom: 2px;
-  right: 2px;
   width: 5px;
   height: 5px;
   border-radius: 50%;
+  flex-shrink: 0;
 }
 
 .status-dot-green {
@@ -1211,14 +1325,6 @@ html, body, #app {
   background: rgba(255, 255, 255, 0.08);
   border-left-color: var(--accent, #666);
   box-shadow: inset 0 0 0 1px var(--accent, #666);
-}
-
-.sidebar-preview-cell[draggable="true"] {
-  cursor: grab;
-}
-
-.sidebar-preview-cell[draggable="true"]:active {
-  cursor: grabbing;
 }
 
 /* Group timestamp */
@@ -1427,7 +1533,7 @@ html, body, #app {
   transition: opacity 0.15s;
 }
 
-.sidebar-preview-cell:hover .tag-edit-btn {
+.sidebar-session-item:hover .tag-edit-btn {
   opacity: 0.6;
 }
 
@@ -1471,6 +1577,12 @@ html, body, #app {
   z-index: 2;
   transform: translateZ(0);
   opacity: 1;
+}
+
+/* Single session: fill the entire track */
+.carousel-track > .carousel-slide:only-child {
+  width: 100%;
+  left: 0;
 }
 
 .carousel-prev {

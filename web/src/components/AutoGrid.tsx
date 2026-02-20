@@ -1,4 +1,4 @@
-import { useCallback, useState, useMemo } from "preact/hooks";
+import { useCallback, useEffect, useState, useMemo } from "preact/hooks";
 import type { WshClient } from "../api/ws";
 import { focusedSession } from "../state/sessions";
 import { setViewModeForGroup, selectedGroups } from "../state/groups";
@@ -104,6 +104,56 @@ export function AutoGrid({ sessions, client }: AutoGridProps) {
     setDragSource(null);
     setDragTarget(null);
   }, []);
+
+  // Keyboard navigation: Ctrl+Shift+Arrows to move focus between cells
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (!e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey) return;
+      if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
+
+      e.preventDefault();
+
+      const currentFocused = focusedSession.value;
+      const currentIdx = orderedSessions.indexOf(currentFocused ?? "");
+      if (currentIdx < 0 && orderedSessions.length > 0) {
+        focusedSession.value = orderedSessions[0];
+        return;
+      }
+
+      const cols = layout.length > 0 ? layout[0].count : 1;
+      const row = Math.floor(currentIdx / cols);
+      const col = currentIdx % cols;
+
+      let newRow = row;
+      let newCol = col;
+
+      switch (e.key) {
+        case "ArrowLeft":
+          newCol = Math.max(0, col - 1);
+          break;
+        case "ArrowRight":
+          newCol = Math.min(cols - 1, col + 1);
+          break;
+        case "ArrowUp":
+          newRow = Math.max(0, row - 1);
+          break;
+        case "ArrowDown":
+          newRow = Math.min(layout.length - 1, row + 1);
+          break;
+      }
+
+      // Clamp column to actual cells in the target row
+      const rowCellCount = layout[newRow]?.count ?? cols;
+      newCol = Math.min(newCol, rowCellCount - 1);
+
+      const newIdx = newRow * cols + newCol;
+      if (newIdx >= 0 && newIdx < orderedSessions.length) {
+        focusedSession.value = orderedSessions[newIdx];
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [orderedSessions, layout]);
 
   if (orderedSessions.length === 0) return null;
 

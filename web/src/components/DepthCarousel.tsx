@@ -85,23 +85,38 @@ export function DepthCarousel({ sessions, client }: DepthCarouselProps) {
   const prevIndex = (currentIndex - 1 + sessions.length) % sessions.length;
   const nextIndex = (currentIndex + 1) % sessions.length;
 
+  // 2-session case: only show center + one adjacent to avoid ghost overlap
+  if (sessions.length === 2) {
+    const otherIndex = currentIndex === 0 ? 1 : 0;
+    return (
+      <div class="depth-carousel">
+        <div class="carousel-track">
+          <div key={sessions[otherIndex]} class="carousel-slide carousel-prev" onClick={() => navigate(-1)}>
+            <SessionPane session={sessions[otherIndex]} client={client} />
+          </div>
+          <div key={sessions[currentIndex]} class="carousel-slide carousel-center">
+            <SessionPane session={sessions[currentIndex]} client={client} />
+            <div class="carousel-focus-ring" />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 3+ sessions: full 3D depth with prev + center + next
   return (
     <div class="depth-carousel">
       <div class="carousel-track">
-        {sessions.length > 1 && (
-          <div class="carousel-slide carousel-prev" onClick={() => navigate(-1)}>
-            <SessionPane session={sessions[prevIndex]} client={client} />
-          </div>
-        )}
-        <div class="carousel-slide carousel-center">
+        <div key={sessions[prevIndex]} class="carousel-slide carousel-prev" onClick={() => navigate(-1)}>
+          <SessionPane session={sessions[prevIndex]} client={client} />
+        </div>
+        <div key={sessions[currentIndex]} class="carousel-slide carousel-center">
           <SessionPane session={sessions[currentIndex]} client={client} />
           <div class="carousel-focus-ring" />
         </div>
-        {sessions.length > 1 && (
-          <div class="carousel-slide carousel-next" onClick={() => navigate(1)}>
-            <SessionPane session={sessions[nextIndex]} client={client} />
-          </div>
-        )}
+        <div key={sessions[nextIndex]} class="carousel-slide carousel-next" onClick={() => navigate(1)}>
+          <SessionPane session={sessions[nextIndex]} client={client} />
+        </div>
       </div>
     </div>
   );

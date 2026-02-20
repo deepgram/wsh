@@ -3,7 +3,7 @@ import type { WshClient } from "../api/ws";
 import { dragState, dropTargetTag, startSessionDrag, handleGroupDragOver, handleGroupDragLeave, handleGroupDrop, endDrag } from "../hooks/useDragDrop";
 import { groups, selectedGroups, sessionStatuses, type SessionStatus } from "../state/groups";
 import { connectionState } from "../state/sessions";
-import { MiniTerminal } from "./MiniTerminal";
+import { MiniViewPreview } from "./MiniViewPreview";
 import { TagEditor } from "./TagEditor";
 import { ThemePicker } from "./ThemePicker";
 
@@ -113,19 +113,26 @@ export function Sidebar({ client, collapsed, onToggleCollapse }: SidebarProps) {
               <span class="sidebar-group-count">{g.sessions.length}</span>
               {g.badgeCount > 0 && <span class="sidebar-badge" aria-label={`${g.badgeCount} sessions need attention`}>{g.badgeCount}</span>}
             </div>
-            {/* Mini-preview grid: up to 4 sessions in 2x2 */}
+            {/* Mini view mode preview */}
             {g.sessions.length > 0 && (
-              <div class="sidebar-preview-grid">
-                {g.sessions.slice(0, 4).map((s) => (
+              <div class="sidebar-preview-area">
+                <MiniViewPreview group={g} />
+              </div>
+            )}
+            {/* Session list for drag-to-tag and context menu */}
+            {g.sessions.length > 0 && (
+              <div class="sidebar-session-list">
+                {g.sessions.map((s) => (
                   <div
                     key={s}
-                    class="sidebar-preview-cell"
+                    class="sidebar-session-item"
                     draggable
                     onDragStart={(e: DragEvent) => startSessionDrag(s, e)}
                     onDragEnd={endDrag}
+                    onContextMenu={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); setEditingSession(s); }}
                   >
-                    <MiniTerminal session={s} />
                     <StatusDot status={statuses.get(s)} />
+                    <span class="sidebar-session-name">{s}</span>
                     <button
                       class="tag-edit-btn"
                       onClick={(e: MouseEvent) => { e.stopPropagation(); setEditingSession(s); }}
