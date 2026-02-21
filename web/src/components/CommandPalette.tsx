@@ -38,23 +38,22 @@ export function CommandPalette({ client, onClose }: CommandPaletteProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  // Focus on mount
+  const onCloseRef = useRef(onClose);
+  useEffect(() => { onCloseRef.current = onClose; });
+
+  // Focus on mount + close on Escape (capture phase, registered once)
   useEffect(() => {
     inputRef.current?.focus();
-  }, []);
-
-  // Close on Escape
-  useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
         e.stopPropagation();
-        onClose();
+        onCloseRef.current();
       }
     };
     window.addEventListener("keydown", handler, true);
     return () => window.removeEventListener("keydown", handler, true);
-  }, [onClose]);
+  }, []);
 
   // Build items
   const items = useMemo((): PaletteItem[] => {
