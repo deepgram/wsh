@@ -5,11 +5,12 @@ use tokio::sync::watch;
 
 /// Tracks the timestamp of the last terminal activity (PTY output or input).
 ///
-/// Clients can wait for "quiescence" — a period of inactivity exceeding a
-/// specified timeout — to detect when a command has finished producing output.
+/// Clients can wait for the terminal to become idle — a period of inactivity
+/// exceeding a specified timeout — to detect when a command has finished
+/// producing output.
 ///
 /// Each activity event increments a monotonic generation counter. Clients can
-/// pass back the generation from a previous quiescence response to avoid
+/// pass back the generation from a previous idle response to avoid
 /// busy-looping when the terminal is already idle (the "ETag" pattern).
 #[derive(Clone)]
 pub struct ActivityTracker {
@@ -50,15 +51,20 @@ impl ActivityTracker {
         self.tx.subscribe()
     }
 
+    /// Return how many milliseconds have elapsed since the last activity.
+    pub fn last_activity_ms(&self) -> u64 {
+        self.tx.borrow().elapsed().as_millis() as u64
+    }
+
     /// Wait until `timeout` has elapsed since the last activity.
     ///
     /// If `last_seen` is provided and matches the current generation, the
-    /// method first waits for new activity before entering the quiescence
+    /// method first waits for new activity before entering the idle
     /// loop. This prevents the busy-loop storm where a client repeatedly
     /// polls and gets immediate responses because nothing has changed.
     ///
-    /// Returns the generation counter at the time quiescence was detected.
-    pub async fn wait_for_quiescence(
+    /// Returns the generation counter at the time idle was detected.
+    pub async fn wait_for_idle(
         &self,
         timeout: Duration,
         last_seen: Option<u64>,
@@ -66,7 +72,7 @@ impl ActivityTracker {
         let mut rx = self.tx.subscribe();
 
         // If the caller already saw this generation, wait for new activity
-        // before entering the quiescence loop.
+        // before entering the idle loop.
         if let Some(seen) = last_seen {
             let current = self.generation.load(Ordering::Acquire);
             if current == seen && rx.changed().await.is_err() {
@@ -89,11 +95,11 @@ impl ActivityTracker {
                     if last.elapsed() >= timeout {
                         return self.generation.load(Ordering::Acquire);
                     }
-                    // Not yet quiescent — loop again with fresh remaining.
+                    // Not yet idle — loop again with fresh remaining.
                 }
                 res = rx.changed() => {
                     if res.is_err() {
-                        // Sender dropped — treat as quiescent.
+                        // Sender dropped — treat as idle.
                         return self.generation.load(Ordering::Acquire);
                     }
                     // Activity detected — loop to recalculate remaining.
@@ -105,17 +111,17 @@ impl ActivityTracker {
     /// Wait until `timeout` has elapsed since the last activity, but always
     /// observe at least `timeout` of real silence before returning.
     ///
-    /// Unlike [`wait_for_quiescence`], this never returns immediately even
+    /// Unlike [`wait_for_idle`], this never returns immediately even
     /// if the terminal has been idle for longer than `timeout`. This trades
     /// latency for API simplicity — no generation tracking required.
     ///
-    /// Returns the generation counter at the time quiescence was confirmed.
-    pub async fn wait_for_fresh_quiescence(&self, timeout: Duration) -> u64 {
+    /// Returns the generation counter at the time idle was confirmed.
+    pub async fn wait_for_fresh_idle(&self, timeout: Duration) -> u64 {
         let mut rx = self.tx.subscribe();
         loop {
             let last = *rx.borrow_and_update();
             let elapsed = last.elapsed();
-            // Even if already quiescent, wait at least `timeout` to confirm.
+            // Even if already idle, wait at least `timeout` to confirm.
             let remaining = if elapsed >= timeout {
                 timeout
             } else {
@@ -168,22 +174,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn quiescence_fires_after_timeout() {
+    async fn idle_fires_after_timeout() {
         let tracker = ActivityTracker::new();
         tracker.touch();
         let start = Instant::now();
-        tracker.wait_for_quiescence(Duration::from_millis(50), None).await;
+        tracker.wait_for_idle(Duration::from_millis(50), None).await;
         let elapsed = start.elapsed();
         assert!(elapsed >= Duration::from_millis(50));
     }
 
     #[tokio::test]
-    async fn quiescence_returns_generation() {
+    async fn idle_returns_generation() {
         let tracker = ActivityTracker::new();
         tracker.touch();
         tracker.touch();
         tracker.touch();
-        let gen = tracker.wait_for_quiescence(Duration::from_millis(50), None).await;
+        let gen = tracker.wait_for_idle(Duration::from_millis(50), None).await;
         assert_eq!(gen, 3);
     }
 
@@ -203,7 +209,7 @@ mod tests {
         });
 
         let start = Instant::now();
-        let gen = tracker.wait_for_quiescence(Duration::from_millis(150), None).await;
+        let gen = tracker.wait_for_idle(Duration::from_millis(150), None).await;
         let elapsed = start.elapsed();
         // The touch at ~20ms resets the timer; total >= 20ms + 150ms = 170ms.
         assert_eq!(gen, 2, "second touch should have been observed");
@@ -215,14 +221,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn already_quiescent_returns_immediately() {
+    async fn already_idle_returns_immediately() {
         let tracker = ActivityTracker::new();
         // Don't touch — the seed instant was set at construction time.
         // Wait long enough that the seed is stale.
         tokio::time::sleep(Duration::from_millis(60)).await;
 
         let start = Instant::now();
-        tracker.wait_for_quiescence(Duration::from_millis(50), None).await;
+        tracker.wait_for_idle(Duration::from_millis(50), None).await;
         let elapsed = start.elapsed();
         // Should return almost immediately.
         assert!(elapsed < Duration::from_millis(10));
@@ -232,12 +238,12 @@ mod tests {
     async fn last_seen_prevents_immediate_return() {
         let tracker = ActivityTracker::new();
         tracker.touch(); // generation = 1
-        // Wait for quiescence
+        // Wait for idle
         tokio::time::sleep(Duration::from_millis(60)).await;
 
         // Without last_seen: returns immediately
         let start = Instant::now();
-        let gen = tracker.wait_for_quiescence(Duration::from_millis(50), None).await;
+        let gen = tracker.wait_for_idle(Duration::from_millis(50), None).await;
         assert!(start.elapsed() < Duration::from_millis(10));
         assert_eq!(gen, 1);
 
@@ -249,9 +255,9 @@ mod tests {
         });
 
         let start = Instant::now();
-        let gen = tracker.wait_for_quiescence(Duration::from_millis(30), Some(1)).await;
+        let gen = tracker.wait_for_idle(Duration::from_millis(30), Some(1)).await;
         let elapsed = start.elapsed();
-        // Should wait ~50ms for new activity + ~30ms for quiescence
+        // Should wait ~50ms for new activity + ~30ms for idle
         assert!(elapsed >= Duration::from_millis(70));
         assert_eq!(gen, 2);
     }
@@ -262,26 +268,26 @@ mod tests {
         tracker.touch(); // generation = 1
         tracker.touch(); // generation = 2
 
-        // Wait for quiescence
+        // Wait for idle
         tokio::time::sleep(Duration::from_millis(60)).await;
 
         // last_seen=1 but current generation=2: doesn't block on new activity
         let start = Instant::now();
-        let gen = tracker.wait_for_quiescence(Duration::from_millis(50), Some(1)).await;
+        let gen = tracker.wait_for_idle(Duration::from_millis(50), Some(1)).await;
         assert!(start.elapsed() < Duration::from_millis(10));
         assert_eq!(gen, 2);
     }
 
     #[tokio::test]
-    async fn fresh_quiescence_always_waits() {
+    async fn fresh_idle_always_waits() {
         let tracker = ActivityTracker::new();
-        // Wait for well past the timeout so terminal is "already quiescent"
+        // Wait for well past the timeout so terminal is "already idle"
         tokio::time::sleep(Duration::from_millis(120)).await;
 
         let start = Instant::now();
-        tracker.wait_for_fresh_quiescence(Duration::from_millis(50)).await;
+        tracker.wait_for_fresh_idle(Duration::from_millis(50)).await;
         let elapsed = start.elapsed();
-        // Should wait at least 50ms even though already quiescent
+        // Should wait at least 50ms even though already idle
         assert!(
             elapsed >= Duration::from_millis(45),
             "Expected >= 45ms, got {:?}",
@@ -290,7 +296,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fresh_quiescence_resets_on_activity() {
+    async fn fresh_idle_resets_on_activity() {
         let tracker = ActivityTracker::new();
         tokio::time::sleep(Duration::from_millis(200)).await;
 
@@ -304,7 +310,7 @@ mod tests {
         });
 
         let start = Instant::now();
-        let gen = tracker.wait_for_fresh_quiescence(Duration::from_millis(150)).await;
+        let gen = tracker.wait_for_fresh_idle(Duration::from_millis(150)).await;
         let elapsed = start.elapsed();
         // The touch at ~20ms resets the timer; total >= 20ms + 150ms = 170ms.
         assert_eq!(gen, 1, "touch should have been observed");
@@ -326,17 +332,33 @@ mod tests {
         let (r1, r2) = tokio::join!(
             async move {
                 let start = Instant::now();
-                t1.wait_for_quiescence(Duration::from_millis(50), None).await;
+                t1.wait_for_idle(Duration::from_millis(50), None).await;
                 start.elapsed()
             },
             async move {
                 let start = Instant::now();
-                t2.wait_for_quiescence(Duration::from_millis(50), None).await;
+                t2.wait_for_idle(Duration::from_millis(50), None).await;
                 start.elapsed()
             },
         );
 
         assert!(r1 >= Duration::from_millis(50));
         assert!(r2 >= Duration::from_millis(50));
+    }
+
+    #[tokio::test]
+    async fn last_activity_ms_zero_at_start() {
+        let tracker = ActivityTracker::new();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        tracker.touch();
+        assert!(tracker.last_activity_ms() < 10);
+    }
+
+    #[tokio::test]
+    async fn last_activity_ms_grows_without_touch() {
+        let tracker = ActivityTracker::new();
+        tracker.touch();
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        assert!(tracker.last_activity_ms() >= 50);
     }
 }

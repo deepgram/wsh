@@ -31,7 +31,7 @@ use super::{get_session, AppState};
 /// WebSocket send timeout. If a send takes longer than this, the client is
 /// considered dead and the connection is closed. Kept short (5s) to minimize
 /// the time a slow/stalled client can freeze the handler's select! loop
-/// (blocking ping/pong, quiescence, shutdown, and client messages).
+/// (blocking ping/pong, idle detection, shutdown, and client messages).
 const WS_SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Timeout for parser query calls from HTTP handlers. Prevents a stalled
@@ -48,12 +48,19 @@ const MAX_WS_MESSAGE_SIZE: usize = 1024 * 1024;
 /// Prevents clients from holding connections open indefinitely.
 const MAX_WAIT_CEILING_MS: u64 = 300_000; // 5 minutes
 
-/// Pending await_quiesce state: (request_id, format, future resolving to generation or None on timeout)
-type PendingQuiesce = (
+/// Pending await_idle state: (request_id, method_name, format, future resolving to generation or None on timeout)
+type PendingIdle = (
     Option<serde_json::Value>,
+    String,
     crate::parser::state::Format,
     std::pin::Pin<Box<dyn std::future::Future<Output = Option<u64>> + Send>>,
 );
+
+/// Activity state change sent from the background idle/running monitor task.
+enum ActivityStateChange {
+    Running { generation: u64 },
+    Idle { generation: u64 },
+}
 
 #[derive(Serialize)]
 pub(super) struct HealthResponse {
@@ -308,12 +315,12 @@ async fn handle_ws_json(
     // Input subscription (lazily created when EventType::Input is subscribed)
     let mut input_rx: Option<tokio::sync::broadcast::Receiver<crate::input::InputEvent>> = None;
 
-    let mut pending_quiesce: Option<PendingQuiesce> = None;
+    let mut pending_idle: Option<PendingIdle> = None;
 
-    // Quiescence subscription: background task signals through this channel
-    let mut quiesce_sub_rx: Option<tokio::sync::mpsc::Receiver<()>> = None;
-    let mut quiesce_sub_handle: Option<tokio::task::JoinHandle<()>> = None;
-    let mut quiesce_sub_format = crate::parser::state::Format::default();
+    // Activity subscription: background task signals Running/Idle transitions
+    let mut activity_sub_rx: Option<tokio::sync::mpsc::Receiver<ActivityStateChange>> = None;
+    let mut activity_sub_handle: Option<tokio::task::JoinHandle<()>> = None;
+    let mut activity_sub_format = crate::parser::state::Format::default();
 
     // Ping/pong keepalive
     let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
@@ -358,6 +365,10 @@ async fn handle_ws_json(
                             }
                             crate::parser::events::Event::Reset { .. }
                             | crate::parser::events::Event::Sync { .. } => true,
+                            crate::parser::events::Event::Idle { .. }
+                            | crate::parser::events::Event::Running { .. } => {
+                                subscribed_types.contains(&EventType::Activity)
+                            }
                         };
 
                         if should_send {
@@ -421,16 +432,16 @@ async fn handle_ws_json(
                 }
             }
 
-            // Pending await_quiesce resolves
+            // Pending await_idle resolves
             result = async {
-                match &mut pending_quiesce {
-                    Some((_, _, fut)) => fut.as_mut().await,
+                match &mut pending_idle {
+                    Some((_, _, _, fut)) => fut.as_mut().await,
                     None => std::future::pending().await,
                 }
             } => {
-                let (req_id, format, _) = pending_quiesce.take().unwrap();
+                let (req_id, method_name, format, _) = pending_idle.take().unwrap();
                 if let Some(generation) = result {
-                    // Quiescent — query screen and return (with timeout to avoid blocking the loop)
+                    // Idle — query screen and return (with timeout to avoid blocking the loop)
                     match tokio::time::timeout(
                         std::time::Duration::from_secs(10),
                         session.parser.query(crate::parser::state::Query::Screen { format }),
@@ -439,7 +450,7 @@ async fn handle_ws_json(
                             let scrollback_lines = screen.total_lines;
                             let resp = super::ws_methods::WsResponse::success(
                                 req_id,
-                                "await_quiesce",
+                                &method_name,
                                 serde_json::json!({
                                     "screen": screen,
                                     "scrollback_lines": scrollback_lines,
@@ -453,9 +464,9 @@ async fn handle_ws_json(
                         _ => {
                             let resp = super::ws_methods::WsResponse::error(
                                 req_id,
-                                "await_quiesce",
+                                &method_name,
                                 "parser_error",
-                                "Terminal is quiescent but screen query failed.",
+                                "Terminal is idle but screen query failed.",
                             );
                             if let Ok(json) = serde_json::to_string(&resp) {
                                 ws_send!(ws_tx, Message::Text(json));
@@ -466,9 +477,9 @@ async fn handle_ws_json(
                     // Timeout
                     let resp = super::ws_methods::WsResponse::error(
                         req_id,
-                        "await_quiesce",
-                        "quiesce_timeout",
-                        "Terminal did not become quiescent within the deadline.",
+                        &method_name,
+                        "idle_timeout",
+                        "Terminal did not become idle within the deadline.",
                     );
                     if let Ok(json) = serde_json::to_string(&resp) {
                         ws_send!(ws_tx, Message::Text(json));
@@ -476,34 +487,44 @@ async fn handle_ws_json(
                 }
             }
 
-            // Quiescence subscription fires
+            // Activity subscription fires (Running/Idle transitions)
             signal = async {
-                match &mut quiesce_sub_rx {
+                match &mut activity_sub_rx {
                     Some(rx) => rx.recv().await,
                     None => std::future::pending().await,
                 }
             } => {
                 match signal {
-                    Some(()) => {
-                        // Emit a sync event (with timeout to avoid blocking the loop)
+                    Some(ActivityStateChange::Idle { generation }) => {
+                        // Emit Idle event with screen snapshot
                         if let Ok(Ok(crate::parser::state::QueryResponse::Screen(screen))) = tokio::time::timeout(
                             std::time::Duration::from_secs(10),
-                            session.parser.query(crate::parser::state::Query::Screen { format: quiesce_sub_format }),
+                            session.parser.query(crate::parser::state::Query::Screen { format: activity_sub_format }),
                         ).await {
                             let scrollback_lines = screen.total_lines;
-                            let sync_event = crate::parser::events::Event::Sync {
+                            let idle_event = crate::parser::events::Event::Idle {
                                 seq: 0,
+                                generation,
                                 screen,
                                 scrollback_lines,
                             };
-                            if let Ok(json) = serde_json::to_string(&sync_event) {
+                            if let Ok(json) = serde_json::to_string(&idle_event) {
                                 ws_send!(ws_tx, Message::Text(json));
                             }
                         }
                     }
+                    Some(ActivityStateChange::Running { generation }) => {
+                        let running_event = crate::parser::events::Event::Running {
+                            seq: 0,
+                            generation,
+                        };
+                        if let Ok(json) = serde_json::to_string(&running_event) {
+                            ws_send!(ws_tx, Message::Text(json));
+                        }
+                    }
                     None => {
                         // Channel closed, clear subscription
-                        quiesce_sub_rx = None;
+                        activity_sub_rx = None;
                     }
                 }
             }
@@ -557,30 +578,33 @@ async fn handle_ws_json(
                                         input_rx = None;
                                     }
 
-                                    // Set up quiescence subscription if requested
-                                    if let Some(handle) = quiesce_sub_handle.take() {
+                                    // Set up activity subscription if requested
+                                    if let Some(handle) = activity_sub_handle.take() {
                                         handle.abort();
                                     }
-                                    quiesce_sub_rx = None;
+                                    activity_sub_rx = None;
 
-                                    if params.quiesce_ms > 0 {
-                                        let timeout = std::time::Duration::from_millis(params.quiesce_ms);
+                                    if params.idle_timeout_ms > 0 {
+                                        let timeout = std::time::Duration::from_millis(params.idle_timeout_ms);
                                         let activity = session.activity.clone();
-                                        let (tx, rx) = tokio::sync::mpsc::channel(1);
-                                        quiesce_sub_rx = Some(rx);
-                                        quiesce_sub_format = sub_format;
+                                        let (tx, rx) = tokio::sync::mpsc::channel(4);
+                                        activity_sub_rx = Some(rx);
+                                        activity_sub_format = sub_format;
 
-                                        quiesce_sub_handle = Some(tokio::spawn(async move {
+                                        activity_sub_handle = Some(tokio::spawn(async move {
                                             let mut watch_rx = activity.subscribe();
                                             loop {
-                                                // Wait for activity
+                                                // Wait for activity → emit Running
                                                 if watch_rx.changed().await.is_err() {
                                                     break;
                                                 }
-                                                // Wait for quiescence (None: already gated on changed())
-                                                activity.wait_for_quiescence(timeout, None).await;
-                                                // Signal the main loop
-                                                if tx.send(()).await.is_err() {
+                                                let gen = activity.generation();
+                                                if tx.send(ActivityStateChange::Running { generation: gen }).await.is_err() {
+                                                    break;
+                                                }
+                                                // Wait for idle → emit Idle
+                                                let gen = activity.wait_for_idle(timeout, None).await;
+                                                if tx.send(ActivityStateChange::Idle { generation: gen }).await.is_err() {
                                                     break;
                                                 }
                                             }
@@ -615,6 +639,37 @@ async fn handle_ws_json(
                                             ws_send!(ws_tx, Message::Text(json));
                                         }
                                     }
+
+                                    // Send initial activity state if activity subscription is active
+                                    if params.idle_timeout_ms > 0 && subscribed_types.contains(&EventType::Activity) {
+                                        let generation = session.activity.generation();
+                                        let is_idle = session.activity.last_activity_ms() >= params.idle_timeout_ms;
+                                        if is_idle {
+                                            if let Ok(Ok(crate::parser::state::QueryResponse::Screen(screen))) = tokio::time::timeout(
+                                                std::time::Duration::from_secs(10),
+                                                session.parser.query(crate::parser::state::Query::Screen { format: sub_format }),
+                                            ).await {
+                                                let scrollback_lines = screen.total_lines;
+                                                let idle_event = crate::parser::events::Event::Idle {
+                                                    seq: 0,
+                                                    generation,
+                                                    screen,
+                                                    scrollback_lines,
+                                                };
+                                                if let Ok(json) = serde_json::to_string(&idle_event) {
+                                                    ws_send!(ws_tx, Message::Text(json));
+                                                }
+                                            }
+                                        } else {
+                                            let running_event = crate::parser::events::Event::Running {
+                                                seq: 0,
+                                                generation,
+                                            };
+                                            if let Ok(json) = serde_json::to_string(&running_event) {
+                                                ws_send!(ws_tx, Message::Text(json));
+                                            }
+                                        }
+                                    }
                                 }
                                 Err(e) => {
                                     let resp = super::ws_methods::WsResponse::error(
@@ -628,10 +683,10 @@ async fn handle_ws_json(
                                     }
                                 }
                             }
-                        } else if req.method == "await_quiesce" {
-                            // Handle await_quiesce specially (async wait)
+                        } else if req.method == "await_idle" || req.method == "await_quiesce" {
+                            // Handle await_idle specially (async wait)
                             let params_value = req.params.clone().unwrap_or(serde_json::Value::Object(Default::default()));
-                            match serde_json::from_value::<super::ws_methods::AwaitQuiesceParams>(params_value) {
+                            match serde_json::from_value::<super::ws_methods::AwaitIdleParams>(params_value) {
                                 Ok(params) => {
                                     let timeout = std::time::Duration::from_millis(params.timeout_ms.min(MAX_WAIT_CEILING_MS));
                                     let format = params.format;
@@ -643,36 +698,36 @@ async fn handle_ws_json(
                                     let fut: std::pin::Pin<Box<dyn std::future::Future<Output = Option<u64>> + Send>> =
                                         Box::pin(async move {
                                             let inner = if fresh {
-                                                futures::future::Either::Left(activity.wait_for_fresh_quiescence(timeout))
+                                                futures::future::Either::Left(activity.wait_for_fresh_idle(timeout))
                                             } else {
-                                                futures::future::Either::Right(activity.wait_for_quiescence(timeout, last_generation))
+                                                futures::future::Either::Right(activity.wait_for_idle(timeout, last_generation))
                                             };
                                             tokio::time::timeout(deadline, inner)
                                                 .await
                                                 .ok()
                                         });
 
-                                    // If there's already a pending quiesce, cancel it with an error
+                                    // If there's already a pending idle, cancel it with an error
                                     // so the client doesn't hang waiting for a response.
-                                    if let Some((old_id, _, _)) = pending_quiesce.take() {
+                                    if let Some((old_id, old_method, _, _)) = pending_idle.take() {
                                         let resp = super::ws_methods::WsResponse::error(
                                             old_id,
-                                            "await_quiesce",
-                                            "quiesce_superseded",
-                                            "A new await_quiesce request superseded this one.",
+                                            &old_method,
+                                            "idle_superseded",
+                                            "A new await_idle request superseded this one.",
                                         );
                                         if let Ok(json) = serde_json::to_string(&resp) {
                                             ws_send!(ws_tx, Message::Text(json));
                                         }
                                     }
-                                    pending_quiesce = Some((req.id.clone(), format, fut));
+                                    pending_idle = Some((req.id.clone(), req.method.clone(), format, fut));
                                 }
                                 Err(e) => {
                                     let resp = super::ws_methods::WsResponse::error(
                                         req.id.clone(),
-                                        "await_quiesce",
+                                        &req.method,
                                         "invalid_request",
-                                        &format!("Invalid await_quiesce params: {}.", e),
+                                        &format!("Invalid await_idle params: {}.", e),
                                     );
                                     if let Ok(json) = serde_json::to_string(&resp) {
                                         ws_send!(ws_tx, Message::Text(json));
@@ -718,8 +773,8 @@ async fn handle_ws_json(
         ws_tx.send(Message::Close(Some(close_frame))),
     ).await;
 
-    // Clean up quiescence subscription task
-    if let Some(handle) = quiesce_sub_handle {
+    // Clean up activity subscription task
+    if let Some(handle) = activity_sub_handle {
         handle.abort();
     }
 }
@@ -853,6 +908,10 @@ fn should_forward_session_event(
         }
         crate::parser::events::Event::Reset { .. }
         | crate::parser::events::Event::Sync { .. } => true,
+        crate::parser::events::Event::Idle { .. }
+        | crate::parser::events::Event::Running { .. } => {
+            handle.subscribed_types.contains(&EventType::Activity)
+        }
     }
 }
 
@@ -1729,17 +1788,17 @@ async fn handle_server_ws_request(
     Some(super::ws_methods::dispatch(&ws_req, &session).await)
 }
 
-// Quiescence query parameters
+// Idle query parameters
 #[derive(Deserialize)]
-pub(super) struct QuiesceQuery {
+pub(super) struct IdleQuery {
     timeout_ms: u64,
     #[serde(default)]
     format: Format,
     #[serde(default = "default_max_wait")]
     max_wait_ms: u64,
-    /// Generation from a previous quiescence response. If provided and matches
+    /// Generation from a previous idle response. If provided and matches
     /// the current generation, the server waits for new activity before
-    /// checking quiescence — preventing a busy-loop storm.
+    /// checking idle state — preventing a busy-loop storm.
     last_generation: Option<u64>,
     /// When true, always observe at least `timeout_ms` of real silence before
     /// responding, even if the terminal is already idle. Trades latency for
@@ -1752,27 +1811,27 @@ fn default_max_wait() -> u64 {
     30_000
 }
 
-pub(super) async fn quiesce(
+pub(super) async fn idle(
     State(state): State<AppState>,
     Path(name): Path<String>,
-    axum::extract::Query(params): axum::extract::Query<QuiesceQuery>,
+    axum::extract::Query(params): axum::extract::Query<IdleQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     let session = get_session(&state.sessions, &name)?;
     let timeout = std::time::Duration::from_millis(params.timeout_ms.min(MAX_WAIT_CEILING_MS));
     let deadline = std::time::Duration::from_millis(params.max_wait_ms.min(MAX_WAIT_CEILING_MS));
 
     let activity = &session.activity;
-    let quiesce_fut = if params.fresh {
-        futures::future::Either::Left(activity.wait_for_fresh_quiescence(timeout))
+    let idle_fut = if params.fresh {
+        futures::future::Either::Left(activity.wait_for_fresh_idle(timeout))
     } else {
         futures::future::Either::Right(
-            activity.wait_for_quiescence(timeout, params.last_generation),
+            activity.wait_for_idle(timeout, params.last_generation),
         )
     };
 
-    match tokio::time::timeout(deadline, quiesce_fut).await {
+    match tokio::time::timeout(deadline, idle_fut).await {
         Ok(generation) => {
-            // Quiescent — query screen state
+            // Idle — query screen state
             let response = tokio::time::timeout(
                 PARSER_QUERY_TIMEOUT,
                 session.parser.query(Query::Screen { format: params.format }),
@@ -1784,10 +1843,12 @@ pub(super) async fn quiesce(
             match response {
                 crate::parser::state::QueryResponse::Screen(screen) => {
                     let scrollback_lines = screen.total_lines;
+                    let last_activity_ms = session.activity.last_activity_ms();
                     Ok(Json(serde_json::json!({
                         "screen": screen,
                         "scrollback_lines": scrollback_lines,
                         "generation": generation,
+                        "last_activity_ms": last_activity_ms,
                     })))
                 }
                 _ => Err(ApiError::ParserUnavailable),
@@ -1795,25 +1856,25 @@ pub(super) async fn quiesce(
         }
         Err(_) => {
             // Deadline exceeded
-            Err(ApiError::QuiesceTimeout)
+            Err(ApiError::IdleTimeout)
         }
     }
 }
 
-// Server-level quiescence query parameters (any session)
+// Server-level idle query parameters (any session)
 #[derive(Deserialize)]
-pub(super) struct QuiesceAnyQuery {
+pub(super) struct IdleAnyQuery {
     timeout_ms: u64,
     #[serde(default)]
     format: Format,
     #[serde(default = "default_max_wait")]
     max_wait_ms: u64,
-    /// Generation from a previous quiescence response, paired with `last_session`.
+    /// Generation from a previous idle response, paired with `last_session`.
     /// When both are provided, the named session waits for new activity before
-    /// checking quiescence (preventing busy-loop storms). Other sessions are
+    /// checking idle state (preventing busy-loop storms). Other sessions are
     /// checked immediately.
     last_generation: Option<u64>,
-    /// The session name from a previous quiescence response.
+    /// The session name from a previous idle response.
     /// Used together with `last_generation`.
     last_session: Option<String>,
     /// When true, always observe at least `timeout_ms` of real silence before
@@ -1826,9 +1887,9 @@ pub(super) struct QuiesceAnyQuery {
     tag: Option<String>,
 }
 
-pub(super) async fn quiesce_any(
+pub(super) async fn idle_any(
     State(state): State<AppState>,
-    axum::extract::Query(params): axum::extract::Query<QuiesceAnyQuery>,
+    axum::extract::Query(params): axum::extract::Query<IdleAnyQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     let tags: Vec<String> = params
         .tag
@@ -1847,7 +1908,7 @@ pub(super) async fn quiesce_any(
     let timeout = std::time::Duration::from_millis(params.timeout_ms.min(MAX_WAIT_CEILING_MS));
     let deadline = std::time::Duration::from_millis(params.max_wait_ms.min(MAX_WAIT_CEILING_MS));
 
-    // Build a quiescence future for each session, racing them all.
+    // Build an idle future for each session, racing them all.
     let mut futs = Vec::with_capacity(names.len());
     for name in &names {
         let session = match state.sessions.get(name) {
@@ -1865,9 +1926,9 @@ pub(super) async fn quiesce_any(
 
         let fut = async move {
             let generation = if params.fresh {
-                activity.wait_for_fresh_quiescence(timeout).await
+                activity.wait_for_fresh_idle(timeout).await
             } else {
-                activity.wait_for_quiescence(timeout, last_seen).await
+                activity.wait_for_idle(timeout, last_seen).await
             };
             (session_name, generation)
         };
@@ -1906,7 +1967,7 @@ pub(super) async fn quiesce_any(
                 _ => Err(ApiError::ParserUnavailable),
             }
         }
-        Err(_) => Err(ApiError::QuiesceTimeout),
+        Err(_) => Err(ApiError::IdleTimeout),
     }
 }
 
@@ -1914,6 +1975,13 @@ pub(super) async fn quiesce_any(
 pub(super) struct ScreenQuery {
     #[serde(default)]
     format: Format,
+}
+
+#[derive(Serialize)]
+struct EnrichedScreen {
+    #[serde(flatten)]
+    screen: crate::parser::state::QueryResponse,
+    last_activity_ms: u64,
 }
 
 pub(super) async fn screen(
@@ -1930,7 +1998,11 @@ pub(super) async fn screen(
     .map_err(|_| ApiError::ParserTimeout)?
     .map_err(|_| ApiError::ParserUnavailable)?;
 
-    Ok(Json(response))
+    let last_activity_ms = session.activity.last_activity_ms();
+    Ok(Json(EnrichedScreen {
+        screen: response,
+        last_activity_ms,
+    }))
 }
 
 #[derive(Deserialize)]
@@ -2469,6 +2541,7 @@ pub(super) struct SessionInfo {
     pub cols: u16,
     pub clients: usize,
     pub tags: Vec<String>,
+    pub last_activity_ms: u64,
 }
 
 fn build_session_info(session: &crate::session::Session) -> SessionInfo {
@@ -2483,6 +2556,7 @@ fn build_session_info(session: &crate::session::Session) -> SessionInfo {
         cols,
         clients: session.clients(),
         tags,
+        last_activity_ms: session.activity.last_activity_ms(),
     }
 }
 

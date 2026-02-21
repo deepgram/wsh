@@ -188,20 +188,20 @@ fn default_max_wait_ms() -> u64 {
     30000
 }
 
-/// Parameters for the `wsh_await_quiesce` tool.
+/// Parameters for the `wsh_await_idle` tool.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct AwaitQuiesceParams {
+pub struct AwaitIdleParams {
     /// The name of the target session.
     #[schemars(description = "The name of the target session.")]
     pub session: String,
 
-    /// Quiescence timeout in milliseconds. The terminal must be idle for this
-    /// duration before quiescence is declared. Defaults to 2000.
+    /// Idle timeout in milliseconds. The terminal must be idle for this
+    /// duration before idle is declared. Defaults to 2000.
     #[serde(default = "default_timeout_ms")]
-    #[schemars(description = "Quiescence timeout in milliseconds. Terminal must be idle for this long. Defaults to 2000.")]
+    #[schemars(description = "Idle timeout in milliseconds. Terminal must be idle for this long. Defaults to 2000.")]
     pub timeout_ms: u64,
 
-    /// Maximum wall-clock time to wait in milliseconds. If quiescence is not
+    /// Maximum wall-clock time to wait in milliseconds. If idle is not
     /// reached within this deadline, an error is returned. Defaults to 30000.
     #[serde(default = "default_max_wait_ms")]
     #[schemars(description = "Maximum wall-clock time to wait in milliseconds. Defaults to 30000.")]
@@ -219,9 +219,9 @@ pub struct RunCommandParams {
     #[schemars(description = "The input to send to the terminal (e.g. a command string). A newline is NOT appended automatically.")]
     pub input: String,
 
-    /// Quiescence timeout in milliseconds. Defaults to 2000.
+    /// Idle timeout in milliseconds. Defaults to 2000.
     #[serde(default = "default_timeout_ms")]
-    #[schemars(description = "Quiescence timeout in milliseconds. Defaults to 2000.")]
+    #[schemars(description = "Idle timeout in milliseconds. Defaults to 2000.")]
     pub timeout_ms: u64,
 
     /// Maximum wall-clock time to wait in milliseconds. Defaults to 30000.
@@ -754,25 +754,25 @@ mod tests {
         assert!(matches!(params.format, ScreenFormat::Plain));
     }
 
-    // ── AwaitQuiesceParams ──────────────────────────────────────
+    // ── AwaitIdleParams ──────────────────────────────────────
 
     #[test]
-    fn await_quiesce_params_defaults() {
+    fn await_idle_params_defaults() {
         let json = serde_json::json!({"session": "my-session"});
-        let params: AwaitQuiesceParams = serde_json::from_value(json).unwrap();
+        let params: AwaitIdleParams = serde_json::from_value(json).unwrap();
         assert_eq!(params.session, "my-session");
         assert_eq!(params.timeout_ms, 2000);
         assert_eq!(params.max_wait_ms, 30000);
     }
 
     #[test]
-    fn await_quiesce_params_custom_timeouts() {
+    fn await_idle_params_custom_timeouts() {
         let json = serde_json::json!({
             "session": "s",
             "timeout_ms": 500,
             "max_wait_ms": 10000
         });
-        let params: AwaitQuiesceParams = serde_json::from_value(json).unwrap();
+        let params: AwaitIdleParams = serde_json::from_value(json).unwrap();
         assert_eq!(params.timeout_ms, 500);
         assert_eq!(params.max_wait_ms, 10000);
     }

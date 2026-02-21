@@ -118,23 +118,24 @@ pub struct SubscribeParams {
     pub interval_ms: u64,
     #[serde(default)]
     pub format: Format,
-    /// When > 0, the server will emit a `sync` event whenever the terminal has
-    /// been idle for this many milliseconds after any activity.
-    #[serde(default)]
-    pub quiesce_ms: u64,
+    /// When > 0, the server will emit `idle` and `running` events whenever the
+    /// terminal transitions between active and idle states. The value specifies
+    /// the idle timeout in milliseconds.
+    #[serde(default, alias = "quiesce_ms")]
+    pub idle_timeout_ms: u64,
 }
 
-/// Parameters for the `await_quiesce` WebSocket method.
+/// Parameters for the `await_idle` WebSocket method.
 #[derive(Debug, Deserialize)]
-pub struct AwaitQuiesceParams {
+pub struct AwaitIdleParams {
     pub timeout_ms: u64,
     #[serde(default)]
     pub format: Format,
     #[serde(default = "default_ws_max_wait")]
     pub max_wait_ms: u64,
-    /// Generation from a previous quiescence response. If provided and matches
+    /// Generation from a previous idle response. If provided and matches
     /// the current generation, the server waits for new activity before
-    /// checking quiescence.
+    /// checking idle state.
     pub last_generation: Option<u64>,
     /// When true, always observe real silence for `timeout_ms` before responding.
     #[serde(default)]
@@ -1131,9 +1132,9 @@ mod tests {
     }
 
     #[test]
-    fn await_quiesce_params_defaults_max_wait() {
+    fn await_idle_params_defaults_max_wait() {
         let json = r#"{"timeout_ms": 500}"#;
-        let params: AwaitQuiesceParams = serde_json::from_str(json).unwrap();
+        let params: AwaitIdleParams = serde_json::from_str(json).unwrap();
         assert_eq!(params.max_wait_ms, 30_000);
     }
 

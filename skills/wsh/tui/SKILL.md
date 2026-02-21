@@ -182,7 +182,7 @@ with a TUI, you need to return to the normal shell prompt.
 5. Last resort: `Ctrl+Z` to suspend, then `kill %1`
 
 ### Confirming You're Out
-After sending a quit command, wait for quiescence, then check:
+After sending a quit command, wait for idle, then check:
 
     "alternate_active": false
 

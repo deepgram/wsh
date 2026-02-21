@@ -37,7 +37,7 @@ Or start a shell and launch the agent interactively:
 
     create session "agent-auth"
     send: claude
-    wait for quiescence
+    wait for idle
     read screen — verify Claude Code has started
     send: Implement user authentication in src/auth.rs\n
 
@@ -72,7 +72,7 @@ sending input.
 
 **Thinking:** The terminal may be silent for extended
 periods. This is normal — don't assume it's stuck. Use
-longer quiescence timeouts (10-30 seconds) and poll
+longer idle timeouts (10-30 seconds) and poll
 patiently. Look for spinner characters or progress
 indicators.
 
@@ -88,8 +88,8 @@ shows a prompt for the next instruction. Look for an
 input indicator — a cursor, a `>`, or an explicit
 "What would you like to do?" message.
 
-### Quiescence Is Tricky with Agents
-Agents think. Thinking produces no output. A quiescence
+### Idle Detection Is Tricky with Agents
+Agents think. Thinking produces no output. An idle
 timeout of 2 seconds will trigger constantly during
 thinking phases. Use longer timeouts (10-30 seconds) and
 always read the screen to distinguish "thinking" from
@@ -183,11 +183,11 @@ gets its own session, its own task, its own workspace.
 
 ### Monitoring Multiple Agents
 
-Poll round-robin with short quiescence timeouts. You're
+Poll round-robin with short idle timeouts. You're
 looking for approval prompts that need your attention:
 
     for each agent session:
-        quiesce (timeout_ms=3000)
+        await idle (timeout_ms=3000)
         read screen
         if approval prompt detected:
             evaluate and respond

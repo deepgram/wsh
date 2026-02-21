@@ -130,7 +130,7 @@ Response:
 | `events` | array of strings | (required) | Event types to subscribe to |
 | `interval_ms` | integer | `100` | Minimum interval between events (ms) |
 | `format` | `"plain"` \| `"styled"` | `"styled"` | Line format for events containing lines |
-| `quiesce_ms` | integer | `0` | When > 0, emit a `sync` event after this many ms of inactivity |
+| `idle_timeout_ms` | integer | `0` | When > 0, emit a `sync` event after this many ms of inactivity |
 
 **Available event types:**
 
@@ -290,9 +290,9 @@ Switch back to passthrough mode. Keyboard input goes to the PTY normally.
 
 **Result:** `{}`
 
-### `await_quiesce`
+### `await_idle`
 
-Wait for the terminal to become quiescent (no activity for the specified
+Wait for the terminal to become idle (no activity for the specified
 duration), then return a screen state snapshot. The connection remains
 responsive while waiting — other events and method calls continue normally.
 
@@ -300,14 +300,14 @@ responsive while waiting — other events and method calls continue normally.
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
-| `timeout_ms` | integer | (required) | Quiescence threshold in milliseconds |
+| `timeout_ms` | integer | (required) | Idle threshold in milliseconds |
 | `format` | `"plain"` \| `"styled"` | `"styled"` | Line format for screen snapshot |
 | `max_wait_ms` | integer | (none) | Overall deadline; omit for no deadline |
 | `last_generation` | integer | (none) | Generation from a previous response; if it matches current state, waits for new activity first |
 | `fresh` | boolean | `false` | Always observe real silence for `timeout_ms` before responding |
 
 ```json
-{"id": 8, "method": "await_quiesce", "params": {"timeout_ms": 2000, "format": "plain"}}
+{"id": 8, "method": "await_idle", "params": {"timeout_ms": 2000, "format": "plain"}}
 ```
 
 **Result:**
@@ -321,33 +321,33 @@ event. Pass it back as `last_generation` on subsequent requests to prevent
 busy-loop storms when the terminal is already idle:
 
 ```json
-{"id": 9, "method": "await_quiesce", "params": {"timeout_ms": 2000, "last_generation": 42}}
+{"id": 9, "method": "await_idle", "params": {"timeout_ms": 2000, "last_generation": 42}}
 ```
 
 Alternatively, set `fresh: true` to always observe real silence without tracking
 generation state — at the cost of always waiting at least `timeout_ms`:
 
 ```json
-{"id": 10, "method": "await_quiesce", "params": {"timeout_ms": 2000, "fresh": true}}
+{"id": 10, "method": "await_idle", "params": {"timeout_ms": 2000, "fresh": true}}
 ```
 
 **Error (on timeout):**
 
 ```json
-{"error": {"code": "quiesce_timeout", "message": "Terminal did not become quiescent within the deadline."}}
+{"error": {"code": "idle_timeout", "message": "Terminal did not become idle within the deadline."}}
 ```
 
-A new `await_quiesce` request replaces any pending one. Only one can be active
+A new `await_idle` request replaces any pending one. Only one can be active
 at a time per connection.
 
-### Quiescence Sync Subscription
+### Idle Sync Subscription
 
-When `quiesce_ms > 0` is passed to `subscribe`, the server automatically emits
-a `sync` event whenever the terminal has been idle for that duration after any
-activity. This provides a continuous "command finished" signal without polling.
+When `idle_timeout_ms > 0` is passed to `subscribe`, the server automatically
+emits a `sync` event whenever the terminal has been idle for that duration after
+any activity. This provides a continuous "command finished" signal without polling.
 
 ```json
-{"method": "subscribe", "params": {"events": ["lines"], "quiesce_ms": 2000}}
+{"method": "subscribe", "params": {"events": ["lines"], "idle_timeout_ms": 2000}}
 ```
 
 Each time the terminal goes quiet for 2 seconds, you receive:
@@ -356,7 +356,7 @@ Each time the terminal goes quiet for 2 seconds, you receive:
 {"event": "sync", "seq": 0, "screen": { ... }, "scrollback_lines": 150}
 ```
 
-The quiescence subscription is reset on re-subscribe. Set `quiesce_ms` to `0`
+The idle sync subscription is reset on re-subscribe. Set `idle_timeout_ms` to `0`
 (or omit it) to disable.
 
 ### `create_overlay`

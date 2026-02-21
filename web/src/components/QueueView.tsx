@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from "preact/hooks";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import type { WshClient } from "../api/ws";
-import { quiescenceQueues, enqueueSession, dismissQueueEntry } from "../state/groups";
+import { idleQueues, enqueueSession, dismissQueueEntry, sessionStatuses } from "../state/groups";
 import { focusedSession } from "../state/sessions";
 import { SessionPane } from "./SessionPane";
 import { MiniTermContent } from "./MiniViewPreview";
@@ -12,11 +12,11 @@ interface QueueViewProps {
 }
 
 export function QueueView({ sessions, groupTag, client }: QueueViewProps) {
-  const queue = quiescenceQueues.value[groupTag] || [];
+  const queue = idleQueues.value[groupTag] || [];
   const pending = queue.filter((e) => e.status === "pending");
   const handled = queue.filter((e) => e.status === "handled");
 
-  // Sessions not in the queue at all (active, haven't become quiescent yet)
+  // Sessions not in the queue at all (active, haven't become idle yet)
   const queuedNames = new Set(queue.map((e) => e.session));
   const active = sessions.filter((s) => !queuedNames.has(s));
 
@@ -36,43 +36,25 @@ export function QueueView({ sessions, groupTag, client }: QueueViewProps) {
     }
   }, [currentSession]);
 
-  // Start quiescence watching for all sessions in this group
+  // Watch sessionStatuses for idle transitions and enqueue sessions
+  const prevStatuses = useRef<Map<string, string>>(new Map());
   useEffect(() => {
-    const controllers: AbortController[] = [];
-
-    const watchSession = (sessionName: string) => {
-      const controller = new AbortController();
-      controllers.push(controller);
-
-      const doWatch = async () => {
-        while (!controller.signal.aborted) {
-          try {
-            await client.awaitQuiesce(sessionName, 300);
-            if (controller.signal.aborted) return;
-            enqueueSession(groupTag, sessionName);
-            // After enqueuing, stop watching (will re-watch on dismiss)
-            return;
-          } catch {
-            // Timeout or error -- retry
-            if (controller.signal.aborted) return;
-          }
-        }
-      };
-      doWatch();
-    };
-
-    // Watch sessions that aren't already pending
-    const pendingNames = new Set(pending.map((e) => e.session));
+    const statuses = sessionStatuses.value;
     for (const s of sessions) {
-      if (!pendingNames.has(s)) {
-        watchSession(s);
+      const current = statuses.get(s);
+      const prev = prevStatuses.current.get(s);
+      if (current === "idle" && prev !== "idle") {
+        enqueueSession(groupTag, s);
       }
     }
-
-    return () => {
-      for (const c of controllers) c.abort();
-    };
-  }, [sessions, groupTag, client, pending.length]);
+    // Update previous statuses
+    const updated = new Map<string, string>();
+    for (const s of sessions) {
+      const st = statuses.get(s);
+      if (st) updated.set(s, st);
+    }
+    prevStatuses.current = updated;
+  }, [sessions, groupTag, sessionStatuses.value]);
 
   // Dismiss current session
   const handleDismiss = useCallback(() => {

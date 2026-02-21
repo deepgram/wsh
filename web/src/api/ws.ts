@@ -389,11 +389,11 @@ export class WshClient {
     return result as SessionInfo;
   }
 
-  async awaitQuiesce(session: string, timeout?: number, tags?: string[]): Promise<{ session: string }> {
+  async awaitIdle(session: string, timeout?: number, tags?: string[]): Promise<{ session: string }> {
     const params: Record<string, unknown> = {};
     if (timeout !== undefined) params.max_wait = timeout;
     if (tags && tags.length > 0) params.tags = tags;
-    const result = await this.request("await_quiesce", params, session);
+    const result = await this.request("await_idle", params, session);
     return result as { session: string };
   }
 
@@ -430,6 +430,7 @@ export class WshClient {
     session: string,
     events: EventType[],
     callback: EventCallback,
+    idleTimeoutMs?: number,
   ): () => void {
     // Register callback locally
     let set = this.eventCallbacks.get(session);
@@ -439,8 +440,18 @@ export class WshClient {
     }
     set.add(callback);
 
+    // Build subscribe params
+    const params: Record<string, unknown> = { events, format: "styled" };
+    if (idleTimeoutMs !== undefined && idleTimeoutMs > 0) {
+      params.idle_timeout_ms = idleTimeoutMs;
+      // Auto-include activity in events if not already present
+      if (!events.includes("activity")) {
+        params.events = [...events, "activity"];
+      }
+    }
+
     // Send subscribe request to server
-    this.request("subscribe", { events, format: "styled" }, session).catch(
+    this.request("subscribe", params, session).catch(
       () => {
         // Subscription failed — will retry on reconnect
       },

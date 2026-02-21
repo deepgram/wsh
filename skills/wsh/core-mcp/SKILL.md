@@ -4,7 +4,7 @@ description: >
   Background knowledge about the wsh terminal API for MCP clients. Loaded
   automatically when wsh is available as an MCP server. Teaches how to
   interact with terminal sessions programmatically using MCP tools —
-  sending input, reading screen output, waiting for quiescence, creating
+  sending input, reading screen output, waiting for idle, creating
   overlays and panels, managing sessions.
 user-invocable: false
 ---
@@ -47,12 +47,12 @@ These are the building blocks. Every specialized skill builds on these.
 
 ### Run a Command (Send + Wait + Read)
 The primary tool for the send/wait/read loop. Sends input, waits for
-quiescence, then returns the screen contents.
+idle, then returns the screen contents.
 
 Use `wsh_run_command` with:
 - `session` — target session name (e.g., `"default"`)
 - `input` — the text to send (include `\n` for Enter)
-- `timeout_ms` — quiescence timeout (default 2000)
+- `timeout_ms` — idle timeout (default 2000)
 - `max_wait_ms` — maximum wall-clock wait (default 30000)
 - `format` — `"plain"` or `"styled"` (default `"styled"`)
 
@@ -82,17 +82,17 @@ Examples:
 
 Returns `{"status": "sent", "bytes": N}` on success.
 
-### Wait for Quiescence
+### Wait for Idle
 Block until the terminal has been idle for `timeout_ms` milliseconds.
 This is a hint that the program may be idle — it could also just be
 working without producing output.
 
-Use `wsh_await_quiesce` with:
+Use `wsh_await_idle` with:
 - `session` — target session name
 - `timeout_ms` — idle duration to wait for (default 2000)
 - `max_wait_ms` — maximum wall-clock wait (default 30000)
 
-Returns `{"status": "quiescent", "generation": N}` once idle.
+Returns `{"status": "idle", "generation": N}` once idle.
 Returns an error result if the terminal doesn't settle within
 `max_wait_ms`.
 

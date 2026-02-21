@@ -400,6 +400,7 @@ async fn handle_list_sessions<S: AsyncRead + AsyncWrite + Unpin>(
                     cols,
                     clients: session.clients(),
                     tags,
+                    last_activity_ms: session.activity.last_activity_ms(),
                 })
             })
             .collect(),

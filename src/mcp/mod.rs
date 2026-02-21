@@ -26,7 +26,7 @@ const MAX_WAIT_CEILING_MS: u64 = 300_000; // 5 minutes
 use tools::{
     CreateSessionParams, ListSessionsParams, ManageSessionParams, ManageAction,
     SendInputParams, Encoding, GetScreenParams, GetScrollbackParams,
-    AwaitQuiesceParams, RunCommandParams,
+    AwaitIdleParams, RunCommandParams,
     OverlayParams, RemoveOverlayParams, PanelParams, RemovePanelParams,
     InputModeParams, InputModeAction, ScreenModeParams, ScreenModeAction,
 };
@@ -546,11 +546,11 @@ impl WshMcpServer {
         )]))
     }
 
-    /// Wait for a terminal session to become quiescent (idle).
-    #[tool(description = "Wait for a terminal session to become quiescent (no output for timeout_ms). Returns the activity generation number on success. Returns an error result if max_wait_ms is exceeded before quiescence is reached.")]
-    async fn wsh_await_quiesce(
+    /// Wait for a terminal session to become idle.
+    #[tool(description = "Wait for a terminal session to become idle (no output for timeout_ms). Returns the activity generation number on success. Returns an error result if max_wait_ms is exceeded before idle is reached.")]
+    async fn wsh_await_idle(
         &self,
-        Parameters(params): Parameters<AwaitQuiesceParams>,
+        Parameters(params): Parameters<AwaitIdleParams>,
     ) -> Result<CallToolResult, ErrorData> {
         let session = self.get_session(&params.session)?;
 
@@ -559,13 +559,13 @@ impl WshMcpServer {
 
         match tokio::time::timeout(
             max_wait,
-            session.activity.wait_for_quiescence(timeout, None),
+            session.activity.wait_for_idle(timeout, None),
         )
         .await
         {
             Ok(generation) => {
                 let result = serde_json::json!({
-                    "status": "quiescent",
+                    "status": "idle",
                     "generation": generation,
                 });
                 Ok(CallToolResult::success(vec![Content::text(
@@ -574,7 +574,7 @@ impl WshMcpServer {
             }
             Err(_) => {
                 let result = serde_json::json!({
-                    "error": "quiesce timeout exceeded max_wait_ms",
+                    "error": "idle timeout exceeded max_wait_ms",
                     "timeout_ms": params.timeout_ms,
                     "max_wait_ms": params.max_wait_ms,
                 });
@@ -586,7 +586,7 @@ impl WshMcpServer {
     }
 
     /// Send input and wait for the terminal to become idle, then return the screen.
-    #[tool(description = "Send input to a terminal session, wait for quiescence, then return the screen contents. This is the primary 'run a command' primitive: send input, wait for output to settle, read the result. If quiescence is not reached within max_wait_ms, the screen is still returned but marked as an error.")]
+    #[tool(description = "Send input to a terminal session, wait for idle, then return the screen contents. This is the primary 'run a command' primitive: send input, wait for output to settle, read the result. If idle is not reached within max_wait_ms, the screen is still returned but marked as an error.")]
     async fn wsh_run_command(
         &self,
         Parameters(params): Parameters<RunCommandParams>,
@@ -609,20 +609,20 @@ impl WshMcpServer {
         })?;
         // Note: no manual activity.touch() here. The PTY reader calls touch()
         // when output arrives (including the echo of our input). Adding a manual
-        // touch would gratuitously reset the quiescence timer, forcing agents to
+        // touch would gratuitously reset the idle timer, forcing agents to
         // wait the full timeout_ms even for silent commands.
 
-        // 2. Await quiescence
+        // 2. Await idle
         let timeout = Duration::from_millis(params.timeout_ms.min(MAX_WAIT_CEILING_MS));
         let max_wait = Duration::from_millis(params.max_wait_ms.min(MAX_WAIT_CEILING_MS));
 
-        let quiesce_result = tokio::time::timeout(
+        let idle_result = tokio::time::timeout(
             max_wait,
-            session.activity.wait_for_quiescence(timeout, None),
+            session.activity.wait_for_idle(timeout, None),
         )
         .await;
 
-        // 3. Get screen regardless of quiescence outcome
+        // 3. Get screen regardless of idle outcome
         let format = params.format.into_parser_format();
         let screen = session
             .parser
@@ -632,7 +632,7 @@ impl WshMcpServer {
                 ErrorData::internal_error(format!("parser error: {e}"), None)
             })?;
 
-        match quiesce_result {
+        match idle_result {
             Ok(generation) => {
                 let result = serde_json::json!({
                     "screen": screen,
@@ -644,7 +644,7 @@ impl WshMcpServer {
             }
             Err(_) => {
                 let result = serde_json::json!({
-                    "error": "quiesce timeout exceeded max_wait_ms",
+                    "error": "idle timeout exceeded max_wait_ms",
                     "screen": screen,
                 });
                 Ok(CallToolResult::error(vec![Content::text(

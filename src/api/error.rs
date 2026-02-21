@@ -41,8 +41,8 @@ pub enum ApiError {
     MaxSessionsReached,
     /// 500 - Failed to write input to the PTY.
     InputSendFailed,
-    /// 408 - Quiescence wait exceeded max_wait_ms deadline.
-    QuiesceTimeout,
+    /// 408 - Idle wait exceeded max_wait_ms deadline.
+    IdleTimeout,
     /// 500 - Failed to create a session (PTY spawn error, etc.).
     SessionCreateFailed(String),
     /// 409 - Session name already exists.
@@ -82,7 +82,7 @@ impl ApiError {
             ApiError::ParserTimeout => StatusCode::GATEWAY_TIMEOUT,
             ApiError::MaxSessionsReached => StatusCode::SERVICE_UNAVAILABLE,
             ApiError::InputSendFailed => StatusCode::INTERNAL_SERVER_ERROR,
-            ApiError::QuiesceTimeout => StatusCode::REQUEST_TIMEOUT,
+            ApiError::IdleTimeout => StatusCode::REQUEST_TIMEOUT,
             ApiError::SessionCreateFailed(_) => StatusCode::INTERNAL_SERVER_ERROR,
             ApiError::SessionNameConflict(_) => StatusCode::CONFLICT,
             ApiError::NoSessions => StatusCode::NOT_FOUND,
@@ -113,7 +113,7 @@ impl ApiError {
             ApiError::ParserTimeout => "parser_timeout",
             ApiError::MaxSessionsReached => "max_sessions_reached",
             ApiError::InputSendFailed => "input_send_failed",
-            ApiError::QuiesceTimeout => "quiesce_timeout",
+            ApiError::IdleTimeout => "idle_timeout",
             ApiError::SessionCreateFailed(_) => "session_create_failed",
             ApiError::SessionNameConflict(_) => "session_name_conflict",
             ApiError::NoSessions => "no_sessions",
@@ -148,8 +148,8 @@ impl ApiError {
                 "Maximum number of sessions reached.".to_string()
             }
             ApiError::InputSendFailed => "Failed to send input to terminal.".to_string(),
-            ApiError::QuiesceTimeout => {
-                "Terminal did not become quiescent within the deadline.".to_string()
+            ApiError::IdleTimeout => {
+                "Terminal did not become idle within the deadline.".to_string()
             }
             ApiError::SessionCreateFailed(detail) => {
                 format!("Failed to create session: {}.", detail)

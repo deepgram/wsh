@@ -1023,7 +1023,7 @@ async fn test_mcp_tool_run_command() {
     let text = extract_tool_text(&json);
     let result: serde_json::Value = serde_json::from_str(text).unwrap();
 
-    // Should have a screen field regardless of quiescence outcome
+    // Should have a screen field regardless of idle outcome
     assert!(
         result.get("screen").is_some(),
         "run_command response should contain 'screen' field, got: {}",
@@ -1815,16 +1815,16 @@ async fn test_mcp_tool_get_scrollback() {
     cleanup_session(&client, addr, &mcp_session, sess_name).await;
 }
 
-// ── Test 24: wsh_await_quiesce ───────────────────────────────────
+// ── Test 24: wsh_await_idle ───────────────────────────────────────
 
 #[tokio::test]
-async fn test_mcp_tool_await_quiesce() {
+async fn test_mcp_tool_await_idle() {
     let app = create_test_app();
     let addr = start_test_server(app).await;
     let client = reqwest::Client::new();
     let mcp_session = setup_mcp_session(&client, addr).await;
 
-    let sess_name = "mcp-quiesce-test";
+    let sess_name = "mcp-idle-test";
 
     // Create session
     let json = call_tool(
@@ -1840,12 +1840,12 @@ async fn test_mcp_tool_await_quiesce() {
     // Give the shell a moment to start and settle
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // Await quiescence — a freshly created session should settle quickly
+    // Await idle -- a freshly created session should settle quickly
     let json = call_tool(
         &client,
         addr,
         &mcp_session,
-        "wsh_await_quiesce",
+        "wsh_await_idle",
         serde_json::json!({
             "session": sess_name,
             "timeout_ms": 500,
@@ -1857,13 +1857,13 @@ async fn test_mcp_tool_await_quiesce() {
 
     let result = parse_tool_result(&json);
     assert_eq!(
-        result["status"], "quiescent",
-        "Expected status 'quiescent', got: {}",
+        result["status"], "idle",
+        "Expected status 'idle', got: {}",
         result
     );
     assert!(
         result["generation"].is_number(),
-        "Expected generation number in quiesce response, got: {}",
+        "Expected generation number in idle response, got: {}",
         result
     );
 

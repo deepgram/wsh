@@ -88,7 +88,7 @@ A terminal emulator does two things: it interprets a *protocol* (the stream of b
 - **Scrollback buffer**: Complete output history, paginated and queryable
 - **Input injection**: Send keystrokes, paste text, inject control sequences -- indistinguishable from human input
 - **Real-time events**: Subscribe to output changes, cursor movement, mode transitions via WebSocket
-- **Quiescence detection**: Wait for the terminal to go idle -- essential for the send-wait-read pattern agents use
+- **Idle detection**: Wait for the terminal to go idle -- essential for the send-wait-read pattern agents use
 - **Visual feedback**: Overlays and panels that agents can render directly in the user's terminal
 - **Input capture**: Temporarily intercept keyboard input for agent-driven dialogs and approvals
 - **Session management**: Create, list, attach to, and destroy named sessions -- enabling parallel operation
@@ -104,7 +104,7 @@ The API is the product. Everything else is a client.
 With `wsh`, an AI agent interacts with a terminal the same way a human does: send input, wait for output, read the screen, decide what to do next.
 
 ```
-Send input  →  Wait for quiescence  →  Read screen  →  Decide  →  repeat
+Send input  →  Wait for idle  →  Read screen  →  Decide  →  repeat
 ```
 
 This loop is simple but powerful. It works for any program, any interface, any situation. The agent doesn't need to understand the program's internals or speak its protocol. It reads what's on screen and types what's needed -- exactly like a human.
@@ -137,7 +137,7 @@ Skills are structured knowledge documents that teach AI agents the patterns, tec
 
 ### Why Skills Matter
 
-An AI agent with raw API access can technically do anything. But without guidance, it will fumble. It won't know the send-wait-read loop. It won't know to wait for quiescence before reading the screen. It won't know how to detect that a TUI has finished loading, or how to navigate a menu, or how to safely operate a destructive command.
+An AI agent with raw API access can technically do anything. But without guidance, it will fumble. It won't know the send-wait-read loop. It won't know to wait for idle before reading the screen. It won't know how to detect that a TUI has finished loading, or how to navigate a menu, or how to safely operate a destructive command.
 
 Skills encode this operational knowledge:
 
@@ -260,7 +260,7 @@ When binding to any non-localhost address, `wsh` requires a bearer token for all
 
 `wsh` ships with a web-based terminal client as one demonstration of the API's power. It connects over WebSocket and renders terminal state using web-native technologies -- reflowing HTML in normal mode, fixed character grid for full-screen TUIs.
 
-The web UI features a sidebar with live mini-previews of all sessions organized by tag, three view modes (carousel with 3D depth, auto-grid tiling, and quiescence-driven queue), a command palette, keyboard shortcuts, drag-and-drop tag management, and six themes. It adapts to screen size: bottom sheet on phones, overlay sidebar on tablets, persistent sidebar on desktop. Touch gestures, native scrolling, and a modifier bar for special keys make it a production-quality interface for accessing your terminal from any device.
+The web UI features a sidebar with live mini-previews of all sessions organized by tag, three view modes (carousel with 3D depth, auto-grid tiling, and idle-driven queue), a command palette, keyboard shortcuts, drag-and-drop tag management, and six themes. It adapts to screen size: bottom sheet on phones, overlay sidebar on tablets, persistent sidebar on desktop. Touch gestures, native scrolling, and a modifier bar for special keys make it a production-quality interface for accessing your terminal from any device.
 
 But architecturally, it's just another API client -- no different from an AI agent or an automation script. It demonstrates what `wsh` makes possible; it is not the point.
 
@@ -292,7 +292,7 @@ The critical columns are the first two. No existing tool provides a structured, 
 
 **Now: The API Platform**
 
-The core is built: PTY management, terminal state machine, HTTP/WebSocket API, session management, overlays, panels, input capture, quiescence detection. MCP integration exposes `wsh` as a first-class MCP server -- 14 tools, 3 resources, 9 prompts -- via Streamable HTTP and stdio transports. AI agents can drive interactive terminal sessions today through HTTP, WebSocket, or MCP.
+The core is built: PTY management, terminal state machine, HTTP/WebSocket API, session management, overlays, panels, input capture, idle detection. MCP integration exposes `wsh` as a first-class MCP server -- 14 tools, 3 resources, 9 prompts -- via Streamable HTTP and stdio transports. AI agents can drive interactive terminal sessions today through HTTP, WebSocket, or MCP.
 
 **Next: Richer Agent Capabilities**
 

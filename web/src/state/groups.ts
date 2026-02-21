@@ -11,7 +11,7 @@ export interface Group {
 
 export interface QueueEntry {
   session: string;
-  quiescentAt: number;
+  idleAt: number;
   status: "pending" | "handled";
 }
 
@@ -34,9 +34,9 @@ export function toggleGroupCollapsed(tag: string): void {
 const storedViewModes = JSON.parse(localStorage.getItem("wsh-view-modes") || "{}");
 export const viewModePerGroup = signal<Record<string, ViewMode>>(storedViewModes);
 
-export const quiescenceQueues = signal<Record<string, QueueEntry[]>>({});
+export const idleQueues = signal<Record<string, QueueEntry[]>>({});
 
-export type SessionStatus = "running" | "quiescent";
+export type SessionStatus = "running" | "idle";
 export const sessionStatuses = signal<Map<string, SessionStatus>>(new Map());
 
 export const tileLayouts = signal<Record<string, {
@@ -68,7 +68,7 @@ export const groups = computed<Group[]>(() => {
   for (const tag of sortedTags) {
     const sessions = tagGroups.get(tag)!;
     const badge = sessions.filter(
-      (s) => statuses.get(s) === "quiescent"
+      (s) => statuses.get(s) === "idle"
     ).length;
     result.push({
       tag,
@@ -81,7 +81,7 @@ export const groups = computed<Group[]>(() => {
 
   if (untagged.length > 0) {
     const badge = untagged.filter(
-      (s) => statuses.get(s) === "quiescent"
+      (s) => statuses.get(s) === "idle"
     ).length;
     result.push({
       tag: "untagged",
@@ -94,7 +94,7 @@ export const groups = computed<Group[]>(() => {
 
   const allSessions = Array.from(infoMap.keys());
   const allBadge = allSessions.filter(
-    (s) => statuses.get(s) === "quiescent"
+    (s) => statuses.get(s) === "idle"
   ).length;
   result.push({
     tag: "all",
@@ -131,21 +131,21 @@ export function setViewModeForGroup(tag: string, mode: ViewMode): void {
 }
 
 export function enqueueSession(tag: string, session: string): void {
-  const queues = { ...quiescenceQueues.value };
+  const queues = { ...idleQueues.value };
   const queue = [...(queues[tag] || [])];
   if (queue.some((e) => e.session === session && e.status === "pending")) return;
-  queue.push({ session, quiescentAt: Date.now(), status: "pending" });
+  queue.push({ session, idleAt: Date.now(), status: "pending" });
   queues[tag] = queue;
-  quiescenceQueues.value = queues;
+  idleQueues.value = queues;
 }
 
 export function dismissQueueEntry(tag: string, session: string): void {
-  const queues = { ...quiescenceQueues.value };
+  const queues = { ...idleQueues.value };
   const queue = (queues[tag] || []).map((e) =>
     e.session === session ? { ...e, status: "handled" as const } : e
   );
   queues[tag] = queue;
-  quiescenceQueues.value = queues;
+  idleQueues.value = queues;
 }
 
 export function getGroupStatusCounts(group: Group): { running: number; idle: number } {
@@ -153,7 +153,7 @@ export function getGroupStatusCounts(group: Group): { running: number; idle: num
   let idle = 0;
   let running = 0;
   for (const s of group.sessions) {
-    if (statuses.get(s) === "quiescent") {
+    if (statuses.get(s) === "idle") {
       idle++;
     } else {
       running++;

@@ -18,18 +18,18 @@ This skill teaches you the patterns and pitfalls.
 Every interaction follows the same shape:
 
 1. **Send input** — a command, a response to a prompt, a keystroke
-2. **Wait for quiescence** — output settles, suggesting the program
+2. **Wait for idle** — output settles, suggesting the program
    may be idle. Choose your timeout based on what you expect:
    - Fast commands (ls, cat, echo): 500-1000ms
    - Build/install commands: 3000-5000ms
    - Network operations: 2000-3000ms
-   Quiescence is a *hint*, not a guarantee. The program may still
+   Idle is a *hint*, not a guarantee. The program may still
    be working — it just hasn't produced output recently.
 3. **Read the screen** — see what happened
 4. **Decide** — did the command succeed? Is there a prompt waiting
    for input? Did something go wrong? Act accordingly.
 
-When re-polling quiescence (e.g., the command isn't done yet), pass
+When re-polling idle (e.g., the command isn't done yet), pass
 back the `generation` from the previous response as `last_generation`
 to avoid busy-loop storms. Or use `fresh=true` for simplicity.
 
@@ -45,7 +45,7 @@ a command before sending), but usually you want the newline.
 
 ## Reading the Result
 
-After waiting for quiescence, read the screen. Prefer `plain`
+After waiting for idle, read the screen. Prefer `plain`
 format when you just need text content. Use `styled` when
 formatting matters (e.g., distinguishing error output highlighted
 in red).
@@ -71,7 +71,7 @@ Respond naturally — send the appropriate input:
 
 For password prompts, note that the terminal will not echo your
 input back. The screen will look unchanged after you type. Wait
-for quiescence after sending — the program will advance.
+for idle after sending — the program will advance.
 
 ## Control Characters
 
@@ -116,15 +116,15 @@ a failure.
 ## Long-Running Commands
 
 Some commands run for minutes or longer — builds, downloads,
-test suites. Waiting for quiescence will return when output
+test suites. Waiting for idle will return when output
 pauses, but the command may not be done.
 
 Strategies:
 
-**Poll in a loop.** Wait for quiescence, read the screen, check
+**Poll in a loop.** Wait for idle, read the screen, check
 if a shell prompt has returned. If not, wait again:
 
-    wait for quiescence (timeout: 5000ms)
+    wait for idle (timeout: 5000ms)
     read screen
     # No prompt yet? Wait again.
 
@@ -134,7 +134,7 @@ scrollback to get everything:
 
     read scrollback (offset: 0, limit: 500)
 
-**Don't set unreasonably long quiescence timeouts.** A
+**Don't set unreasonably long idle timeouts.** A
 `timeout_ms=30000` means you'll wait 30 seconds of silence
 before getting a response. Prefer shorter timeouts with
 repeated polls — it lets you observe intermediate progress
@@ -209,7 +209,7 @@ To write multi-line content, use heredocs:
 It's tempting to send input immediately after the previous
 command. Don't. If the shell hasn't finished processing, your
 input may land in the wrong place — or be swallowed entirely.
-Always wait for quiescence before sending the next input.
+Always wait for idle before sending the next input.
 
 ### Don't assume the screen is everything
 The screen shows only the last N lines (typically 24 rows). A

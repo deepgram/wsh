@@ -38,7 +38,7 @@ tags:
 
 paths:
   # Note: All per-session endpoints (input, screen, scrollback, ws/raw,
-  # ws/json, overlay, panel, quiesce, input/mode, input/capture,
+  # ws/json, overlay, panel, idle, input/mode, input/capture,
   # input/release) are available under /sessions/{name}/ prefix.
   # For example: /sessions/dev/input, /sessions/dev/screen, etc.
 
@@ -622,17 +622,17 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
 
-  /quiesce:
+  /idle:
     get:
-      operationId: getQuiesceAny
-      summary: Wait for quiescence on any session
+      operationId: getIdleAny
+      summary: Wait for idle on any session
       tags: [session]
       description: >
-        Server-level long-poll that races quiescence detection across all
-        sessions. Returns the first session to become quiescent, along with
+        Server-level long-poll that races idle detection across all
+        sessions. Returns the first session to become idle, along with
         its screen state and the session name. When last_session and
         last_generation are provided, the named session waits for new activity
-        before checking quiescence (preventing busy-loop storms for that
+        before checking idle state (preventing busy-loop storms for that
         session), while all other sessions are checked immediately.
         Returns 404 if no sessions exist.
       parameters:
@@ -642,7 +642,7 @@ paths:
           schema:
             type: integer
             minimum: 1
-          description: Quiescence threshold in milliseconds (per session)
+          description: Idle threshold in milliseconds (per session)
         - name: format
           in: query
           required: false
@@ -663,16 +663,16 @@ paths:
             type: integer
             minimum: 0
           description: >
-            Generation from a previous quiescence response. Used together
+            Generation from a previous idle response. Used together
             with last_session. If the named session's current generation
-            matches, it waits for new activity before checking quiescence.
+            matches, it waits for new activity before checking idle state.
         - name: last_session
           in: query
           required: false
           schema:
             type: string
           description: >
-            Session name from a previous quiescence response. Used together
+            Session name from a previous idle response. Used together
             with last_generation to prevent busy-loop storms on a specific
             session while still racing all other sessions.
         - name: fresh
@@ -695,11 +695,11 @@ paths:
             one of the specified tags are considered.
       responses:
         "200":
-          description: A session is quiescent. Returns session name and screen state.
+          description: A session is idle. Returns session name and screen state.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/QuiesceAnyResponse"
+                $ref: "#/components/schemas/IdleAnyResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -711,7 +711,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "408":
-          description: Deadline exceeded without quiescence on any session.
+          description: Deadline exceeded without idle on any session.
           content:
             application/json:
               schema:
@@ -1755,7 +1755,7 @@ components:
         events: { type: array, items: { $ref: "#/components/schemas/EventType" } }
         interval_ms: { type: integer, minimum: 0, default: 100 }
         format: { $ref: "#/components/schemas/Format" }
-        quiesce_ms:
+        idle_timeout_ms:
           type: integer
           minimum: 0
           default: 0
@@ -1779,14 +1779,14 @@ components:
             escapes handle control characters. With base64, data is decoded
             before sending to the PTY.
 
-    AwaitQuiesceParams:
+    AwaitIdleParams:
       type: object
       required: [timeout_ms]
       properties:
         timeout_ms:
           type: integer
           minimum: 1
-          description: Quiescence threshold in milliseconds
+          description: Idle threshold in milliseconds
         format: { $ref: "#/components/schemas/Format" }
         max_wait_ms:
           type: integer
@@ -1796,9 +1796,9 @@ components:
           type: integer
           minimum: 0
           description: >
-            Generation from a previous quiescence response. If provided and
+            Generation from a previous idle response. If provided and
             matches the current generation, the server waits for new activity
-            before checking quiescence.
+            before checking idle state.
         fresh:
           type: boolean
           default: false
@@ -1806,7 +1806,7 @@ components:
             When true, always observe real silence for timeout_ms before
             responding, even if the terminal is already idle.
 
-    QuiesceResponse:
+    IdleResponse:
       type: object
       required: [screen, scrollback_lines, generation]
       properties:
@@ -1820,20 +1820,20 @@ components:
             last_generation on subsequent requests to avoid busy-loop
             storms when the terminal is idle.
 
-    QuiesceAnyResponse:
+    IdleAnyResponse:
       type: object
       required: [session, screen, scrollback_lines, generation]
       properties:
         session:
           type: string
-          description: Name of the session that became quiescent.
+          description: Name of the session that became idle.
         screen: { $ref: "#/components/schemas/ScreenResponse" }
         scrollback_lines: { type: integer, minimum: 0 }
         generation:
           type: integer
           minimum: 0
           description: >
-            Monotonic activity generation counter for the quiescent session.
+            Monotonic activity generation counter for the idle session.
             Pass back as last_generation (with last_session) on subsequent
             requests to avoid busy-loop storms.
 
@@ -1993,7 +1993,7 @@ components:
                 - channel_full
                 - parser_unavailable
                 - input_send_failed
-                - quiesce_timeout
+                - idle_timeout
                 - parser_timeout
                 - no_sessions
                 - max_sessions_reached

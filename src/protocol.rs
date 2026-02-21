@@ -326,6 +326,8 @@ pub struct SessionInfoMsg {
     pub clients: usize,
     #[serde(default)]
     pub tags: Vec<String>,
+    #[serde(default)]
+    pub last_activity_ms: u64,
 }
 
 /// Client → Server: request to kill (destroy) a session.
@@ -735,6 +737,7 @@ mod tests {
                     cols: 80,
                     clients: 1,
                     tags: vec![],
+                    last_activity_ms: 0,
                 },
                 SessionInfoMsg {
                     name: "beta".to_string(),
@@ -744,6 +747,7 @@ mod tests {
                     cols: 0,
                     clients: 0,
                     tags: vec![],
+                    last_activity_ms: 0,
                 },
             ],
         };

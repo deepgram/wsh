@@ -65,7 +65,9 @@ export type Event =
   | { event: "mode"; seq: number; alternate_active: boolean }
   | { event: "reset"; seq: number; reason: string }
   | { event: "sync"; seq: number; screen: ScreenResponse; scrollback_lines: number }
-  | { event: "diff"; seq: number; changed_lines: number[]; screen: ScreenResponse };
+  | { event: "diff"; seq: number; changed_lines: number[]; screen: ScreenResponse }
+  | { event: "idle"; seq: number; generation: number; screen: ScreenResponse; scrollback_lines: number }
+  | { event: "running"; seq: number; generation: number };
 
 // WebSocket request/response envelopes
 
@@ -83,7 +85,7 @@ export interface WsResponse {
   error?: { code: string; message: string };
 }
 
-export type EventType = "lines" | "cursor" | "mode" | "diffs";
+export type EventType = "lines" | "cursor" | "mode" | "diffs" | "activity";
 
 export interface SessionInfo {
   name: string;

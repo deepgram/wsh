@@ -54,13 +54,13 @@ change between versions.
 
 | Status | Code | Message | When |
 |--------|------|---------|------|
-| `404` | `no_sessions` | No sessions exist. | Server-level `GET /quiesce` called with no sessions in the registry |
+| `404` | `no_sessions` | No sessions exist. | Server-level `GET /idle` called with no sessions in the registry |
 
 ### Timeout Errors
 
 | Status | Code | Message | When |
 |--------|------|---------|------|
-| `408` | `quiesce_timeout` | Terminal did not become quiescent within the deadline. | `max_wait_ms` exceeded on `GET /quiesce` or `await_quiesce` WS method |
+| `408` | `idle_timeout` | Terminal did not become idle within the deadline. | `max_wait_ms` exceeded on `GET /idle` or `await_idle` WS method |
 | `504` | `parser_timeout` | Terminal parser query timed out. | Parser query did not respond within 5 seconds |
 
 ### Server Errors

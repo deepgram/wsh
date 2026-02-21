@@ -50,7 +50,7 @@ Per-session endpoints are nested under `/sessions/:name`.
 | `GET` | `/sessions/:name/screen_mode` | Get current screen mode |
 | `POST` | `/sessions/:name/screen_mode/enter_alt` | Enter alternate screen mode |
 | `POST` | `/sessions/:name/screen_mode/exit_alt` | Exit alternate screen mode |
-| `GET` | `/sessions/:name/quiesce` | Wait for terminal quiescence |
+| `GET` | `/sessions/:name/idle` | Wait for terminal to become idle |
 | `POST` | `/sessions/:name/detach` | Detach all clients from the session |
 
 ### Session Management Endpoints
@@ -334,10 +334,10 @@ Input capture lets API clients intercept keyboard input before it reaches the
 terminal's PTY. Useful for building custom key handlers and agent interactions.
 Includes focus tracking for directing input to specific overlays or panels.
 
-## Quiescence Sync
+## Idle Detection
 
 ```
-GET /quiesce?timeout_ms=2000
+GET /idle?timeout_ms=2000
 ```
 
 Long-polls until the terminal has been idle (no PTY output or input from any
@@ -349,7 +349,7 @@ settled" after sending a command.
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
-| `timeout_ms` | integer | (required) | Quiescence threshold in milliseconds |
+| `timeout_ms` | integer | (required) | Idle threshold in milliseconds |
 | `format` | `plain` \| `styled` | `styled` | Line format for response |
 | `max_wait_ms` | integer | `30000` | Overall deadline before returning 408 |
 | `last_generation` | integer | (none) | Generation from a previous response; blocks until new activity if it matches |
@@ -373,52 +373,52 @@ is a monotonic counter that increments on each activity event.
 
 **Preventing busy-loop storms:**
 
-When polling quiescence repeatedly (e.g., waiting for a command that hasn't
+When polling idle detection repeatedly (e.g., waiting for a command that hasn't
 finished), pass back the `generation` from the previous response as
 `last_generation`. If no new activity has occurred, the server blocks until
 something happens — preventing rapid-fire immediate responses:
 
 ```bash
 # First call: may return immediately if already idle
-curl 'http://localhost:8080/quiesce?timeout_ms=500&format=plain'
+curl 'http://localhost:8080/idle?timeout_ms=500&format=plain'
 # Response: {"screen": ..., "generation": 42}
 
-# Subsequent call: blocks until new activity, then waits for quiescence
-curl 'http://localhost:8080/quiesce?timeout_ms=500&last_generation=42&format=plain'
+# Subsequent call: blocks until new activity, then waits for idle
+curl 'http://localhost:8080/idle?timeout_ms=500&last_generation=42&format=plain'
 ```
 
 Alternatively, use `fresh=true` to always observe real silence without tracking
 generation state — at the cost of always waiting at least `timeout_ms`:
 
 ```bash
-curl 'http://localhost:8080/quiesce?timeout_ms=500&fresh=true&format=plain'
+curl 'http://localhost:8080/idle?timeout_ms=500&fresh=true&format=plain'
 ```
 
 **Errors:**
 
 | Status | Code | When |
 |--------|------|------|
-| 408 | `quiesce_timeout` | `max_wait_ms` exceeded without quiescence |
+| 408 | `idle_timeout` | `max_wait_ms` exceeded without idle |
 
-The WebSocket equivalent is the `await_quiesce` method — see
+The WebSocket equivalent is the `await_idle` method — see
 [websocket.md](websocket.md). Subscriptions can also include automatic
-quiescence sync via the `quiesce_ms` parameter.
+idle sync via the `idle_timeout_ms` parameter.
 
-### Server-Level Quiescence (Any Session)
+### Server-Level Idle Detection (Any Session)
 
 ```
-GET /quiesce?timeout_ms=2000
+GET /idle?timeout_ms=2000
 ```
 
-Races quiescence detection across **all** sessions (or a tag-filtered subset),
-returning the first session to become quiescent. The response includes the
+Races idle detection across **all** sessions (or a tag-filtered subset),
+returning the first session to become idle. The response includes the
 session name so you know which session settled.
 
 **Query parameters:**
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
-| `timeout_ms` | integer | (required) | Quiescence threshold in milliseconds |
+| `timeout_ms` | integer | (required) | Idle threshold in milliseconds |
 | `format` | `plain` \| `styled` | `styled` | Line format for response |
 | `max_wait_ms` | integer | `30000` | Overall deadline before returning 408 |
 | `last_generation` | integer | (none) | Generation from a previous response; paired with `last_session` |
@@ -441,16 +441,16 @@ session name so you know which session settled.
 
 Pass back both `last_session` and `last_generation` from the previous
 response. The named session waits for new activity before checking
-quiescence, while all other sessions are checked immediately:
+idle state, while all other sessions are checked immediately:
 
 ```bash
-# First call: returns whichever session becomes quiescent first
-curl 'http://localhost:8080/quiesce?timeout_ms=500&format=plain'
+# First call: returns whichever session becomes idle first
+curl 'http://localhost:8080/idle?timeout_ms=500&format=plain'
 # Response: {"session": "build", "screen": ..., "generation": 42}
 
 # Subsequent call: "build" won't return until it has new activity,
 # but other sessions can still win the race
-curl 'http://localhost:8080/quiesce?timeout_ms=500&last_session=build&last_generation=42&format=plain'
+curl 'http://localhost:8080/idle?timeout_ms=500&last_session=build&last_generation=42&format=plain'
 ```
 
 **Errors:**
@@ -458,7 +458,7 @@ curl 'http://localhost:8080/quiesce?timeout_ms=500&last_session=build&last_gener
 | Status | Code | When |
 |--------|------|------|
 | 404 | `no_sessions` | No sessions exist in the registry |
-| 408 | `quiesce_timeout` | `max_wait_ms` exceeded without quiescence on any session |
+| 408 | `idle_timeout` | `max_wait_ms` exceeded without idle on any session |
 
 ## Server Mode
 
@@ -872,7 +872,7 @@ events. After connecting, the server sends `{"connected": true}`.
 ```
 
 All the standard per-session methods (`get_screen`, `get_scrollback`,
-`send_input`, `subscribe`, `await_quiesce`, overlay/panel methods, etc.) work
+`send_input`, `subscribe`, `await_idle`, overlay/panel methods, etc.) work
 the same as on the per-session `/sessions/:name/ws/json` endpoint.
 
 **Session lifecycle events** are broadcast automatically:

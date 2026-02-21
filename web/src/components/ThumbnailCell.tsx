@@ -12,12 +12,12 @@ interface ThumbnailCellProps {
 }
 
 function statusLabel(status: SessionStatus | undefined): string {
-  return status === "quiescent" ? "Idle" : "Running";
+  return status === "idle" ? "Idle" : "Running";
 }
 
 export function ThumbnailCell({ session, client }: ThumbnailCellProps) {
   const status = sessionStatuses.value.get(session);
-  const dotClass = status === "quiescent" ? "status-dot-green" : "status-dot-amber";
+  const dotClass = status === "idle" ? "status-dot-green" : "status-dot-amber";
   const [hovered, setHovered] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(session);

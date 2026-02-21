@@ -12,7 +12,7 @@ interface SessionPaneProps {
 }
 
 function statusLabel(status: SessionStatus | undefined): string {
-  return status === "quiescent" ? "Idle" : "Running";
+  return status === "idle" ? "Idle" : "Running";
 }
 
 export function SessionPane({ session, client }: SessionPaneProps) {
@@ -23,7 +23,7 @@ export function SessionPane({ session, client }: SessionPaneProps) {
   const renameRef = useRef<HTMLInputElement>(null);
 
   const status = sessionStatuses.value.get(session);
-  const dotClass = status === "quiescent" ? "status-dot-green" : "status-dot-amber";
+  const dotClass = status === "idle" ? "status-dot-green" : "status-dot-amber";
   const info = sessionInfoMap.value.get(session);
   const tags = info?.tags ?? [];
 

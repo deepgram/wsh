@@ -84,7 +84,7 @@ This ships inside the `wsh` binary. No separate install, no configuration, no de
 **Sidebar + main content layout.** A persistent sidebar shows live mini-previews of all sessions, organized into groups by tag. Drag sessions between groups to reassign tags. A resize handle separates the sidebar from the main content area. Three view modes for the main content:
 - **Carousel** — 3D depth effect, navigate between sessions with arrow keys
 - **Tiled** — auto-grid layout that adapts to the number of sessions
-- **Queue** — quiescence-driven FIFO, surfaces sessions as they become idle
+- **Queue** — idle-driven FIFO, surfaces sessions as they become idle
 
 **Full terminal rendering.** 256-color and true-color ANSI, bold/italic/underline/strikethrough, alternate screen buffer — vim, htop, lazygit, and every other TUI works as expected.
 
@@ -114,7 +114,7 @@ For access over the internet, put it behind an SSH tunnel, Tailscale, or a rever
 AI agents interact with `wsh` sessions using a simple, universal pattern:
 
 ```
-Send input  →  Wait for quiescence  →  Read screen  →  Decide  →  repeat
+Send input  →  Wait for idle  →  Read screen  →  Decide  →  repeat
 ```
 
 ```bash
@@ -122,7 +122,7 @@ Send input  →  Wait for quiescence  →  Read screen  →  Decide  →  repeat
 curl -X POST http://localhost:8080/sessions/default/input -d 'ls\n'
 
 # Wait for terminal to be idle
-curl -s 'http://localhost:8080/sessions/default/quiesce?timeout_ms=500&max_wait_ms=10000'
+curl -s 'http://localhost:8080/sessions/default/idle?timeout_ms=500&max_wait_ms=10000'
 
 # Read what's on screen
 curl -s http://localhost:8080/sessions/default/screen | jq .
@@ -250,7 +250,7 @@ All session-specific endpoints are nested under `/sessions/:name/`. When running
 | `POST` | `/sessions/:name/input` | Send input to the terminal |
 | `GET` | `/sessions/:name/screen` | Current screen state |
 | `GET` | `/sessions/:name/scrollback` | Scrollback buffer history |
-| `GET` | `/sessions/:name/quiesce` | Wait for terminal quiescence |
+| `GET` | `/sessions/:name/idle` | Wait for terminal to become idle |
 | `GET` | `/sessions/:name/ws/raw` | Raw binary WebSocket |
 | `GET` | `/sessions/:name/ws/json` | JSON request/response WebSocket |
 
@@ -323,7 +323,7 @@ curl -s 'http://localhost:8080/sessions/default/scrollback?offset=0&limit=50' | 
 
 # Wait for terminal to be idle for 500ms (with 10s deadline)
 # Response includes a "generation" counter for efficient re-polling
-curl -s 'http://localhost:8080/sessions/default/quiesce?timeout_ms=500&max_wait_ms=10000' | jq .
+curl -s 'http://localhost:8080/sessions/default/idle?timeout_ms=500&max_wait_ms=10000' | jq .
 
 # Connect to raw WebSocket
 websocat ws://localhost:8080/sessions/default/ws/raw
@@ -445,7 +445,7 @@ server's bind address.
 │                                                                           │
 │  ┌──────────────────┐    ┌──────────────────┐                             │
 │  │  Unix Socket      │    │ Activity Tracker │                             │
-│  │  (server mode)    │    │ (quiescence)     │                             │
+│  │  (server mode)    │    │ (idle detection) │                             │
 │  │  list/kill/attach │    │                  │                             │
 │  └──────────────────┘    └──────────────────┘                             │
 └───────────────────────────────────────────────────────────────────────────┘
@@ -457,7 +457,7 @@ server's bind address.
 src/
 ├── main.rs              # Entry point, CLI args, client/server orchestration
 ├── lib.rs               # Library exports
-├── activity.rs          # Activity tracking for quiescence detection
+├── activity.rs          # Activity tracking for idle detection
 ├── broker.rs            # Broadcast channel for output fanout
 ├── client.rs            # Unix socket client (for attach/list/kill/detach)
 ├── protocol.rs          # Unix socket wire protocol (messages, serialization)
@@ -553,7 +553,7 @@ tests/
 ├── panel_integration.rs        # Panel integration tests
 ├── parser_integration.rs       # Parser integration tests
 ├── pty_integration.rs          # PTY integration tests
-├── quiesce_integration.rs      # Quiescence integration tests
+├── idle_integration.rs          # Idle detection integration tests
 ├── server_client_e2e.rs        # Server/client end-to-end tests
 ├── session_management.rs       # Session management tests
 ├── lifecycle_stress.rs          # Lifecycle stress tests (detach/reattach/exit)

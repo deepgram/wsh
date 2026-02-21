@@ -89,7 +89,7 @@ pub fn router(state: AppState, token: Option<String>) -> Router {
         .route("/input/release", post(input_release))
         .route("/input/focus", get(input_focus_get).post(input_focus))
         .route("/input/unfocus", post(input_unfocus))
-        .route("/quiesce", get(quiesce))
+        .route("/idle", get(idle))
         .route("/ws/raw", get(ws_raw))
         .route("/ws/json", get(ws_json))
         .route("/screen", get(screen))
@@ -140,7 +140,7 @@ pub fn router(state: AppState, token: Option<String>) -> Router {
                 .delete(session_kill),
         )
         .route("/sessions/:name/detach", post(session_detach))
-        .route("/quiesce", get(quiesce_any))
+        .route("/idle", get(idle_any))
         .route("/server/persist", get(server_persist_get).put(server_persist_set))
         .route("/ws/json", get(ws_json_server));
 

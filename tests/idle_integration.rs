@@ -1,9 +1,9 @@
-//! Integration tests for the quiescence sync feature.
+//! Integration tests for the idle detection feature.
 //!
 //! Tests cover:
-//! - HTTP GET /quiesce endpoint
-//! - WebSocket await_quiesce method
-//! - Subscription quiesce_ms parameter
+//! - HTTP GET /idle endpoint
+//! - WebSocket await_idle method
+//! - Subscription idle_timeout_ms parameter
 //! - Activity tracking from input sources
 
 use bytes::Bytes;
@@ -106,17 +106,17 @@ async fn http_get(addr: SocketAddr, uri: &str) -> (u16, serde_json::Value) {
 }
 
 // ---------------------------------------------------------------------------
-// HTTP /quiesce tests
+// HTTP /idle tests
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn test_http_quiesce_returns_screen_state_after_quiet() {
+async fn test_http_idle_returns_screen_state_after_quiet() {
     let (state, _rx, _activity, _parser_tx) = create_test_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
-    // Terminal should already be quiet (no activity for >100ms given setup time)
-    let (status, json) = http_get(addr, "/sessions/test/quiesce?timeout_ms=100&format=plain").await;
+    // Terminal should already be idle (no activity for >100ms given setup time)
+    let (status, json) = http_get(addr, "/sessions/test/idle?timeout_ms=100&format=plain").await;
 
     assert_eq!(status, 200);
     assert!(json.get("screen").is_some(), "response should have screen field");
@@ -132,12 +132,12 @@ async fn test_http_quiesce_returns_screen_state_after_quiet() {
 }
 
 #[tokio::test]
-async fn test_http_quiesce_returns_408_when_deadline_exceeded() {
+async fn test_http_idle_returns_408_when_deadline_exceeded() {
     let (state, _rx, activity, _parser_tx) = create_test_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
-    // Keep touching to prevent quiescence
+    // Keep touching to prevent idle
     let a = activity.clone();
     let touch_handle = tokio::spawn(async move {
         loop {
@@ -147,16 +147,16 @@ async fn test_http_quiesce_returns_408_when_deadline_exceeded() {
     });
 
     let (status, json) =
-        http_get(addr, "/sessions/test/quiesce?timeout_ms=500&max_wait_ms=200&format=plain").await;
+        http_get(addr, "/sessions/test/idle?timeout_ms=500&max_wait_ms=200&format=plain").await;
 
     touch_handle.abort();
 
     assert_eq!(status, 408);
-    assert_eq!(json["error"]["code"], "quiesce_timeout");
+    assert_eq!(json["error"]["code"], "idle_timeout");
 }
 
 #[tokio::test]
-async fn test_http_quiesce_returns_immediately_when_already_quiescent() {
+async fn test_http_idle_returns_immediately_when_already_idle() {
     let (state, _rx, _activity, _parser_tx) = create_test_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
@@ -165,7 +165,7 @@ async fn test_http_quiesce_returns_immediately_when_already_quiescent() {
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let start = std::time::Instant::now();
-    let (status, _json) = http_get(addr, "/sessions/test/quiesce?timeout_ms=100&format=plain").await;
+    let (status, _json) = http_get(addr, "/sessions/test/idle?timeout_ms=100&format=plain").await;
     let elapsed = start.elapsed();
 
     assert_eq!(status, 200);
@@ -178,11 +178,11 @@ async fn test_http_quiesce_returns_immediately_when_already_quiescent() {
 }
 
 // ---------------------------------------------------------------------------
-// HTTP /quiesce activity tracking tests
+// HTTP /idle activity tracking tests
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn test_http_quiesce_waits_for_activity_to_stop() {
+async fn test_http_idle_waits_for_activity_to_stop() {
     let (state, _rx, activity, _parser_tx) = create_test_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
@@ -198,7 +198,7 @@ async fn test_http_quiesce_waits_for_activity_to_stop() {
 
     let start = std::time::Instant::now();
     let (status, _json) =
-        http_get(addr, "/sessions/test/quiesce?timeout_ms=150&max_wait_ms=5000&format=plain").await;
+        http_get(addr, "/sessions/test/idle?timeout_ms=150&max_wait_ms=5000&format=plain").await;
     let elapsed = start.elapsed();
 
     assert_eq!(status, 200);
@@ -215,20 +215,20 @@ async fn test_http_quiesce_waits_for_activity_to_stop() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn test_http_input_resets_quiescence_timer() {
+async fn test_http_input_resets_idle_timer() {
     let (state, _rx, activity, _parser_tx) = create_test_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
-    // Touch to mark current activity — the quiesce request will need to wait
+    // Touch to mark current activity -- the idle request will need to wait
     activity.touch();
 
-    // Start a quiesce request with a 200ms timeout
+    // Start an idle request with a 200ms timeout
     let addr_clone = addr;
-    let quiesce_task = tokio::spawn(async move {
+    let idle_task = tokio::spawn(async move {
         let start = std::time::Instant::now();
         let (status, _json) =
-            http_get(addr_clone, "/sessions/test/quiesce?timeout_ms=200&max_wait_ms=5000&format=plain").await;
+            http_get(addr_clone, "/sessions/test/idle?timeout_ms=200&max_wait_ms=5000&format=plain").await;
         (status, start.elapsed())
     });
 
@@ -250,7 +250,7 @@ async fn test_http_input_resets_quiescence_timer() {
     let resp = sender.send_request(req).await.expect("request");
     assert_eq!(resp.status().as_u16(), 204);
 
-    let (status, elapsed) = quiesce_task.await.unwrap();
+    let (status, elapsed) = idle_task.await.unwrap();
     assert_eq!(status, 200);
     // Should take at least 100ms (wait before input) + 200ms (timeout after input reset)
     assert!(
@@ -261,16 +261,16 @@ async fn test_http_input_resets_quiescence_timer() {
 }
 
 // ---------------------------------------------------------------------------
-// WebSocket await_quiesce tests
+// WebSocket await_idle tests
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn test_ws_await_quiesce_returns_sync_result() {
+async fn test_ws_await_idle_returns_sync_result() {
     let (state, _rx, _activity, _parser_tx) = create_test_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
-    // Wait for terminal to be quiet
+    // Wait for terminal to be idle
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Connect WebSocket
@@ -287,10 +287,10 @@ async fn test_ws_await_quiesce_returns_sync_result() {
     let connected: serde_json::Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
     assert_eq!(connected["connected"], true);
 
-    // Send await_quiesce
+    // Send await_idle
     let req = serde_json::json!({
         "id": 42,
-        "method": "await_quiesce",
+        "method": "await_idle",
         "params": {"timeout_ms": 100, "format": "plain"}
     });
     ws.send(Message::Text(req.to_string())).await.unwrap();
@@ -300,14 +300,14 @@ async fn test_ws_await_quiesce_returns_sync_result() {
     let resp: serde_json::Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
 
     assert_eq!(resp["id"], 42);
-    assert_eq!(resp["method"], "await_quiesce");
+    assert_eq!(resp["method"], "await_idle");
     assert!(resp.get("result").is_some(), "expected result, got: {:?}", resp);
     assert!(resp["result"].get("screen").is_some());
     assert!(resp["result"].get("scrollback_lines").is_some());
 }
 
 #[tokio::test]
-async fn test_ws_await_quiesce_timeout_error() {
+async fn test_ws_await_idle_timeout_error() {
     let (state, _rx, activity, _parser_tx) = create_test_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
@@ -332,10 +332,10 @@ async fn test_ws_await_quiesce_timeout_error() {
     // Read connected message
     let _ = ws.next().await.unwrap().unwrap();
 
-    // Send await_quiesce with short deadline
+    // Send await_idle with short deadline
     let req = serde_json::json!({
         "id": 1,
-        "method": "await_quiesce",
+        "method": "await_idle",
         "params": {"timeout_ms": 500, "max_wait_ms": 200}
     });
     ws.send(Message::Text(req.to_string())).await.unwrap();
@@ -347,16 +347,16 @@ async fn test_ws_await_quiesce_timeout_error() {
     touch_handle.abort();
 
     assert_eq!(resp["id"], 1);
-    assert_eq!(resp["method"], "await_quiesce");
-    assert_eq!(resp["error"]["code"], "quiesce_timeout");
+    assert_eq!(resp["method"], "await_idle");
+    assert_eq!(resp["error"]["code"], "idle_timeout");
 }
 
 // ---------------------------------------------------------------------------
-// WebSocket quiesce_ms subscription tests
+// WebSocket idle_timeout_ms subscription tests
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn test_ws_quiesce_ms_emits_sync_after_quiet() {
+async fn test_ws_idle_timeout_emits_running_then_idle() {
     let (state, _rx, activity, _parser_tx) = create_test_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
@@ -372,11 +372,11 @@ async fn test_ws_quiesce_ms_emits_sync_after_quiet() {
     // Read connected message
     let _ = ws.next().await.unwrap().unwrap();
 
-    // Subscribe with quiesce_ms
+    // Subscribe with idle_timeout_ms and activity events
     let req = serde_json::json!({
         "id": 1,
         "method": "subscribe",
-        "params": {"events": ["lines"], "quiesce_ms": 200, "format": "plain"}
+        "params": {"events": ["lines", "activity"], "idle_timeout_ms": 200, "format": "plain"}
     });
     ws.send(Message::Text(req.to_string())).await.unwrap();
 
@@ -390,28 +390,47 @@ async fn test_ws_quiesce_ms_emits_sync_after_quiet() {
     let event: serde_json::Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
     assert_eq!(event["event"], "sync");
 
+    // Read initial activity state event (should be idle since session just started)
+    let msg = ws.next().await.unwrap().unwrap();
+    let event: serde_json::Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
+    let initial_event = event["event"].as_str().unwrap();
+    // Initial state could be either idle or running depending on timing
+    assert!(
+        initial_event == "idle" || initial_event == "running",
+        "Expected initial idle or running event, got: {}",
+        initial_event
+    );
+
     // Now trigger activity then let it settle
     activity.touch();
     tokio::time::sleep(Duration::from_millis(50)).await;
     activity.touch();
 
-    // Wait for quiescence sync event (should arrive ~200ms after last touch)
+    // Wait for running and idle events
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
-    let mut got_quiesce_sync = false;
+    let mut got_running = false;
+    let mut got_idle = false;
 
-    while tokio::time::Instant::now() < deadline {
+    while tokio::time::Instant::now() < deadline && !got_idle {
         tokio::select! {
             msg = ws.next() => {
                 match msg {
                     Some(Ok(msg)) => {
                         if let Ok(text) = msg.to_text() {
                             if let Ok(event) = serde_json::from_str::<serde_json::Value>(text) {
-                                if event.get("event").and_then(|e| e.as_str()) == Some("sync") {
-                                    got_quiesce_sync = true;
-                                    // Verify it has screen data
-                                    assert!(event.get("screen").is_some());
-                                    assert!(event.get("scrollback_lines").is_some());
-                                    break;
+                                match event.get("event").and_then(|e| e.as_str()) {
+                                    Some("running") => {
+                                        got_running = true;
+                                        assert!(event.get("generation").is_some());
+                                    }
+                                    Some("idle") => {
+                                        got_idle = true;
+                                        // Verify it has screen data and generation
+                                        assert!(event.get("screen").is_some());
+                                        assert!(event.get("scrollback_lines").is_some());
+                                        assert!(event.get("generation").is_some());
+                                    }
+                                    _ => {} // ignore other events
                                 }
                             }
                         }
@@ -423,15 +442,49 @@ async fn test_ws_quiesce_ms_emits_sync_after_quiet() {
         }
     }
 
-    assert!(got_quiesce_sync, "Expected a quiescence sync event");
+    assert!(got_running, "Expected a running event after activity");
+    assert!(got_idle, "Expected an idle event after quiet period");
+}
+
+#[tokio::test]
+async fn test_ws_quiesce_ms_alias_still_works() {
+    // Verify backward compatibility: quiesce_ms alias is accepted
+    let (state, _rx, _activity, _parser_tx) = create_test_state();
+    let app = api::router(state, None);
+    let addr = start_server(app).await;
+
+    let (mut ws, _resp) =
+        tokio_tungstenite::connect_async(format!("ws://{}/sessions/test/ws/json", addr))
+            .await
+            .expect("WS connect");
+
+    use futures::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    // Read connected message
+    let _ = ws.next().await.unwrap().unwrap();
+
+    // Subscribe with old quiesce_ms field name
+    let req = serde_json::json!({
+        "id": 1,
+        "method": "subscribe",
+        "params": {"events": ["activity"], "quiesce_ms": 200, "format": "plain"}
+    });
+    ws.send(Message::Text(req.to_string())).await.unwrap();
+
+    // Read subscribe response — should succeed
+    let msg = ws.next().await.unwrap().unwrap();
+    let resp: serde_json::Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
+    assert_eq!(resp["method"], "subscribe");
+    assert!(resp["error"].is_null(), "subscribe should succeed with quiesce_ms alias");
 }
 
 // ---------------------------------------------------------------------------
-// HTTP /quiesce generation counter tests
+// HTTP /idle generation counter tests
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn test_http_quiesce_returns_generation() {
+async fn test_http_idle_returns_generation() {
     let (state, _rx, activity, _parser_tx) = create_test_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
@@ -439,7 +492,7 @@ async fn test_http_quiesce_returns_generation() {
     activity.touch();
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let (status, json) = http_get(addr, "/sessions/test/quiesce?timeout_ms=100&format=plain").await;
+    let (status, json) = http_get(addr, "/sessions/test/idle?timeout_ms=100&format=plain").await;
 
     assert_eq!(status, 200);
     assert!(
@@ -451,7 +504,7 @@ async fn test_http_quiesce_returns_generation() {
 }
 
 #[tokio::test]
-async fn test_http_quiesce_last_generation_prevents_storm() {
+async fn test_http_idle_last_generation_prevents_storm() {
     let (state, _rx, activity, _parser_tx) = create_test_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
@@ -462,7 +515,7 @@ async fn test_http_quiesce_last_generation_prevents_storm() {
 
     // First call: should return immediately with generation=1
     let start = std::time::Instant::now();
-    let (status, json) = http_get(addr, "/sessions/test/quiesce?timeout_ms=100&format=plain").await;
+    let (status, json) = http_get(addr, "/sessions/test/idle?timeout_ms=100&format=plain").await;
     assert_eq!(status, 200);
     assert_eq!(json["generation"], 1);
     assert!(start.elapsed() < Duration::from_millis(500));
@@ -477,14 +530,14 @@ async fn test_http_quiesce_last_generation_prevents_storm() {
     let start = std::time::Instant::now();
     let (status, json) = http_get(
         addr,
-        "/sessions/test/quiesce?timeout_ms=100&last_generation=1&format=plain",
+        "/sessions/test/idle?timeout_ms=100&last_generation=1&format=plain",
     )
     .await;
     let elapsed = start.elapsed();
 
     assert_eq!(status, 200);
     assert_eq!(json["generation"], 2);
-    // Should have waited ~200ms for new activity + ~100ms for quiescence
+    // Should have waited ~200ms for new activity + ~100ms for idle
     assert!(
         elapsed >= Duration::from_millis(250),
         "Expected >= 250ms, got {:?}",
@@ -493,7 +546,7 @@ async fn test_http_quiesce_last_generation_prevents_storm() {
 }
 
 #[tokio::test]
-async fn test_http_quiesce_last_generation_stale_returns_normally() {
+async fn test_http_idle_last_generation_stale_returns_normally() {
     let (state, _rx, activity, _parser_tx) = create_test_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
@@ -507,7 +560,7 @@ async fn test_http_quiesce_last_generation_stale_returns_normally() {
     let start = std::time::Instant::now();
     let (status, json) = http_get(
         addr,
-        "/sessions/test/quiesce?timeout_ms=100&last_generation=1&format=plain",
+        "/sessions/test/idle?timeout_ms=100&last_generation=1&format=plain",
     )
     .await;
 
@@ -520,7 +573,7 @@ async fn test_http_quiesce_last_generation_stale_returns_normally() {
 }
 
 #[tokio::test]
-async fn test_http_quiesce_last_generation_timeout() {
+async fn test_http_idle_last_generation_timeout() {
     let (state, _rx, _activity, _parser_tx) = create_test_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
@@ -528,21 +581,21 @@ async fn test_http_quiesce_last_generation_timeout() {
     // Terminal is idle at generation=0, no new activity will come
     let (status, json) = http_get(
         addr,
-        "/sessions/test/quiesce?timeout_ms=100&last_generation=0&max_wait_ms=300&format=plain",
+        "/sessions/test/idle?timeout_ms=100&last_generation=0&max_wait_ms=300&format=plain",
     )
     .await;
 
     // Should timeout because no new activity arrives
     assert_eq!(status, 408);
-    assert_eq!(json["error"]["code"], "quiesce_timeout");
+    assert_eq!(json["error"]["code"], "idle_timeout");
 }
 
 // ---------------------------------------------------------------------------
-// HTTP /quiesce fresh mode tests
+// HTTP /idle fresh mode tests
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn test_http_quiesce_fresh_always_waits() {
+async fn test_http_idle_fresh_always_waits() {
     let (state, _rx, _activity, _parser_tx) = create_test_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
@@ -553,14 +606,14 @@ async fn test_http_quiesce_fresh_always_waits() {
     let start = std::time::Instant::now();
     let (status, json) = http_get(
         addr,
-        "/sessions/test/quiesce?timeout_ms=200&fresh=true&format=plain",
+        "/sessions/test/idle?timeout_ms=200&fresh=true&format=plain",
     )
     .await;
     let elapsed = start.elapsed();
 
     assert_eq!(status, 200);
     assert!(json.get("generation").is_some());
-    // Should have waited at least 200ms even though already quiescent
+    // Should have waited at least 200ms even though already idle
     assert!(
         elapsed >= Duration::from_millis(150),
         "Expected >= 150ms for fresh mode, got {:?}",
@@ -569,7 +622,7 @@ async fn test_http_quiesce_fresh_always_waits() {
 }
 
 #[tokio::test]
-async fn test_http_quiesce_fresh_resets_on_activity() {
+async fn test_http_idle_fresh_resets_on_activity() {
     let (state, _rx, activity, _parser_tx) = create_test_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
@@ -586,7 +639,7 @@ async fn test_http_quiesce_fresh_resets_on_activity() {
     let start = std::time::Instant::now();
     let (status, _json) = http_get(
         addr,
-        "/sessions/test/quiesce?timeout_ms=200&fresh=true&format=plain",
+        "/sessions/test/idle?timeout_ms=200&fresh=true&format=plain",
     )
     .await;
     let elapsed = start.elapsed();
@@ -601,11 +654,11 @@ async fn test_http_quiesce_fresh_resets_on_activity() {
 }
 
 // ---------------------------------------------------------------------------
-// WebSocket await_quiesce generation counter tests
+// WebSocket await_idle generation counter tests
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn test_ws_await_quiesce_returns_generation() {
+async fn test_ws_await_idle_returns_generation() {
     let (state, _rx, activity, _parser_tx) = create_test_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
@@ -626,7 +679,7 @@ async fn test_ws_await_quiesce_returns_generation() {
 
     let req = serde_json::json!({
         "id": 1,
-        "method": "await_quiesce",
+        "method": "await_idle",
         "params": {"timeout_ms": 100, "format": "plain"}
     });
     ws.send(Message::Text(req.to_string())).await.unwrap();
@@ -640,7 +693,7 @@ async fn test_ws_await_quiesce_returns_generation() {
 }
 
 #[tokio::test]
-async fn test_ws_await_quiesce_last_generation_blocks() {
+async fn test_ws_await_idle_last_generation_blocks() {
     let (state, _rx, activity, _parser_tx) = create_test_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
@@ -666,10 +719,10 @@ async fn test_ws_await_quiesce_last_generation_blocks() {
         a.touch(); // generation = 2
     });
 
-    // Send await_quiesce with last_generation=1 — should block until generation changes
+    // Send await_idle with last_generation=1 -- should block until generation changes
     let req = serde_json::json!({
         "id": 2,
-        "method": "await_quiesce",
+        "method": "await_idle",
         "params": {"timeout_ms": 100, "last_generation": 1, "format": "plain"}
     });
     let start = std::time::Instant::now();
@@ -683,13 +736,13 @@ async fn test_ws_await_quiesce_last_generation_blocks() {
     assert_eq!(resp["result"]["generation"], 2);
     assert!(
         elapsed >= Duration::from_millis(250),
-        "Expected >= 250ms (wait for activity + quiescence), got {:?}",
+        "Expected >= 250ms (wait for activity + idle), got {:?}",
         elapsed
     );
 }
 
 // ---------------------------------------------------------------------------
-// Server-level GET /quiesce (any session) tests
+// Server-level GET /idle (any session) tests
 // ---------------------------------------------------------------------------
 
 /// Creates a test state with two sessions ("alpha" and "beta") and returns
@@ -748,13 +801,13 @@ fn create_multi_session_state() -> (api::AppState, ActivityTracker, ActivityTrac
 }
 
 #[tokio::test]
-async fn test_http_quiesce_any_returns_first_quiescent_session() {
+async fn test_http_idle_any_returns_first_idle_session() {
     let (state, _activity_a, _activity_b, _ptx_a, _ptx_b) = create_multi_session_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
     // Both sessions are idle, so one should be returned
-    let (status, json) = http_get(addr, "/quiesce?timeout_ms=100&format=plain").await;
+    let (status, json) = http_get(addr, "/idle?timeout_ms=100&format=plain").await;
 
     assert_eq!(status, 200);
     let session = json["session"].as_str().expect("response should have session field");
@@ -769,7 +822,7 @@ async fn test_http_quiesce_any_returns_first_quiescent_session() {
 }
 
 #[tokio::test]
-async fn test_http_quiesce_any_returns_408_when_all_busy() {
+async fn test_http_idle_any_returns_408_when_all_busy() {
     let (state, activity_a, activity_b, _ptx_a, _ptx_b) = create_multi_session_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
@@ -785,15 +838,15 @@ async fn test_http_quiesce_any_returns_408_when_all_busy() {
         }
     });
 
-    let (status, json) = http_get(addr, "/quiesce?timeout_ms=500&max_wait_ms=200&format=plain").await;
+    let (status, json) = http_get(addr, "/idle?timeout_ms=500&max_wait_ms=200&format=plain").await;
     touch_handle.abort();
 
     assert_eq!(status, 408);
-    assert_eq!(json["error"]["code"], "quiesce_timeout");
+    assert_eq!(json["error"]["code"], "idle_timeout");
 }
 
 #[tokio::test]
-async fn test_http_quiesce_any_picks_quiet_session_while_other_busy() {
+async fn test_http_idle_any_picks_idle_session_while_other_busy() {
     let (state, activity_a, _activity_b, _ptx_a, _ptx_b) = create_multi_session_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
@@ -807,10 +860,10 @@ async fn test_http_quiesce_any_picks_quiet_session_while_other_busy() {
         }
     });
 
-    // Wait a bit so beta becomes clearly quiescent
+    // Wait a bit so beta becomes clearly idle
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let (status, json) = http_get(addr, "/quiesce?timeout_ms=100&format=plain").await;
+    let (status, json) = http_get(addr, "/idle?timeout_ms=100&format=plain").await;
     touch_handle.abort();
 
     assert_eq!(status, 200);
@@ -818,7 +871,7 @@ async fn test_http_quiesce_any_picks_quiet_session_while_other_busy() {
 }
 
 #[tokio::test]
-async fn test_http_quiesce_any_last_generation_skips_stale_session() {
+async fn test_http_idle_any_last_generation_skips_stale_session() {
     let (state, activity_a, activity_b, _ptx_a, _ptx_b) = create_multi_session_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
@@ -828,7 +881,7 @@ async fn test_http_quiesce_any_last_generation_skips_stale_session() {
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // First call: should return one of them (both idle)
-    let (status, json) = http_get(addr, "/quiesce?timeout_ms=100&format=plain").await;
+    let (status, json) = http_get(addr, "/idle?timeout_ms=100&format=plain").await;
     assert_eq!(status, 200);
     let first_session = json["session"].as_str().unwrap().to_string();
     let first_gen = json["generation"].as_u64().unwrap();
@@ -848,7 +901,7 @@ async fn test_http_quiesce_any_last_generation_skips_stale_session() {
     let (status, json) = http_get(
         addr,
         &format!(
-            "/quiesce?timeout_ms=100&last_session={}&last_generation={}&max_wait_ms=3000&format=plain",
+            "/idle?timeout_ms=100&last_session={}&last_generation={}&max_wait_ms=3000&format=plain",
             first_session, first_gen
         ),
     )
@@ -862,7 +915,7 @@ async fn test_http_quiesce_any_last_generation_skips_stale_session() {
 }
 
 #[tokio::test]
-async fn test_http_quiesce_any_fresh_always_waits() {
+async fn test_http_idle_any_fresh_always_waits() {
     let (state, _activity_a, _activity_b, _ptx_a, _ptx_b) = create_multi_session_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
@@ -871,13 +924,13 @@ async fn test_http_quiesce_any_fresh_always_waits() {
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     let start = std::time::Instant::now();
-    let (status, json) = http_get(addr, "/quiesce?timeout_ms=200&fresh=true&format=plain").await;
+    let (status, json) = http_get(addr, "/idle?timeout_ms=200&fresh=true&format=plain").await;
     let elapsed = start.elapsed();
 
     assert_eq!(status, 200);
     assert!(json.get("session").is_some());
     assert!(json.get("generation").is_some());
-    // Should wait at least 200ms even though all sessions already quiescent
+    // Should wait at least 200ms even though all sessions already idle
     assert!(
         elapsed >= Duration::from_millis(150),
         "Expected >= 150ms for fresh mode, got {:?}",
@@ -886,7 +939,7 @@ async fn test_http_quiesce_any_fresh_always_waits() {
 }
 
 #[tokio::test]
-async fn test_http_quiesce_any_no_sessions_returns_404() {
+async fn test_http_idle_any_no_sessions_returns_404() {
     let state = api::AppState {
         sessions: SessionRegistry::new(),
         shutdown: ShutdownCoordinator::new(),
@@ -896,8 +949,343 @@ async fn test_http_quiesce_any_no_sessions_returns_404() {
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
-    let (status, json) = http_get(addr, "/quiesce?timeout_ms=100&format=plain").await;
+    let (status, json) = http_get(addr, "/idle?timeout_ms=100&format=plain").await;
 
     assert_eq!(status, 404);
     assert_eq!(json["error"]["code"], "no_sessions");
+}
+
+// ---------------------------------------------------------------------------
+// HTTP /sessions and /sessions/:name/screen include last_activity_ms
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_http_session_info_includes_last_activity_ms() {
+    let (state, _rx, _activity, _parser_tx) = create_test_state();
+    let app = api::router(state, None);
+    let addr = start_server(app).await;
+
+    let (status, json) = http_get(addr, "/sessions").await;
+    assert_eq!(status, 200);
+
+    let sessions = json.as_array().expect("response should be an array");
+    assert!(!sessions.is_empty(), "expected at least one session");
+
+    for session in sessions {
+        assert!(
+            session.get("last_activity_ms").is_some(),
+            "session info should have last_activity_ms field, got: {:?}",
+            session
+        );
+        assert!(
+            session["last_activity_ms"].is_number(),
+            "last_activity_ms should be a number, got: {:?}",
+            session["last_activity_ms"]
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_ws_subscribe_activity_initial_idle() {
+    // A session that has been idle longer than idle_timeout_ms should emit
+    // an immediate Idle event (with screen data) right after subscribe.
+    let (state, _rx, _activity, _parser_tx) = create_test_state();
+    let app = api::router(state, None);
+    let addr = start_server(app).await;
+
+    // Let the session sit idle for longer than the timeout we'll subscribe with.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let (mut ws, _resp) =
+        tokio_tungstenite::connect_async(format!("ws://{}/sessions/test/ws/json", addr))
+            .await
+            .expect("WS connect");
+
+    use futures::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    // Read connected message
+    let _ = ws.next().await.unwrap().unwrap();
+
+    // Subscribe with idle_timeout_ms shorter than how long the session has been idle
+    let req = serde_json::json!({
+        "id": 1,
+        "method": "subscribe",
+        "params": {"events": ["activity"], "idle_timeout_ms": 200, "format": "plain"}
+    });
+    ws.send(Message::Text(req.to_string())).await.unwrap();
+
+    // Read subscribe response
+    let msg = ws.next().await.unwrap().unwrap();
+    let resp: serde_json::Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
+    assert_eq!(resp["method"], "subscribe");
+
+    // Read sync event
+    let msg = ws.next().await.unwrap().unwrap();
+    let event: serde_json::Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
+    assert_eq!(event["event"], "sync");
+
+    // The very next event should be an initial idle event
+    let msg = ws.next().await.unwrap().unwrap();
+    let event: serde_json::Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
+    assert_eq!(event["event"], "idle", "Expected initial idle event, got: {}", event);
+    assert!(event.get("generation").is_some());
+    assert!(event.get("screen").is_some());
+    assert!(event.get("scrollback_lines").is_some());
+}
+
+#[tokio::test]
+async fn test_ws_subscribe_activity_initial_running() {
+    // A session with very recent activity should emit an immediate Running
+    // event right after subscribe.
+    let (state, _rx, activity, _parser_tx) = create_test_state();
+    let app = api::router(state, None);
+    let addr = start_server(app).await;
+
+    let (mut ws, _resp) =
+        tokio_tungstenite::connect_async(format!("ws://{}/sessions/test/ws/json", addr))
+            .await
+            .expect("WS connect");
+
+    use futures::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    // Touch activity right before subscribing so last_activity_ms < idle_timeout_ms
+    activity.touch();
+
+    // Read connected message
+    let _ = ws.next().await.unwrap().unwrap();
+
+    // Subscribe with a long idle_timeout_ms so the session is definitely "running"
+    let req = serde_json::json!({
+        "id": 1,
+        "method": "subscribe",
+        "params": {"events": ["activity"], "idle_timeout_ms": 5000, "format": "plain"}
+    });
+    ws.send(Message::Text(req.to_string())).await.unwrap();
+
+    // Read subscribe response
+    let msg = ws.next().await.unwrap().unwrap();
+    let resp: serde_json::Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
+    assert_eq!(resp["method"], "subscribe");
+
+    // Read sync event
+    let msg = ws.next().await.unwrap().unwrap();
+    let event: serde_json::Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
+    assert_eq!(event["event"], "sync");
+
+    // The very next event should be an initial running event
+    let msg = ws.next().await.unwrap().unwrap();
+    let event: serde_json::Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
+    assert_eq!(event["event"], "running", "Expected initial running event, got: {}", event);
+    assert!(event.get("generation").is_some());
+    // Running events should NOT have screen data
+    assert!(event.get("screen").is_none());
+}
+
+#[tokio::test]
+async fn test_ws_subscribe_activity_multiple_cycles() {
+    // Verify that two activity→idle cycles produce two Running+Idle pairs.
+    let (state, _rx, activity, _parser_tx) = create_test_state();
+    let app = api::router(state, None);
+    let addr = start_server(app).await;
+
+    let (mut ws, _resp) =
+        tokio_tungstenite::connect_async(format!("ws://{}/sessions/test/ws/json", addr))
+            .await
+            .expect("WS connect");
+
+    use futures::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    // Read connected message
+    let _ = ws.next().await.unwrap().unwrap();
+
+    // Subscribe with a short idle timeout
+    let req = serde_json::json!({
+        "id": 1,
+        "method": "subscribe",
+        "params": {"events": ["activity"], "idle_timeout_ms": 150, "format": "plain"}
+    });
+    ws.send(Message::Text(req.to_string())).await.unwrap();
+
+    // Read subscribe response
+    let _ = ws.next().await.unwrap().unwrap();
+    // Read sync event
+    let _ = ws.next().await.unwrap().unwrap();
+    // Read initial activity state event
+    let _ = ws.next().await.unwrap().unwrap();
+
+    // Collect activity events until we see an idle event (one cycle)
+    async fn collect_until_idle(
+        ws: &mut tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+    ) -> Vec<String> {
+        use futures::StreamExt;
+        let mut events = Vec::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        while tokio::time::Instant::now() < deadline {
+            tokio::select! {
+                msg = ws.next() => {
+                    match msg {
+                        Some(Ok(msg)) => {
+                            if let Ok(text) = msg.to_text() {
+                                if let Ok(event) = serde_json::from_str::<serde_json::Value>(text) {
+                                    if let Some(name) = event.get("event").and_then(|e| e.as_str()) {
+                                        if name == "running" || name == "idle" {
+                                            events.push(name.to_string());
+                                            if name == "idle" {
+                                                return events;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        _ => break,
+                    }
+                }
+                _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+            }
+        }
+        events
+    }
+
+    // Cycle 1: trigger activity, wait for Running + Idle
+    activity.touch();
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    activity.touch(); // second touch to ensure activity is detected
+    let cycle1 = collect_until_idle(&mut ws).await;
+    assert!(
+        cycle1.contains(&"running".to_string()),
+        "Cycle 1: expected Running event, got: {:?}", cycle1
+    );
+    assert!(
+        cycle1.last() == Some(&"idle".to_string()),
+        "Cycle 1: expected Idle event at end, got: {:?}", cycle1
+    );
+
+    // Cycle 2: trigger activity again, wait for Running + Idle
+    activity.touch();
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    activity.touch();
+    let cycle2 = collect_until_idle(&mut ws).await;
+    assert!(
+        cycle2.contains(&"running".to_string()),
+        "Cycle 2: expected Running event, got: {:?}", cycle2
+    );
+    assert!(
+        cycle2.last() == Some(&"idle".to_string()),
+        "Cycle 2: expected Idle event at end, got: {:?}", cycle2
+    );
+}
+
+#[tokio::test]
+async fn test_ws_subscribe_activity_idle_to_running_transition() {
+    // After the session becomes idle, new activity should emit a Running
+    // event, demonstrating the idle→running transition.
+    let (state, _rx, activity, _parser_tx) = create_test_state();
+    let app = api::router(state, None);
+    let addr = start_server(app).await;
+
+    let (mut ws, _resp) =
+        tokio_tungstenite::connect_async(format!("ws://{}/sessions/test/ws/json", addr))
+            .await
+            .expect("WS connect");
+
+    use futures::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    // Read connected message
+    let _ = ws.next().await.unwrap().unwrap();
+
+    // Subscribe with a short idle timeout
+    let req = serde_json::json!({
+        "id": 1,
+        "method": "subscribe",
+        "params": {"events": ["activity"], "idle_timeout_ms": 150, "format": "plain"}
+    });
+    ws.send(Message::Text(req.to_string())).await.unwrap();
+
+    // Read subscribe response, sync event, and initial activity state
+    let _ = ws.next().await.unwrap().unwrap();
+    let _ = ws.next().await.unwrap().unwrap();
+    let _ = ws.next().await.unwrap().unwrap();
+
+    // Step 1: Trigger activity and wait until we see Idle (Running first, then Idle)
+    activity.touch();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    let mut reached_idle = false;
+    while tokio::time::Instant::now() < deadline && !reached_idle {
+        tokio::select! {
+            msg = ws.next() => {
+                match msg {
+                    Some(Ok(msg)) => {
+                        if let Ok(text) = msg.to_text() {
+                            if let Ok(event) = serde_json::from_str::<serde_json::Value>(text) {
+                                if event.get("event").and_then(|e| e.as_str()) == Some("idle") {
+                                    reached_idle = true;
+                                }
+                            }
+                        }
+                    }
+                    _ => break,
+                }
+            }
+            _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+        }
+    }
+    assert!(reached_idle, "Session should have become idle");
+
+    // Step 2: Now trigger new activity — the server should emit Running
+    activity.touch();
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    let mut got_running_after_idle = false;
+    while tokio::time::Instant::now() < deadline && !got_running_after_idle {
+        tokio::select! {
+            msg = ws.next() => {
+                match msg {
+                    Some(Ok(msg)) => {
+                        if let Ok(text) = msg.to_text() {
+                            if let Ok(event) = serde_json::from_str::<serde_json::Value>(text) {
+                                if event.get("event").and_then(|e| e.as_str()) == Some("running") {
+                                    got_running_after_idle = true;
+                                    assert!(event.get("generation").is_some());
+                                }
+                            }
+                        }
+                    }
+                    _ => break,
+                }
+            }
+            _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+        }
+    }
+    assert!(
+        got_running_after_idle,
+        "Expected Running event after new activity following idle state"
+    );
+}
+
+#[tokio::test]
+async fn test_http_screen_includes_last_activity_ms() {
+    let (state, _rx, _activity, _parser_tx) = create_test_state();
+    let app = api::router(state, None);
+    let addr = start_server(app).await;
+
+    let (status, json) = http_get(addr, "/sessions/test/screen?format=plain").await;
+    assert_eq!(status, 200);
+
+    assert!(
+        json.get("last_activity_ms").is_some(),
+        "screen response should have last_activity_ms field, got: {:?}",
+        json
+    );
+    assert!(
+        json["last_activity_ms"].is_number(),
+        "last_activity_ms should be a number, got: {:?}",
+        json["last_activity_ms"]
+    );
 }

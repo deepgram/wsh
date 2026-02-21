@@ -21,7 +21,7 @@ import {
   removeScreen,
   getScreen,
 } from "./state/terminal";
-import { selectedGroups, groups, activeGroupSessions } from "./state/groups";
+import { selectedGroups, groups, activeGroupSessions, sessionStatuses } from "./state/groups";
 import { LayoutShell } from "./components/LayoutShell";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { CommandPalette } from "./components/CommandPalette";
@@ -294,12 +294,13 @@ async function setupSession(
 
   const unsub = client.subscribe(
     name,
-    ["lines", "cursor", "mode"],
+    ["lines", "cursor", "mode", "activity"],
     (event) => {
       // Use event.session if available (handles renames without re-subscribe)
       const target = (event.session as string) ?? name;
       handleEvent(client, target, event);
     },
+    2000, // idle_timeout_ms
   );
   unsubscribes.set(name, unsub);
 }
@@ -487,5 +488,19 @@ function handleEvent(client: WshClient, session: string, raw: any): void {
         console.error(`Failed to re-fetch screen after reset for "${session}":`, e);
       });
       break;
+
+    case "idle": {
+      const updated = new Map(sessionStatuses.value);
+      updated.set(session, "idle");
+      sessionStatuses.value = updated;
+      break;
+    }
+
+    case "running": {
+      const updated = new Map(sessionStatuses.value);
+      updated.set(session, "running");
+      sessionStatuses.value = updated;
+      break;
+    }
   }
 }

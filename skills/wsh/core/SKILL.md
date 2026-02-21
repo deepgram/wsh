@@ -4,7 +4,7 @@ description: >
   Background knowledge about the wsh terminal API. Loaded automatically
   when wsh is available. Teaches how to interact with terminal sessions
   programmatically — sending input, reading screen output, waiting for
-  quiescence, creating overlays and panels, managing sessions.
+  idle detection, creating overlays and panels, managing sessions.
 user-invocable: false
 ---
 
@@ -62,12 +62,12 @@ bash `$'...'` quoting for control characters.
 
 Returns 204 (no content) on success.
 
-### Wait for Quiescence
+### Wait for Idle
 Block until the terminal has been idle for `timeout_ms` milliseconds.
 This is a hint that the program may be idle — it could also just be
 working without producing output.
 
-    curl -s http://localhost:8080/sessions/default/quiesce?timeout_ms=2000
+    curl -s http://localhost:8080/sessions/default/idle?timeout_ms=2000
 
 Returns the current screen snapshot plus a `generation` counter once
 idle. Returns 408 if the terminal doesn't settle within 30 seconds
@@ -76,12 +76,12 @@ idle. Returns 408 if the terminal doesn't settle within 30 seconds
 When polling repeatedly, pass back the `generation` from the previous
 response as `last_generation` to avoid busy-loop storms:
 
-    curl -s 'http://localhost:8080/sessions/default/quiesce?timeout_ms=2000&last_generation=42'
+    curl -s 'http://localhost:8080/sessions/default/idle?timeout_ms=2000&last_generation=42'
 
 Or use `fresh=true` to always observe real silence (simpler, but
 always waits at least `timeout_ms`):
 
-    curl -s 'http://localhost:8080/sessions/default/quiesce?timeout_ms=2000&fresh=true'
+    curl -s 'http://localhost:8080/sessions/default/idle?timeout_ms=2000&fresh=true'
 
 ### Read the Screen
 Get the current visible screen contents.
@@ -115,7 +115,7 @@ After connecting, subscribe to the events you care about:
     {"id": 1, "method": "subscribe", "params": {
       "events": ["lines", "input"],
       "format": "plain",
-      "quiesce_ms": 1000
+      "idle_timeout_ms": 1000
     }}
 
 Available event types:
@@ -126,8 +126,8 @@ Available event types:
 - `input` — keyboard input (essential for input capture)
 
 The server pushes events as they happen. It also sends
-periodic `sync` snapshots when the terminal goes quiet
-(controlled by `quiesce_ms`).
+periodic `sync` snapshots when the terminal goes idle
+(controlled by `idle_timeout_ms`).
 
 For a different session, replace `default` with the session name:
 
@@ -303,7 +303,7 @@ All the primitives work per-session by adding `/sessions/:name/`
 as a prefix:
 
     curl -s -X POST http://localhost:8080/sessions/build/input -d $'cargo test\n'
-    curl -s http://localhost:8080/sessions/build/quiesce?timeout_ms=2000
+    curl -s http://localhost:8080/sessions/build/idle?timeout_ms=2000
     curl -s http://localhost:8080/sessions/build/screen?format=plain
 
 Overlays, panels, and input capture are also per-session.
@@ -323,24 +323,24 @@ Returns only sessions that have at least one of the specified tags
 
 Tags can be added and removed alongside a rename in a single PATCH.
 
-### Wait for Quiescence on Any Session
-You can race quiescence across all sessions (or a tag-filtered
+### Wait for Idle on Any Session
+You can race idle detection across all sessions (or a tag-filtered
 subset):
 
-    curl -s 'http://localhost:8080/quiesce?timeout_ms=2000&format=plain'
+    curl -s 'http://localhost:8080/idle?timeout_ms=2000&format=plain'
 
-Returns the first session to become quiescent, including its name:
+Returns the first session to become idle, including its name:
 
     {"session": "build", "screen": {...}, "scrollback_lines": 42, "generation": 7}
 
 To avoid re-returning the same session, pass `last_session` and
 `last_generation` from the previous response:
 
-    curl -s 'http://localhost:8080/quiesce?timeout_ms=2000&last_session=build&last_generation=7'
+    curl -s 'http://localhost:8080/idle?timeout_ms=2000&last_session=build&last_generation=7'
 
-To scope quiescence to specific tags:
+To scope idle detection to specific tags:
 
-    curl -s 'http://localhost:8080/quiesce?timeout_ms=2000&tag=build'
+    curl -s 'http://localhost:8080/idle?timeout_ms=2000&tag=build'
 
 Returns 404 (`no_sessions`) if no sessions exist. Returns 408 if no
 session settles within `max_wait_ms`.

@@ -8,7 +8,7 @@
 //! - Rename preserves tags
 //! - Multiple sessions with tag filter (union semantics)
 //! - Empty tag filter returns all sessions
-//! - Group quiescence filtered by tag
+//! - Group idle filtered by tag
 
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -536,11 +536,11 @@ async fn test_rename_and_add_tags_in_single_patch() {
 }
 
 // ---------------------------------------------------------------------------
-// Test 9: Group quiescence with tag filter
+// Test 9: Group idle with tag filter
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn test_group_quiesce_with_tag_filter() {
+async fn test_group_idle_with_tag_filter() {
     let app = create_empty_test_app();
     let addr = start_test_server(app).await;
     let client = reqwest::Client::new();
@@ -566,9 +566,9 @@ async fn test_group_quiesce_with_tag_filter() {
     // Wait for both sessions to settle
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    // Group quiesce with tag=build — should only consider q1
+    // Group idle with tag=build — should only consider q1
     let resp = client
-        .get(format!("{}/quiesce?timeout_ms=100&tag=build&format=plain", base))
+        .get(format!("{}/idle?timeout_ms=100&tag=build&format=plain", base))
         .send()
         .await
         .unwrap();
@@ -576,9 +576,9 @@ async fn test_group_quiesce_with_tag_filter() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["session"], "q1", "Should pick session with tag 'build'");
 
-    // Group quiesce with tag=test — should only consider q2
+    // Group idle with tag=test — should only consider q2
     let resp = client
-        .get(format!("{}/quiesce?timeout_ms=100&tag=test&format=plain", base))
+        .get(format!("{}/idle?timeout_ms=100&tag=test&format=plain", base))
         .send()
         .await
         .unwrap();
@@ -586,9 +586,9 @@ async fn test_group_quiesce_with_tag_filter() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["session"], "q2", "Should pick session with tag 'test'");
 
-    // Group quiesce with tag=nonexistent — should return 404 (no sessions match)
+    // Group idle with tag=nonexistent — should return 404 (no sessions match)
     let resp = client
-        .get(format!("{}/quiesce?timeout_ms=100&tag=nonexistent&format=plain", base))
+        .get(format!("{}/idle?timeout_ms=100&tag=nonexistent&format=plain", base))
         .send()
         .await
         .unwrap();

@@ -110,7 +110,7 @@ them for completion. Tag them for easy group operations:
 
     # Poll each for completion
     for each session:
-        wait for quiescence
+        wait for idle
         read screen
         check for shell prompt (done) or still running
 
@@ -123,7 +123,7 @@ have to wait for one to finish before checking another.
 
 **Best approach — wait for any session (with tag filter):**
 
-    wait for quiescence on sessions tagged "ci" (timeout 1000ms)
+    wait for idle on sessions tagged "ci" (timeout 1000ms)
     # returns the name of whichever session settled first
     # read its screen, check if done
     # repeat with last_session + last_generation to avoid
@@ -135,9 +135,9 @@ filter ensures unrelated sessions don't interfere.
 
 **Alternative — poll round-robin:**
 
-    quiesce test-unit (short timeout, 1000ms, fresh=true)
-    quiesce test-e2e (short timeout, 1000ms, fresh=true)
-    quiesce lint (short timeout, 1000ms, fresh=true)
+    await idle test-unit (short timeout, 1000ms, fresh=true)
+    await idle test-e2e (short timeout, 1000ms, fresh=true)
+    await idle lint (short timeout, 1000ms, fresh=true)
     # repeat until all show shell prompts
     # fresh=true prevents busy-loop storms when a session is idle
 
@@ -197,14 +197,14 @@ naming scheme so you can iterate over them later:
 
 Tags let you group related sessions for bulk operations.
 Tag all test sessions with "test", all build sessions with
-"build", then list or wait-for-quiescence on just that group:
+"build", then list or wait-for-idle on just that group:
 
     create "test-unit" tagged: test
     create "test-e2e" tagged: test
     create "lint" tagged: test
 
     list sessions tagged "test"
-    wait for quiescence on sessions tagged "test"
+    wait for idle on sessions tagged "test"
 
 Tags can be added and removed after creation, so you can
 re-categorize sessions as their role changes.
