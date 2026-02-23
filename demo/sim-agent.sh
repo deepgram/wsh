@@ -201,6 +201,33 @@ respond_test() {
   stream_response "${lines[@]}"
 }
 
+respond_lint() {
+  local lines=(
+    "${cyan}●${reset} ${white}Reviewing lint results...${reset}"
+    ""
+    "  ${white}Found ${yellow_bold}3 warnings${reset}${white}:${reset}"
+    "  ${dim}  1. unused variable \`buf\` in parser/decode.rs${reset}"
+    "  ${dim}  2. needless borrow in session.rs${reset}"
+    "  ${dim}  3. collapsible if in api/handlers.rs${reset}"
+    ""
+    "  ${white}All are low-severity style issues. Safe to proceed.${reset}"
+  )
+  stream_response "${lines[@]}"
+}
+
+respond_results() {
+  local lines=(
+    "${cyan}●${reset} ${white}Reviewing all results...${reset}"
+    ""
+    "  ${green_bold}Build${reset}${white}:  passed (0 errors)${reset}"
+    "  ${green_bold}Tests${reset}${white}:  22/22 passed${reset}"
+    "  ${yellow_bold}Lint${reset}${white}:   3 warnings (non-blocking)${reset}"
+    ""
+    "  ${white}All checks passed. ${green_bold}Ready to deploy.${reset}"
+  )
+  stream_response "${lines[@]}"
+}
+
 respond_default() {
   local lines=(
     "${cyan}●${reset} ${white}Here's what I can help with:${reset}"
@@ -229,7 +256,11 @@ handle_enter() {
   local lower_input
   lower_input=$(echo "$input" | tr '[:upper:]' '[:lower:]')
 
-  if [[ "$lower_input" == *"build"* ]]; then
+  if [[ "$lower_input" == *"lint"* || "$lower_input" == *"clippy"* ]]; then
+    respond_lint
+  elif [[ "$lower_input" == *"result"* || "$lower_input" == *"summary"* || "$lower_input" == *"status"* ]]; then
+    respond_results
+  elif [[ "$lower_input" == *"build"* ]]; then
     respond_build
   elif [[ "$lower_input" == *"test"* ]]; then
     respond_test

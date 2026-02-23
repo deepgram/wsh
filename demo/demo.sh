@@ -172,9 +172,57 @@ wait_idle test
 narrate "Tests complete — adding overlay"
 add_overlay test "✓ 22 passed, 0 failed" green
 
-# ── Beat 6: Final hold ─────────────────────────────────────────
+# ── Beat 6: Pause for grid view ───────────────────────────────
 
-narrate "Done. All sessions visible in grid view."
+narrate "Grid view — all 4 sessions live."
+delay 3
+
+# ═══════════════════════════════════════════════
+#  PHASE 2 — Queue View
+# ═══════════════════════════════════════════════
+
+printf '\n'
+narrate ">>> Switch to queue view now (press q in the browser) <<<"
+delay 3
+
+# ── Beat 7: Kick off parallel work ───────────────────────────
+
+narrate "Running lint + integration tests in parallel..."
+send_input build "SPEED=$SPEED $SCRIPT_DIR/sim-lint.sh"$'\n'
+send_input test "SPEED=$SPEED $SCRIPT_DIR/sim-test.sh"$'\n'
+
+# ── Beat 8: Agent reviews lint ───────────────────────────────
+
+narrate "Agent: checking lint results..."
+type_slowly agent "review the lint warnings"
+send_input agent $'\n'
+delay 3
+
+# ── Beat 9: Staggered completions into queue ─────────────────
+
+narrate "Waiting for lint to complete..."
+wait_idle build
+add_overlay build "✓ 3 warnings (non-blocking)" yellow
+delay 1
+
+narrate "Waiting for integration tests..."
+wait_idle test
+add_overlay test "✓ 22 passed, 0 failed" green
+delay 1
+
+# ── Beat 10: Agent final summary ─────────────────────────────
+
+narrate "Agent: summarizing all results..."
+type_slowly agent "give me the full status"
+send_input agent $'\n'
+delay 4
+
+add_overlay agent "✓ All checks passed" green
+delay 2
+
+# ── Beat 11: Final hold ──────────────────────────────────────
+
+narrate "Done."
 
 delay 3
 
