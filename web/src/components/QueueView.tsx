@@ -61,6 +61,12 @@ export function QueueView({ sessions, groupTag, client }: QueueViewProps) {
         enqueueSession(groupTag, s);
       } else if (current !== "idle" && prev === "idle") {
         removeQueueEntry(groupTag, s);
+        // Pin the currently viewed session so it doesn't vanish when it
+        // transitions to running (e.g. user typed into it). It moves to
+        // the running section visually but stays selected.
+        if (s === currentSession) {
+          setSelectedSession(s);
+        }
       }
     }
     const updated = new Map<string, string>();
