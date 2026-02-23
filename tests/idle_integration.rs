@@ -390,7 +390,7 @@ async fn test_ws_idle_timeout_emits_running_then_idle() {
     let event: serde_json::Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
     assert_eq!(event["event"], "sync");
 
-    // Read initial activity state event (should be idle since session just started)
+    // Read initial activity state event
     let msg = ws.next().await.unwrap().unwrap();
     let event: serde_json::Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
     let initial_event = event["event"].as_str().unwrap();
@@ -401,7 +401,31 @@ async fn test_ws_idle_timeout_emits_running_then_idle() {
         initial_event
     );
 
-    // Now trigger activity then let it settle
+    // Wait for the monitoring task to settle into the main loop by draining
+    // any pending events. If the initial state was "running", the monitoring
+    // task will emit an idle event once the session goes quiet.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    while tokio::time::Instant::now() < deadline {
+        tokio::select! {
+            msg = ws.next() => {
+                match msg {
+                    Some(Ok(msg)) => {
+                        if let Ok(text) = msg.to_text() {
+                            if let Ok(ev) = serde_json::from_str::<serde_json::Value>(text) {
+                                if ev.get("event").and_then(|e| e.as_str()) == Some("idle") {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    _ => break,
+                }
+            }
+            _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+        }
+    }
+
+    // Now trigger activity after the monitoring task is in its main loop
     activity.touch();
     tokio::time::sleep(Duration::from_millis(50)).await;
     activity.touch();
@@ -1115,6 +1139,32 @@ async fn test_ws_subscribe_activity_multiple_cycles() {
     let _ = ws.next().await.unwrap().unwrap();
     // Read initial activity state event
     let _ = ws.next().await.unwrap().unwrap();
+
+    // Wait for the monitoring task to settle into its main loop. If the
+    // initial state was "running", the monitoring task will emit an idle
+    // event once the session goes quiet. We drain events until we see idle.
+    {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        while tokio::time::Instant::now() < deadline {
+            tokio::select! {
+                msg = ws.next() => {
+                    match msg {
+                        Some(Ok(msg)) => {
+                            if let Ok(text) = msg.to_text() {
+                                if let Ok(ev) = serde_json::from_str::<serde_json::Value>(text) {
+                                    if ev.get("event").and_then(|e| e.as_str()) == Some("idle") {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        _ => break,
+                    }
+                }
+                _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+            }
+        }
+    }
 
     // Collect activity events until we see an idle event (one cycle)
     async fn collect_until_idle(

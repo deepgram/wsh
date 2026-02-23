@@ -593,6 +593,47 @@ async fn handle_ws_json(
 
                                         activity_sub_handle = Some(tokio::spawn(async move {
                                             let mut watch_rx = activity.subscribe();
+
+                                            // If the session is currently active at subscribe
+                                            // time, first wait for it to go idle. The initial
+                                            // activity state code already sent Running to the
+                                            // client, so we just need to detect the idle
+                                            // transition. Without this, the main loop starts at
+                                            // changed().await which never fires if no new
+                                            // touches arrive after subscribe.
+                                            //
+                                            // We inline the idle wait using watch_rx rather than
+                                            // calling wait_for_idle (which creates a separate
+                                            // receiver) to ensure the same receiver tracks all
+                                            // activity throughout the task's lifetime.
+                                            if activity.last_activity_ms() < timeout.as_millis() as u64 {
+                                                loop {
+                                                    let last = *watch_rx.borrow_and_update();
+                                                    let elapsed = last.elapsed();
+                                                    if elapsed >= timeout {
+                                                        break;
+                                                    }
+                                                    let remaining = timeout - elapsed;
+                                                    tokio::select! {
+                                                        _ = tokio::time::sleep(remaining) => {
+                                                            let last = *watch_rx.borrow_and_update();
+                                                            if last.elapsed() >= timeout {
+                                                                break;
+                                                            }
+                                                        }
+                                                        res = watch_rx.changed() => {
+                                                            if res.is_err() {
+                                                                return;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                let gen = activity.generation();
+                                                if tx.send(ActivityStateChange::Idle { generation: gen }).await.is_err() {
+                                                    return;
+                                                }
+                                            }
+
                                             loop {
                                                 // Wait for activity → emit Running
                                                 if watch_rx.changed().await.is_err() {
@@ -1824,6 +1865,70 @@ async fn handle_server_ws_request(
                     let activity_format = params.format;
                     Some(tokio::spawn(async move {
                         let mut watch_rx = activity.subscribe();
+
+                        // If the session is currently active at subscribe
+                        // time, first wait for it to go idle using the same
+                        // watch_rx. This ensures we don't miss activity that
+                        // arrives during the wait.
+                        if activity.last_activity_ms() < timeout.as_millis() as u64 {
+                            loop {
+                                let last = *watch_rx.borrow_and_update();
+                                let elapsed = last.elapsed();
+                                if elapsed >= timeout {
+                                    break;
+                                }
+                                let remaining = timeout - elapsed;
+                                tokio::select! {
+                                    _ = tokio::time::sleep(remaining) => {
+                                        let last = *watch_rx.borrow_and_update();
+                                        if last.elapsed() >= timeout {
+                                            break;
+                                        }
+                                    }
+                                    res = watch_rx.changed() => {
+                                        if res.is_err() {
+                                            return;
+                                        }
+                                    }
+                                }
+                            }
+                            let gen = activity.generation();
+                            let idle_event = if let Ok(Ok(
+                                crate::parser::state::QueryResponse::Screen(screen),
+                            )) = tokio::time::timeout(
+                                std::time::Duration::from_secs(10),
+                                activity_parser.query(
+                                    crate::parser::state::Query::Screen { format: activity_format },
+                                ),
+                            )
+                            .await
+                            {
+                                let scrollback_lines = screen.total_lines;
+                                crate::parser::events::Event::Idle {
+                                    seq: 0,
+                                    generation: gen,
+                                    screen,
+                                    scrollback_lines,
+                                }
+                            } else {
+                                crate::parser::events::Event::Running {
+                                    seq: 0,
+                                    generation: gen,
+                                }
+                            };
+                            let current_name = activity_name.lock().clone();
+                            if activity_tx
+                                .send(TaggedSessionEvent {
+                                    session: current_name,
+                                    event: crate::parser::SubscriptionEvent::Event(idle_event),
+                                })
+                                .await
+                                .is_err()
+                            {
+                                return;
+                            }
+                        }
+
                         loop {
                             // Wait for activity → emit Running
                             if watch_rx.changed().await.is_err() {
