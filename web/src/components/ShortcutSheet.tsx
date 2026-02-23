@@ -14,7 +14,7 @@ const CATEGORIES: ShortcutCategory[] = [
   {
     label: "Navigation",
     shortcuts: [
-      { keys: "Ctrl+Shift+Left/Right or H/L", description: "Carousel rotate / Grid navigate" },
+      { keys: "Ctrl+Shift+Left/Right or H/L", description: "Navigate sessions (all views)" },
       { keys: "Ctrl+Shift+Up/Down or K/J", description: "Grid navigate rows" },
       { keys: "Ctrl+Shift+1-9", description: "Jump to Nth session" },
       { keys: "Ctrl+Shift+Tab", description: "Next sidebar group" },
@@ -33,7 +33,7 @@ const CATEGORIES: ShortcutCategory[] = [
     shortcuts: [
       { keys: "Ctrl+Shift+O", description: "New session" },
       { keys: "Ctrl+Shift+W", description: "Kill focused session" },
-      { keys: "Ctrl+Shift+Enter", description: "Dismiss queue item" },
+      { keys: "Ctrl+Shift+Enter", description: "Dismiss & next idle session (queue)" },
     ],
   },
   {
