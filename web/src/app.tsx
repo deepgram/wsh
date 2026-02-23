@@ -241,13 +241,7 @@ async function initSessions(client: WshClient): Promise<void> {
     unsubscribes.clear();
     client.clearAllSubscriptions();
 
-    let infos = await client.listSessions();
-
-    if (infos.length === 0) {
-      const created = await client.createSession();
-      infos = [created];
-    }
-
+    const infos = await client.listSessions();
     const names = infos.map((s) => s.name);
     sessions.value = names;
     sessionOrder.value = [...names];
