@@ -759,3 +759,126 @@ async fn test_server_ws_malformed_request() {
     let resp = recv_json(&mut rx).await;
     assert_eq!(resp["error"]["code"], "invalid_request");
 }
+
+// ── Test: subscribe with activity events on server-level WS ────
+
+#[tokio::test]
+async fn test_server_ws_subscribe_activity_events() {
+    let state = create_empty_state();
+    let app = api::router(state, None);
+    let addr = start_server(app).await;
+
+    let (mut tx, mut rx) = connect_server_ws(addr).await;
+
+    // Create a session
+    tx.send(Message::Text(
+        serde_json::json!({"id": 1, "method": "create_session", "params": {"name": "act"}})
+            .to_string(),
+    ))
+    .await
+    .unwrap();
+
+    // Drain until create response
+    loop {
+        let msg = recv_json(&mut rx).await;
+        if msg.get("method") == Some(&serde_json::json!("create_session")) {
+            assert_eq!(msg["result"]["name"], "act");
+            break;
+        }
+    }
+
+    // Let the session go idle (shell prompt takes time to settle)
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    // Subscribe to activity events with a short idle timeout
+    tx.send(Message::Text(
+        serde_json::json!({
+            "id": 2,
+            "method": "subscribe",
+            "session": "act",
+            "params": {"events": ["lines", "activity"], "idle_timeout_ms": 500, "format": "plain"}
+        })
+        .to_string(),
+    ))
+    .await
+    .unwrap();
+
+    // Drain until we see the subscribe response, sync, and initial activity state
+    let mut got_subscribe = false;
+    let mut got_sync = false;
+    let mut got_initial_activity = false;
+    let mut initial_activity_type = String::new();
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while tokio::time::Instant::now() < deadline && !got_initial_activity {
+        let msg = recv_json(&mut rx).await;
+
+        if msg.get("method") == Some(&serde_json::json!("subscribe")) {
+            got_subscribe = true;
+            continue;
+        }
+
+        if let Some(event) = msg.get("event").and_then(|e| e.as_str()) {
+            match event {
+                "sync" => {
+                    got_sync = true;
+                    assert_eq!(msg["session"], "act");
+                }
+                "idle" | "running" => {
+                    got_initial_activity = true;
+                    initial_activity_type = event.to_string();
+                    assert_eq!(msg["session"], "act");
+                }
+                _ => {}
+            }
+        }
+    }
+
+    assert!(got_subscribe, "Should receive subscribe response");
+    assert!(got_sync, "Should receive sync event");
+    assert!(got_initial_activity, "Should receive initial activity state event");
+    // Session has been idle for 1500ms with idle_timeout of 500ms → should be idle
+    assert_eq!(initial_activity_type, "idle", "Session should be initially idle");
+
+    // Now send input to trigger a Running event
+    tx.send(Message::Text(
+        serde_json::json!({
+            "id": 3,
+            "method": "send_input",
+            "session": "act",
+            "params": {"data": "echo hello\n"}
+        })
+        .to_string(),
+    ))
+    .await
+    .unwrap();
+
+    // Collect events — expect to see Running (from activity), then eventually Idle
+    let mut got_running = false;
+    let mut got_idle_after_running = false;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while tokio::time::Instant::now() < deadline && !got_idle_after_running {
+        match try_recv_json(&mut rx, Duration::from_millis(200)).await {
+            Some(msg) => {
+                if let Some(event) = msg.get("event").and_then(|e| e.as_str()) {
+                    match event {
+                        "running" => {
+                            got_running = true;
+                            assert_eq!(msg["session"], "act");
+                        }
+                        "idle" if got_running => {
+                            got_idle_after_running = true;
+                            assert_eq!(msg["session"], "act");
+                            assert!(msg.get("screen").is_some(), "Idle event should have screen data");
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+
+    assert!(got_running, "Should receive Running event after input");
+    assert!(got_idle_after_running, "Should receive Idle event after activity settles");
+}

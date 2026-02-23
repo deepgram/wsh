@@ -838,11 +838,17 @@ struct TaggedSessionEvent {
 struct SubHandle {
     subscribed_types: Vec<EventType>,
     task: tokio::task::JoinHandle<()>,
+    /// Optional background task that monitors activity and produces
+    /// synthetic Idle/Running events via the shared mpsc channel.
+    activity_task: Option<tokio::task::JoinHandle<()>>,
     _client_guard: Option<crate::session::ClientGuard>,
     /// Shared name that the forwarding task reads. Updated by
     /// `format_registry_event` on rename so the task tags events
     /// with the session's current name.
     shared_name: std::sync::Arc<parking_lot::Mutex<String>>,
+    /// The idle_timeout_ms from the subscribe params (needed to send
+    /// initial activity state after the sync event).
+    idle_timeout_ms: u64,
 }
 
 /// Convert a registry-level SessionEvent to a JSON value for the WS protocol.
@@ -873,6 +879,9 @@ fn format_registry_event(
         crate::session::SessionEvent::Destroyed { name } => {
             if let Some(handle) = sub_handles.remove(name) {
                 handle.task.abort();
+                if let Some(at) = handle.activity_task {
+                    at.abort();
+                }
             }
             serde_json::json!({
                 "event": "session_destroyed",
@@ -1004,7 +1013,7 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
                                 ws_send!(ws_tx, Message::Text(json));
                             }
 
-                            // Send sync event after successful subscribe
+                            // Send sync event + initial activity state after successful subscribe
                             if subscribe_ok {
                                 if let Some(session_name) = &subscribe_session {
                                     if let Some(session) = state.sessions.get(session_name) {
@@ -1030,6 +1039,58 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
                                             });
                                             if let Ok(json) = serde_json::to_string(&sync_event) {
                                                 ws_send!(ws_tx, Message::Text(json));
+                                            }
+                                        }
+
+                                        // Send initial activity state if activity subscription is active
+                                        if let Some(handle) = sub_handles.get(session_name) {
+                                            if handle.idle_timeout_ms > 0
+                                                && handle.subscribed_types.contains(&EventType::Activity)
+                                            {
+                                                let generation = session.activity.generation();
+                                                let is_idle = session.activity.last_activity_ms()
+                                                    >= handle.idle_timeout_ms;
+                                                let initial_event = if is_idle {
+                                                    // Query screen for idle event
+                                                    if let Ok(Ok(
+                                                        crate::parser::state::QueryResponse::Screen(screen),
+                                                    )) = tokio::time::timeout(
+                                                        std::time::Duration::from_secs(10),
+                                                        session.parser.query(
+                                                            crate::parser::state::Query::Screen { format },
+                                                        ),
+                                                    )
+                                                    .await
+                                                    {
+                                                        let scrollback_lines = screen.total_lines;
+                                                        Some(crate::parser::events::Event::Idle {
+                                                            seq: 0,
+                                                            generation,
+                                                            screen,
+                                                            scrollback_lines,
+                                                        })
+                                                    } else {
+                                                        None
+                                                    }
+                                                } else {
+                                                    Some(crate::parser::events::Event::Running {
+                                                        seq: 0,
+                                                        generation,
+                                                    })
+                                                };
+                                                if let Some(event) = initial_event {
+                                                    if let Ok(event_value) = serde_json::to_value(&event) {
+                                                        let tagged = if let serde_json::Value::Object(mut map) = event_value {
+                                                            map.insert("session".to_string(), serde_json::json!(session_name));
+                                                            serde_json::Value::Object(map)
+                                                        } else {
+                                                            event_value
+                                                        };
+                                                        if let Ok(json) = serde_json::to_string(&tagged) {
+                                                            ws_send!(ws_tx, Message::Text(json));
+                                                        }
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -1158,6 +1219,9 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
     // Clean up all subscription tasks
     for (_, handle) in sub_handles {
         handle.task.abort();
+        if let Some(at) = handle.activity_task {
+            at.abort();
+        }
     }
 }
 
@@ -1702,6 +1766,9 @@ async fn handle_server_ws_request(
                 // Abort previous subscription for this session if any
                 if let Some(old) = sub_handles.remove(&session_name) {
                     old.task.abort();
+                    if let Some(at) = old.activity_task {
+                        at.abort();
+                    }
                 }
 
                 // Spawn a task that reads from the parser event stream and
@@ -1747,13 +1814,88 @@ async fn handle_server_ws_request(
                     }
                 });
 
+                // Spawn activity monitoring task if idle_timeout_ms > 0
+                let activity_task = if params.idle_timeout_ms > 0 {
+                    let timeout = std::time::Duration::from_millis(params.idle_timeout_ms);
+                    let activity = session.activity.clone();
+                    let activity_tx = sub_tx.clone();
+                    let activity_name = shared_name.clone();
+                    let activity_parser = session.parser.clone();
+                    let activity_format = params.format;
+                    Some(tokio::spawn(async move {
+                        let mut watch_rx = activity.subscribe();
+                        loop {
+                            // Wait for activity → emit Running
+                            if watch_rx.changed().await.is_err() {
+                                break;
+                            }
+                            let gen = activity.generation();
+                            let current_name = activity_name.lock().clone();
+                            if activity_tx
+                                .send(TaggedSessionEvent {
+                                    session: current_name,
+                                    event: crate::parser::SubscriptionEvent::Event(
+                                        crate::parser::events::Event::Running {
+                                            seq: 0,
+                                            generation: gen,
+                                        },
+                                    ),
+                                })
+                                .await
+                                .is_err()
+                            {
+                                break;
+                            }
+                            // Wait for idle → emit Idle with screen snapshot
+                            let gen = activity.wait_for_idle(timeout, None).await;
+                            let idle_event = if let Ok(Ok(
+                                crate::parser::state::QueryResponse::Screen(screen),
+                            )) = tokio::time::timeout(
+                                std::time::Duration::from_secs(10),
+                                activity_parser.query(
+                                    crate::parser::state::Query::Screen { format: activity_format },
+                                ),
+                            )
+                            .await
+                            {
+                                let scrollback_lines = screen.total_lines;
+                                crate::parser::events::Event::Idle {
+                                    seq: 0,
+                                    generation: gen,
+                                    screen,
+                                    scrollback_lines,
+                                }
+                            } else {
+                                // Fallback: emit Running generation if screen
+                                // query fails (shouldn't happen in practice)
+                                continue;
+                            };
+                            let current_name = activity_name.lock().clone();
+                            if activity_tx
+                                .send(TaggedSessionEvent {
+                                    session: current_name,
+                                    event: crate::parser::SubscriptionEvent::Event(idle_event),
+                                })
+                                .await
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                    }))
+                } else {
+                    None
+                };
+
                 sub_handles.insert(
                     session_name.clone(),
                     SubHandle {
                         subscribed_types: subscribed_types.clone(),
                         task,
+                        activity_task,
                         _client_guard: session.connect(),
                         shared_name,
+                        idle_timeout_ms: params.idle_timeout_ms,
                     },
                 );
 
