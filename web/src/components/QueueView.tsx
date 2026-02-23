@@ -102,25 +102,32 @@ export function QueueView({ sessions, groupTag, client }: QueueViewProps) {
     setSelectedSession(navList[newIndex]);
   }, [navList, currentSession]);
 
-  // Keyboard handler
+  // Keep refs to latest callbacks so the keyboard handler (registered once)
+  // always calls the current version without re-registering on every render.
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
+  const handleDismissRef = useRef(handleDismiss);
+  handleDismissRef.current = handleDismiss;
+
+  // Keyboard handler — registered once, uses refs for latest callbacks
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (!e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey) return;
 
       if (e.key === "ArrowLeft" || e.key === "h" || e.key === "H") {
         e.preventDefault();
-        navigate(-1);
+        navigateRef.current(-1);
       } else if (e.key === "ArrowRight" || e.key === "l" || e.key === "L") {
         e.preventDefault();
-        navigate(1);
+        navigateRef.current(1);
       } else if (e.key === "Enter") {
         e.preventDefault();
-        handleDismiss();
+        handleDismissRef.current();
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [navigate, handleDismiss]);
+  }, []);
 
   // Idle section label with pending count
   const idleLabel = pending.length > 0
@@ -149,22 +156,20 @@ export function QueueView({ sessions, groupTag, client }: QueueViewProps) {
             ))}
           </div>
         </div>
-        {running.length > 0 && (
-          <div class="queue-handled">
-            <span class="queue-section-label">Running ({running.length})</span>
-            <div class="queue-thumbnails">
-              {running.map((s) => (
-                <div
-                  key={s}
-                  class={`queue-thumb${s === currentSession ? " active" : ""}`}
-                  onClick={() => setSelectedSession(s)}
-                >
-                  <MiniTermContent session={s} />
-                </div>
-              ))}
-            </div>
+        <div class="queue-handled">
+          <span class="queue-section-label">Running ({running.length})</span>
+          <div class="queue-thumbnails">
+            {running.map((s) => (
+              <div
+                key={s}
+                class={`queue-thumb${s === currentSession ? " active" : ""}`}
+                onClick={() => setSelectedSession(s)}
+              >
+                <MiniTermContent session={s} />
+              </div>
+            ))}
           </div>
-        )}
+        </div>
       </div>
 
       {/* Center content */}

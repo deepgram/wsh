@@ -1918,6 +1918,7 @@ html, body, #app {
   display: flex;
   gap: 4px;
   overflow-x: auto;
+  min-height: 40px;
 }
 
 .queue-thumb {
