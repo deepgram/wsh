@@ -36,12 +36,12 @@ export function QueueView({ sessions, groupTag, client }: QueueViewProps) {
   // Selection state
   const [selectedSession, setSelectedSession] = useState<string | null>(null);
 
-  // Resolve current session: manual selection if valid, else oldest pending, else first in nav
+  // Resolve current session: manual selection if valid, else oldest pending, else "All caught up"
   const oldestPending = pending[0]?.session || null;
   const currentSession =
     selectedSession && navList.includes(selectedSession)
       ? selectedSession
-      : oldestPending || navList[0] || null;
+      : oldestPending;
 
   // Focus the current session for other components
   useEffect(() => {
