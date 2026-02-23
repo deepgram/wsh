@@ -497,6 +497,10 @@ function handleEvent(client: WshClient, session: string, raw: any): void {
     }
 
     case "running": {
+      // Suppress running transition if it's likely a SIGWINCH-induced shell
+      // redraw (resize sent recently, no input since). The idle event that
+      // follows shortly will be the accurate state.
+      if (client.shouldSuppressRunning(session)) break;
       const updated = new Map(sessionStatuses.value);
       updated.set(session, "running");
       sessionStatuses.value = updated;

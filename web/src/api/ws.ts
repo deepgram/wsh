@@ -57,6 +57,8 @@ export class WshClient {
   private reconnectDelay = 1000;
   private url = "";
   private token: string | null = null;
+  /** Tracks when each session was last resized (for SIGWINCH debounce). */
+  private resizeTimes = new Map<string, number>();
 
   onStateChange?: (state: "connecting" | "connected" | "disconnected") => void;
 
@@ -406,11 +408,31 @@ export class WshClient {
   }
 
   async sendInput(session: string, data: string): Promise<void> {
+    // Input clears resize suppression — any subsequent PTY output is a
+    // response to this input, not a SIGWINCH redraw.
+    this.resizeTimes.delete(session);
     await this.request("send_input", { data }, session);
   }
 
   async resize(session: string, cols: number, rows: number): Promise<void> {
+    this.resizeTimes.set(session, Date.now());
     await this.request("resize", { cols, rows }, session);
+  }
+
+  /**
+   * Whether a "running" activity event for this session should be suppressed.
+   *
+   * Returns true if the session was recently resized (within `windowMs`) and
+   * no input has been sent since the resize. This prevents SIGWINCH-induced
+   * shell redraws from triggering spurious running transitions in the UI.
+   */
+  shouldSuppressRunning(session: string, windowMs: number = 300): boolean {
+    const resizeTime = this.resizeTimes.get(session);
+    if (resizeTime === undefined) return false;
+    if (Date.now() - resizeTime < windowMs) return true;
+    // Window expired — clean up
+    this.resizeTimes.delete(session);
+    return false;
   }
 
   async getScrollback(
