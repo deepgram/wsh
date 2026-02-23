@@ -12,7 +12,7 @@ export interface Group {
 export interface QueueEntry {
   session: string;
   idleAt: number;
-  status: "pending" | "handled";
+  status: "pending" | "acknowledged";
 }
 
 export const selectedGroups = signal<string[]>(["all"]);
@@ -133,8 +133,13 @@ export function setViewModeForGroup(tag: string, mode: ViewMode): void {
 export function enqueueSession(tag: string, session: string): void {
   const queues = { ...idleQueues.value };
   const queue = [...(queues[tag] || [])];
-  if (queue.some((e) => e.session === session && e.status === "pending")) return;
-  queue.push({ session, idleAt: Date.now(), status: "pending" });
+  const idx = queue.findIndex((e) => e.session === session);
+  if (idx !== -1) {
+    // Re-activate existing entry as pending with fresh timestamp
+    queue[idx] = { ...queue[idx], status: "pending", idleAt: Date.now() };
+  } else {
+    queue.push({ session, idleAt: Date.now(), status: "pending" });
+  }
   queues[tag] = queue;
   idleQueues.value = queues;
 }
@@ -142,8 +147,17 @@ export function enqueueSession(tag: string, session: string): void {
 export function dismissQueueEntry(tag: string, session: string): void {
   const queues = { ...idleQueues.value };
   const queue = (queues[tag] || []).map((e) =>
-    e.session === session ? { ...e, status: "handled" as const } : e
+    e.session === session && e.status === "pending"
+      ? { ...e, status: "acknowledged" as const }
+      : e
   );
+  queues[tag] = queue;
+  idleQueues.value = queues;
+}
+
+export function removeQueueEntry(tag: string, session: string): void {
+  const queues = { ...idleQueues.value };
+  const queue = (queues[tag] || []).filter((e) => e.session !== session);
   queues[tag] = queue;
   idleQueues.value = queues;
 }
