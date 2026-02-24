@@ -1,16 +1,21 @@
 pub mod auth;
 pub mod error;
 mod handlers;
+pub mod origin;
 mod web;
 pub mod ws_methods;
 
 use axum::{
     extract::DefaultBodyLimit,
+    http::{header, HeaderName, HeaderValue, Method},
     response::Redirect,
     routing::{get, post},
     Router,
 };
+use tower_http::cors::CorsLayer;
+use tower_http::set_header::SetResponseHeaderLayer;
 
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -70,13 +75,41 @@ pub(crate) fn get_session(
         .ok_or_else(|| error::ApiError::SessionNotFound(name.to_string()))
 }
 
-pub fn router(state: AppState, token: Option<String>) -> Router {
+/// Configuration for the HTTP/WS router.
+///
+/// Controls authentication, CORS, rate limiting, and origin checks.
+/// Use `RouterConfig::default()` in tests for a minimal no-auth setup.
+pub struct RouterConfig {
+    pub token: Option<String>,
+    pub bind: SocketAddr,
+    pub cors_origins: Vec<String>,
+    pub rate_limit: Option<u32>,
+}
+
+impl Default for RouterConfig {
+    fn default() -> Self {
+        Self {
+            token: None,
+            bind: "127.0.0.1:8080".parse().unwrap(),
+            cors_origins: vec![],
+            rate_limit: None,
+        }
+    }
+}
+
+pub fn router(state: AppState, config: RouterConfig) -> Router {
     use rmcp::transport::streamable_http_server::{
         StreamableHttpService, StreamableHttpServerConfig,
         session::local::LocalSessionManager,
     };
 
     let mcp_state = state.clone();
+    // NOTE: rmcp's StreamableHttpServerConfig (v0.15) does not expose a
+    // max-sessions or session-limit field.  Its only knobs are
+    // `sse_keep_alive`, `sse_retry`, `stateful_mode`, and
+    // `cancellation_token`.  MCP session limiting is therefore not
+    // configurable at this layer -- it is a known limitation of the
+    // upstream rmcp crate.
     let mcp_service = StreamableHttpService::new(
         move || Ok(crate::mcp::WshMcpServer::new(mcp_state.clone())),
         Arc::new(LocalSessionManager::default()),
@@ -101,14 +134,14 @@ pub fn router(state: AppState, token: Option<String>) -> Router {
                 .delete(overlay_clear),
         )
         .route(
-            "/overlay/:id",
+            "/overlay/{id}",
             get(overlay_get)
                 .put(overlay_update)
                 .patch(overlay_patch)
                 .delete(overlay_delete),
         )
-        .route("/overlay/:id/spans", post(overlay_update_spans))
-        .route("/overlay/:id/write", post(overlay_region_write))
+        .route("/overlay/{id}/spans", post(overlay_update_spans))
+        .route("/overlay/{id}/write", post(overlay_region_write))
         .route(
             "/panel",
             get(panel_list)
@@ -116,14 +149,14 @@ pub fn router(state: AppState, token: Option<String>) -> Router {
                 .delete(panel_clear),
         )
         .route(
-            "/panel/:id",
+            "/panel/{id}",
             get(panel_get)
                 .put(panel_update)
                 .patch(panel_patch)
                 .delete(panel_delete),
         )
-        .route("/panel/:id/spans", post(panel_update_spans))
-        .route("/panel/:id/write", post(panel_region_write))
+        .route("/panel/{id}/spans", post(panel_update_spans))
+        .route("/panel/{id}/write", post(panel_region_write))
         .route("/screen_mode", get(screen_mode_get))
         .route("/screen_mode/enter_alt", post(enter_alt_screen))
         .route("/screen_mode/exit_alt", post(exit_alt_screen));
@@ -134,33 +167,63 @@ pub fn router(state: AppState, token: Option<String>) -> Router {
             get(session_list).post(session_create),
         )
         .route(
-            "/sessions/:name",
+            "/sessions/{name}",
             get(session_get)
                 .patch(session_update)
                 .delete(session_kill),
         )
-        .route("/sessions/:name/detach", post(session_detach))
+        .route("/sessions/{name}/detach", post(session_detach))
         .route("/idle", get(idle_any))
         .route("/server/persist", get(server_persist_get).put(server_persist_set))
         .route("/ws/json", get(ws_json_server));
 
     let protected = Router::new()
         .merge(session_mgmt_routes)
-        .nest("/sessions/:name", session_routes)
+        .nest("/sessions/{name}", session_routes)
         .nest_service("/mcp", mcp_service)
         .with_state(state);
 
-    let protected = match token {
+    // Apply rate limiting to the protected routes if configured.
+    let protected = if let Some(rps) = config.rate_limit {
+        use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder, key_extractor::PeerIpKeyExtractor};
+        let governor_conf = Arc::new(
+            GovernorConfigBuilder::default()
+                .per_second(u64::from(rps))
+                .burst_size(rps)
+                .key_extractor(PeerIpKeyExtractor)
+                .finish()
+                .unwrap()
+        );
+        protected.layer(GovernorLayer::new(governor_conf))
+    } else {
+        protected
+    };
+
+    let protected = match config.token {
         Some(token) => protected.layer(axum::middleware::from_fn(move |req, next| {
             let t = token.clone();
             async move { auth::require_auth(t, req, next).await }
         })),
-        None => protected,
+        None => {
+            // When running without auth (localhost), protect against CSWSH attacks
+            // by validating the Origin header on WebSocket upgrade requests.
+            let port = config.bind.port();
+            let mut allowed_origins = vec![
+                format!("http://127.0.0.1:{}", port),
+                format!("http://localhost:{}", port),
+                format!("http://[::1]:{}", port),
+            ];
+            allowed_origins.extend(config.cors_origins.iter().cloned());
+            protected.layer(axum::middleware::from_fn(move |req, next| {
+                let origins = allowed_origins.clone();
+                origin::check_ws_origin(origins, req, next)
+            }))
+        }
     };
 
     let ui = Router::new().fallback(web::web_asset);
 
-    Router::new()
+    let router = Router::new()
         .route("/", get(|| async { Redirect::temporary("/ui") }))
         .route("/health", get(health))
         .route("/openapi.yaml", get(openapi_spec))
@@ -168,6 +231,34 @@ pub fn router(state: AppState, token: Option<String>) -> Router {
         .merge(protected)
         .nest("/ui", ui)
         .layer(DefaultBodyLimit::max(1024 * 1024)) // 1 MB
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("x-frame-options"),
+            HeaderValue::from_static("DENY"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("x-content-type-options"),
+            HeaderValue::from_static("nosniff"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("referrer-policy"),
+            HeaderValue::from_static("no-referrer"),
+        ));
+
+    // Conditionally apply CORS if origins are configured.
+    if config.cors_origins.is_empty() {
+        router
+    } else {
+        let origins: Vec<HeaderValue> = config.cors_origins.iter()
+            .filter_map(|o| o.parse().ok())
+            .collect();
+        router.layer(
+            CorsLayer::new()
+                .allow_origin(origins)
+                .allow_methods([Method::GET, Method::POST, Method::PUT,
+                               Method::PATCH, Method::DELETE, Method::OPTIONS])
+                .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
+        )
+    }
 }
 
 #[cfg(test)]
@@ -234,7 +325,7 @@ mod tests {
     #[tokio::test]
     async fn test_health_endpoint() {
         let (state, _input_rx, _name) = create_test_state();
-        let app = router(state, None);
+        let app = router(state, RouterConfig::default());
 
         let response = app
             .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
@@ -253,7 +344,7 @@ mod tests {
     #[tokio::test]
     async fn test_input_endpoint_success() {
         let (state, _input_rx, _name) = create_test_state();
-        let app = router(state, None);
+        let app = router(state, RouterConfig::default());
 
         let response = app
             .oneshot(
@@ -272,7 +363,7 @@ mod tests {
     #[tokio::test]
     async fn test_input_endpoint_forwards_to_channel() {
         let (state, mut input_rx, _name) = create_test_state();
-        let app = router(state, None);
+        let app = router(state, RouterConfig::default());
 
         let test_data = b"hello world";
         let response = app
@@ -296,7 +387,7 @@ mod tests {
     #[tokio::test]
     async fn test_router_has_correct_routes() {
         let (state, _input_rx, _name) = create_test_state();
-        let app = router(state, None);
+        let app = router(state, RouterConfig::default());
 
         // Test /health exists (GET)
         let response = app
@@ -381,7 +472,7 @@ mod tests {
     #[tokio::test]
     async fn test_overlay_create() {
         let (state, _input_rx, _name) = create_test_state();
-        let app = router(state, None);
+        let app = router(state, RouterConfig::default());
 
         let body = serde_json::json!({
             "x": 10,
@@ -443,7 +534,7 @@ mod tests {
             ).unwrap();
         }
 
-        let app = router(state, None);
+        let app = router(state, RouterConfig::default());
 
         let response = app
             .oneshot(
@@ -476,7 +567,7 @@ mod tests {
             session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Normal).unwrap()
         };
 
-        let app = router(state, None);
+        let app = router(state, RouterConfig::default());
 
         let response = app
             .oneshot(
@@ -495,7 +586,7 @@ mod tests {
     #[tokio::test]
     async fn test_input_mode_default() {
         let (state, _input_rx, _name) = create_test_state();
-        let app = router(state, None);
+        let app = router(state, RouterConfig::default());
 
         let response = app
             .oneshot(
@@ -519,7 +610,7 @@ mod tests {
     #[tokio::test]
     async fn test_input_capture_and_release() {
         let (state, _input_rx, _name) = create_test_state();
-        let app = router(state, None);
+        let app = router(state, RouterConfig::default());
 
         // Switch to capture mode
         let response = app
@@ -590,7 +681,7 @@ mod tests {
     #[tokio::test]
     async fn test_openapi_spec_endpoint() {
         let (state, _input_rx, _name) = create_test_state();
-        let app = router(state, None);
+        let app = router(state, RouterConfig::default());
 
         let response = app
             .oneshot(
@@ -623,7 +714,7 @@ mod tests {
     #[tokio::test]
     async fn test_docs_endpoint() {
         let (state, _input_rx, _name) = create_test_state();
-        let app = router(state, None);
+        let app = router(state, RouterConfig::default());
 
         let response = app
             .oneshot(
@@ -656,7 +747,7 @@ mod tests {
     #[tokio::test]
     async fn test_docs_and_openapi_exempt_from_auth() {
         let (state, _input_rx, _name) = create_test_state();
-        let app = router(state, Some("secret-token".to_string()));
+        let app = router(state, RouterConfig { token: Some("secret-token".to_string()), ..Default::default() });
 
         // /openapi.yaml should work without auth
         let response = app
@@ -727,7 +818,7 @@ mod tests {
     #[tokio::test]
     async fn test_session_create_returns_201_with_name() {
         let state = create_empty_state();
-        let app = router(state, None);
+        let app = router(state, RouterConfig::default());
 
         let body = serde_json::json!({});
         let response = app
@@ -756,7 +847,7 @@ mod tests {
     #[tokio::test]
     async fn test_session_create_with_custom_name() {
         let state = create_empty_state();
-        let app = router(state, None);
+        let app = router(state, RouterConfig::default());
 
         let body = serde_json::json!({"name": "my-session"});
         let response = app
@@ -783,7 +874,7 @@ mod tests {
     #[tokio::test]
     async fn test_session_list() {
         let state = create_empty_state();
-        let app = router(state.clone(), None);
+        let app = router(state.clone(), RouterConfig::default());
 
         // Create two sessions first
         let body = serde_json::json!({"name": "alpha"});
@@ -842,7 +933,7 @@ mod tests {
     #[tokio::test]
     async fn test_session_get_returns_info() {
         let state = create_empty_state();
-        let app = router(state, None);
+        let app = router(state, RouterConfig::default());
 
         // Create a session
         let body = serde_json::json!({"name": "my-session"});
@@ -881,7 +972,7 @@ mod tests {
     #[tokio::test]
     async fn test_session_get_nonexistent_returns_404() {
         let state = create_empty_state();
-        let app = router(state, None);
+        let app = router(state, RouterConfig::default());
 
         let response = app
             .oneshot(
@@ -899,7 +990,7 @@ mod tests {
     #[tokio::test]
     async fn test_session_rename() {
         let state = create_empty_state();
-        let app = router(state, None);
+        let app = router(state, RouterConfig::default());
 
         // Create a session
         let body = serde_json::json!({"name": "old-name"});
@@ -967,7 +1058,7 @@ mod tests {
     #[tokio::test]
     async fn test_session_kill_returns_204() {
         let state = create_empty_state();
-        let app = router(state, None);
+        let app = router(state, RouterConfig::default());
 
         // Create a session
         let body = serde_json::json!({"name": "doomed"});
@@ -1014,7 +1105,7 @@ mod tests {
     #[tokio::test]
     async fn test_session_kill_nonexistent_returns_404() {
         let state = create_empty_state();
-        let app = router(state, None);
+        let app = router(state, RouterConfig::default());
 
         let response = app
             .oneshot(
@@ -1033,7 +1124,7 @@ mod tests {
     #[tokio::test]
     async fn test_session_create_duplicate_name_returns_409() {
         let state = create_empty_state();
-        let app = router(state, None);
+        let app = router(state, RouterConfig::default());
 
         // Create a session
         let body = serde_json::json!({"name": "unique"});
@@ -1072,7 +1163,7 @@ mod tests {
     async fn test_server_persist_get_returns_current_state() {
         let state = create_empty_state();
         assert!(!state.server_config.is_persistent());
-        let app = router(state.clone(), None);
+        let app = router(state.clone(), RouterConfig::default());
 
         let response = app
             .oneshot(
@@ -1099,7 +1190,7 @@ mod tests {
     async fn test_server_persist_put_sets_persistent_on() {
         let state = create_empty_state();
         assert!(!state.server_config.is_persistent());
-        let app = router(state.clone(), None);
+        let app = router(state.clone(), RouterConfig::default());
 
         let response = app
             .oneshot(
@@ -1126,7 +1217,7 @@ mod tests {
     async fn test_server_persist_put_sets_persistent_off() {
         let state = create_empty_state();
         state.server_config.set_persistent(true);
-        let app = router(state.clone(), None);
+        let app = router(state.clone(), RouterConfig::default());
 
         let response = app
             .oneshot(
@@ -1220,7 +1311,7 @@ mod tests {
                 server_config: config.clone(),
                 server_ws_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             },
-            None,
+            RouterConfig::default(),
         );
 
         let response = app
@@ -1277,7 +1368,7 @@ mod tests {
                 server_config: config.clone(),
                 server_ws_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             },
-            None,
+            RouterConfig::default(),
         );
 
         let response = app
@@ -1331,7 +1422,7 @@ mod tests {
                 server_config: config.clone(),
                 server_ws_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             },
-            None,
+            RouterConfig::default(),
         );
 
         // Create two sessions
@@ -1391,7 +1482,7 @@ mod tests {
         let state = create_empty_state();
         assert!(!state.server_config.is_persistent());
 
-        let app = router(state.clone(), None);
+        let app = router(state.clone(), RouterConfig::default());
 
         // Upgrade to persistent
         let response = app
@@ -1455,7 +1546,7 @@ mod tests {
     #[tokio::test]
     async fn test_screen_mode_get_default_normal() {
         let (state, _input_rx, _name) = create_test_state();
-        let app = router(state, None);
+        let app = router(state, RouterConfig::default());
 
         let response = app
             .oneshot(
@@ -1479,7 +1570,7 @@ mod tests {
     #[tokio::test]
     async fn test_enter_alt_screen() {
         let (state, _input_rx, _name) = create_test_state();
-        let app = router(state, None);
+        let app = router(state, RouterConfig::default());
 
         let response = app
             .clone()
@@ -1525,7 +1616,7 @@ mod tests {
             *session.screen_mode.write() = crate::overlay::ScreenMode::Alt;
         }
 
-        let app = router(state, None);
+        let app = router(state, RouterConfig::default());
 
         let response = app
             .oneshot(
@@ -1557,7 +1648,7 @@ mod tests {
             *session.screen_mode.write() = crate::overlay::ScreenMode::Alt;
         }
 
-        let app = router(state, None);
+        let app = router(state, RouterConfig::default());
 
         let response = app
             .clone()
@@ -1596,7 +1687,7 @@ mod tests {
     #[tokio::test]
     async fn test_exit_alt_screen_already_normal_returns_409() {
         let (state, _input_rx, _name) = create_test_state();
-        let app = router(state, None);
+        let app = router(state, RouterConfig::default());
 
         let response = app
             .oneshot(
@@ -1650,7 +1741,7 @@ mod tests {
             ).unwrap();
         }
 
-        let app = router(state.clone(), None);
+        let app = router(state.clone(), RouterConfig::default());
 
         // In normal mode, should see 1 overlay
         let response = app
@@ -1736,7 +1827,7 @@ mod tests {
             ).unwrap();
         }
 
-        let app = router(state.clone(), None);
+        let app = router(state.clone(), RouterConfig::default());
 
         // In normal mode, should see 1 panel
         let response = app
@@ -1789,7 +1880,7 @@ mod tests {
     #[tokio::test]
     async fn test_session_create_with_tags() {
         let state = create_empty_state();
-        let app = router(state, None);
+        let app = router(state, RouterConfig::default());
 
         let body = serde_json::json!({"name": "tagged", "tags": ["build", "ci"]});
         let response = app
@@ -1818,7 +1909,7 @@ mod tests {
     #[tokio::test]
     async fn test_session_create_with_invalid_tag_returns_400() {
         let state = create_empty_state();
-        let app = router(state, None);
+        let app = router(state, RouterConfig::default());
 
         let body = serde_json::json!({"name": "bad-tags", "tags": ["valid", "has space"]});
         let response = app
@@ -1845,7 +1936,7 @@ mod tests {
     #[tokio::test]
     async fn test_session_list_with_tag_filter() {
         let state = create_empty_state();
-        let app = router(state.clone(), None);
+        let app = router(state.clone(), RouterConfig::default());
 
         // Create sessions with different tags
         let body = serde_json::json!({"name": "alpha", "tags": ["build"]});
@@ -1935,7 +2026,7 @@ mod tests {
     #[tokio::test]
     async fn test_session_list_without_filter_returns_all() {
         let state = create_empty_state();
-        let app = router(state.clone(), None);
+        let app = router(state.clone(), RouterConfig::default());
 
         // Create sessions with tags
         let body = serde_json::json!({"name": "a", "tags": ["x"]});
@@ -1986,7 +2077,7 @@ mod tests {
     #[tokio::test]
     async fn test_session_patch_add_tags() {
         let state = create_empty_state();
-        let app = router(state, None);
+        let app = router(state, RouterConfig::default());
 
         // Create a session
         let body = serde_json::json!({"name": "taggable"});
@@ -2030,7 +2121,7 @@ mod tests {
     #[tokio::test]
     async fn test_session_patch_remove_tags() {
         let state = create_empty_state();
-        let app = router(state, None);
+        let app = router(state, RouterConfig::default());
 
         // Create a session with tags
         let body = serde_json::json!({"name": "removable", "tags": ["a", "b", "c"]});
@@ -2074,7 +2165,7 @@ mod tests {
     #[tokio::test]
     async fn test_session_get_includes_tags() {
         let state = create_empty_state();
-        let app = router(state, None);
+        let app = router(state, RouterConfig::default());
 
         // Create a session with tags
         let body = serde_json::json!({"name": "info-test", "tags": ["deploy"]});
@@ -2115,7 +2206,7 @@ mod tests {
     #[tokio::test]
     async fn test_session_patch_rename_and_add_tags() {
         let state = create_empty_state();
-        let app = router(state, None);
+        let app = router(state, RouterConfig::default());
 
         // Create a session
         let body = serde_json::json!({"name": "original"});
@@ -2173,7 +2264,7 @@ mod tests {
     #[tokio::test]
     async fn test_session_patch_invalid_tag_returns_400() {
         let state = create_empty_state();
-        let app = router(state, None);
+        let app = router(state, RouterConfig::default());
 
         // Create a session
         let body = serde_json::json!({"name": "patch-bad"});
@@ -2213,9 +2304,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_security_headers_on_health() {
+        let (state, _input_rx, _name) = create_test_state();
+        let app = router(state, RouterConfig::default());
+        let response = app
+            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.headers().get("x-frame-options").unwrap(), "DENY");
+        assert_eq!(
+            response.headers().get("x-content-type-options").unwrap(),
+            "nosniff"
+        );
+        assert_eq!(
+            response.headers().get("referrer-policy").unwrap(),
+            "no-referrer"
+        );
+    }
+
+    #[tokio::test]
     async fn test_session_create_no_tags_has_empty_array() {
         let state = create_empty_state();
-        let app = router(state, None);
+        let app = router(state, RouterConfig::default());
 
         let body = serde_json::json!({"name": "no-tags"});
         let response = app

@@ -99,14 +99,14 @@ async fn connect_server_ws(
 #[tokio::test]
 async fn test_server_ws_list_sessions() {
     let state = create_empty_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     let (mut tx, mut rx) = connect_server_ws(addr).await;
 
     // List sessions — should be empty
     tx.send(Message::Text(
-        serde_json::json!({"id": 1, "method": "list_sessions"}).to_string(),
+        serde_json::json!({"id": 1, "method": "list_sessions"}).to_string().into(),
     ))
     .await
     .unwrap();
@@ -119,7 +119,8 @@ async fn test_server_ws_list_sessions() {
     // Create a session via WS
     tx.send(Message::Text(
         serde_json::json!({"id": 2, "method": "create_session", "params": {"name": "alpha"}})
-            .to_string(),
+            .to_string()
+            .into(),
     ))
     .await
     .unwrap();
@@ -138,7 +139,7 @@ async fn test_server_ws_list_sessions() {
 
     // List sessions again — should have one
     tx.send(Message::Text(
-        serde_json::json!({"id": 3, "method": "list_sessions"}).to_string(),
+        serde_json::json!({"id": 3, "method": "list_sessions"}).to_string().into(),
     ))
     .await
     .unwrap();
@@ -164,7 +165,7 @@ async fn test_server_ws_list_sessions() {
 #[tokio::test]
 async fn test_server_ws_create_session() {
     let state = create_empty_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     let (mut tx, mut rx) = connect_server_ws(addr).await;
@@ -176,7 +177,8 @@ async fn test_server_ws_create_session() {
             "method": "create_session",
             "params": {"name": "my-session"}
         })
-        .to_string(),
+        .to_string()
+        .into(),
     ))
     .await
     .unwrap();
@@ -201,14 +203,14 @@ async fn test_server_ws_create_session() {
 #[tokio::test]
 async fn test_server_ws_create_session_auto_name() {
     let state = create_empty_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     let (mut tx, mut rx) = connect_server_ws(addr).await;
 
     // Create without a name
     tx.send(Message::Text(
-        serde_json::json!({"id": 1, "method": "create_session"}).to_string(),
+        serde_json::json!({"id": 1, "method": "create_session"}).to_string().into(),
     ))
     .await
     .unwrap();
@@ -230,7 +232,7 @@ async fn test_server_ws_create_session_auto_name() {
 #[tokio::test]
 async fn test_server_ws_kill_session() {
     let state = create_empty_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     let (mut tx, mut rx) = connect_server_ws(addr).await;
@@ -242,7 +244,8 @@ async fn test_server_ws_kill_session() {
             "method": "create_session",
             "params": {"name": "doomed"}
         })
-        .to_string(),
+        .to_string()
+        .into(),
     ))
     .await
     .unwrap();
@@ -262,7 +265,8 @@ async fn test_server_ws_kill_session() {
             "method": "kill_session",
             "params": {"name": "doomed"}
         })
-        .to_string(),
+        .to_string()
+        .into(),
     ))
     .await
     .unwrap();
@@ -282,7 +286,7 @@ async fn test_server_ws_kill_session() {
 
     // Verify it's gone by listing
     tx.send(Message::Text(
-        serde_json::json!({"id": 3, "method": "list_sessions"}).to_string(),
+        serde_json::json!({"id": 3, "method": "list_sessions"}).to_string().into(),
     ))
     .await
     .unwrap();
@@ -304,7 +308,7 @@ async fn test_server_ws_kill_session() {
 #[tokio::test]
 async fn test_server_ws_rename_session() {
     let state = create_empty_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     let (mut tx, mut rx) = connect_server_ws(addr).await;
@@ -316,7 +320,8 @@ async fn test_server_ws_rename_session() {
             "method": "create_session",
             "params": {"name": "old-name"}
         })
-        .to_string(),
+        .to_string()
+        .into(),
     ))
     .await
     .unwrap();
@@ -335,7 +340,8 @@ async fn test_server_ws_rename_session() {
             "method": "rename_session",
             "params": {"name": "old-name", "new_name": "new-name"}
         })
-        .to_string(),
+        .to_string()
+        .into(),
     ))
     .await
     .unwrap();
@@ -355,7 +361,7 @@ async fn test_server_ws_rename_session() {
 
     // Verify by listing
     tx.send(Message::Text(
-        serde_json::json!({"id": 3, "method": "list_sessions"}).to_string(),
+        serde_json::json!({"id": 3, "method": "list_sessions"}).to_string().into(),
     ))
     .await
     .unwrap();
@@ -379,7 +385,7 @@ async fn test_server_ws_rename_session() {
 #[tokio::test]
 async fn test_server_ws_per_session_dispatch() {
     let state = create_empty_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     let (mut tx, mut rx) = connect_server_ws(addr).await;
@@ -391,7 +397,8 @@ async fn test_server_ws_per_session_dispatch() {
             "method": "create_session",
             "params": {"name": "worker"}
         })
-        .to_string(),
+        .to_string()
+        .into(),
     ))
     .await
     .unwrap();
@@ -411,7 +418,8 @@ async fn test_server_ws_per_session_dispatch() {
             "session": "worker",
             "params": {"format": "plain"}
         })
-        .to_string(),
+        .to_string()
+        .into(),
     ))
     .await
     .unwrap();
@@ -435,7 +443,7 @@ async fn test_server_ws_per_session_dispatch() {
 #[tokio::test]
 async fn test_server_ws_session_events() {
     let state = create_empty_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     let (mut tx, mut rx) = connect_server_ws(addr).await;
@@ -447,7 +455,8 @@ async fn test_server_ws_session_events() {
             "method": "create_session",
             "params": {"name": "evt-test"}
         })
-        .to_string(),
+        .to_string()
+        .into(),
     ))
     .await
     .unwrap();
@@ -484,7 +493,8 @@ async fn test_server_ws_session_events() {
             "method": "kill_session",
             "params": {"name": "evt-test"}
         })
-        .to_string(),
+        .to_string()
+        .into(),
     ))
     .await
     .unwrap();
@@ -506,7 +516,7 @@ async fn test_server_ws_session_events() {
 #[tokio::test]
 async fn test_server_ws_missing_session_field() {
     let state = create_empty_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     let (mut tx, mut rx) = connect_server_ws(addr).await;
@@ -518,7 +528,8 @@ async fn test_server_ws_missing_session_field() {
             "method": "get_screen",
             "params": {"format": "plain"}
         })
-        .to_string(),
+        .to_string()
+        .into(),
     ))
     .await
     .unwrap();
@@ -533,7 +544,7 @@ async fn test_server_ws_missing_session_field() {
 #[tokio::test]
 async fn test_server_ws_session_not_found() {
     let state = create_empty_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     let (mut tx, mut rx) = connect_server_ws(addr).await;
@@ -546,7 +557,8 @@ async fn test_server_ws_session_not_found() {
             "session": "ghost",
             "params": {"format": "plain"}
         })
-        .to_string(),
+        .to_string()
+        .into(),
     ))
     .await
     .unwrap();
@@ -562,7 +574,7 @@ async fn test_server_ws_session_not_found() {
 async fn test_server_ws_set_server_mode() {
     let state = create_empty_state();
     assert!(!state.server_config.is_persistent());
-    let app = api::router(state.clone(), None);
+    let app = api::router(state.clone(), api::RouterConfig::default());
     let addr = start_server(app).await;
 
     let (mut tx, mut rx) = connect_server_ws(addr).await;
@@ -574,7 +586,8 @@ async fn test_server_ws_set_server_mode() {
             "method": "set_server_mode",
             "params": {"persistent": true}
         })
-        .to_string(),
+        .to_string()
+        .into(),
     ))
     .await
     .unwrap();
@@ -593,7 +606,8 @@ async fn test_server_ws_set_server_mode() {
             "method": "set_server_mode",
             "params": {"persistent": false}
         })
-        .to_string(),
+        .to_string()
+        .into(),
     ))
     .await
     .unwrap();
@@ -609,7 +623,7 @@ async fn test_server_ws_set_server_mode() {
 #[tokio::test]
 async fn test_server_ws_create_duplicate_name() {
     let state = create_empty_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     let (mut tx, mut rx) = connect_server_ws(addr).await;
@@ -621,7 +635,8 @@ async fn test_server_ws_create_duplicate_name() {
             "method": "create_session",
             "params": {"name": "dup"}
         })
-        .to_string(),
+        .to_string()
+        .into(),
     ))
     .await
     .unwrap();
@@ -640,7 +655,8 @@ async fn test_server_ws_create_duplicate_name() {
             "method": "create_session",
             "params": {"name": "dup"}
         })
-        .to_string(),
+        .to_string()
+        .into(),
     ))
     .await
     .unwrap();
@@ -664,7 +680,7 @@ async fn test_server_ws_create_duplicate_name() {
 #[tokio::test]
 async fn test_server_ws_send_input() {
     let state = create_empty_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     let (mut tx, mut rx) = connect_server_ws(addr).await;
@@ -676,7 +692,8 @@ async fn test_server_ws_send_input() {
             "method": "create_session",
             "params": {"name": "input-test"}
         })
-        .to_string(),
+        .to_string()
+        .into(),
     ))
     .await
     .unwrap();
@@ -696,7 +713,8 @@ async fn test_server_ws_send_input() {
             "session": "input-test",
             "params": {"data": "echo hello\r"}
         })
-        .to_string(),
+        .to_string()
+        .into(),
     ))
     .await
     .unwrap();
@@ -720,7 +738,7 @@ async fn test_server_ws_send_input() {
 #[tokio::test]
 async fn test_server_ws_kill_nonexistent() {
     let state = create_empty_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     let (mut tx, mut rx) = connect_server_ws(addr).await;
@@ -731,7 +749,8 @@ async fn test_server_ws_kill_nonexistent() {
             "method": "kill_session",
             "params": {"name": "ghost"}
         })
-        .to_string(),
+        .to_string()
+        .into(),
     ))
     .await
     .unwrap();
@@ -746,13 +765,13 @@ async fn test_server_ws_kill_nonexistent() {
 #[tokio::test]
 async fn test_server_ws_malformed_request() {
     let state = create_empty_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     let (mut tx, mut rx) = connect_server_ws(addr).await;
 
     // Send JSON without method field
-    tx.send(Message::Text(r#"{"id": 1}"#.to_string()))
+    tx.send(Message::Text(r#"{"id": 1}"#.to_string().into()))
         .await
         .unwrap();
 
@@ -765,7 +784,7 @@ async fn test_server_ws_malformed_request() {
 #[tokio::test]
 async fn test_server_ws_subscribe_activity_events() {
     let state = create_empty_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     let (mut tx, mut rx) = connect_server_ws(addr).await;
@@ -773,7 +792,8 @@ async fn test_server_ws_subscribe_activity_events() {
     // Create a session
     tx.send(Message::Text(
         serde_json::json!({"id": 1, "method": "create_session", "params": {"name": "act"}})
-            .to_string(),
+            .to_string()
+            .into(),
     ))
     .await
     .unwrap();
@@ -798,7 +818,8 @@ async fn test_server_ws_subscribe_activity_events() {
             "session": "act",
             "params": {"events": ["lines", "activity"], "idle_timeout_ms": 500, "format": "plain"}
         })
-        .to_string(),
+        .to_string()
+        .into(),
     ))
     .await
     .unwrap();
@@ -848,7 +869,8 @@ async fn test_server_ws_subscribe_activity_events() {
             "session": "act",
             "params": {"data": "echo hello\n"}
         })
-        .to_string(),
+        .to_string()
+        .into(),
     ))
     .await
     .unwrap();

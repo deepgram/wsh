@@ -13,7 +13,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use tower::ServiceExt;
-use wsh::api::router;
+use wsh::api::{router, RouterConfig};
 
 async fn json_body(response: axum::http::Response<Body>) -> serde_json::Value {
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
@@ -25,7 +25,7 @@ async fn json_body(response: axum::http::Response<Body>) -> serde_json::Value {
 #[tokio::test]
 async fn test_alt_screen_enter_exit_flow() {
     let (state, _, _, _ptx) = common::create_test_state();
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     // Verify default mode is normal
     let response = app
@@ -108,7 +108,7 @@ async fn test_alt_screen_enter_exit_flow() {
 #[tokio::test]
 async fn test_alt_screen_enter_when_already_alt_returns_409() {
     let (state, _, _, _ptx) = common::create_test_state();
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     // Enter alt screen
     let response = app
@@ -146,7 +146,7 @@ async fn test_alt_screen_enter_when_already_alt_returns_409() {
 #[tokio::test]
 async fn test_alt_screen_exit_when_normal_returns_409() {
     let (state, _, _, _ptx) = common::create_test_state();
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     // Try to exit alt when already in normal mode -- should return 409
     let response = app
@@ -169,7 +169,7 @@ async fn test_alt_screen_exit_when_normal_returns_409() {
 #[tokio::test]
 async fn test_alt_screen_elements_destroyed_on_exit() {
     let (state, _, _, _ptx) = common::create_test_state();
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     // Enter alt screen
     let response = app
@@ -330,7 +330,7 @@ async fn test_alt_screen_elements_destroyed_on_exit() {
 #[tokio::test]
 async fn test_alt_screen_mode_filters_list() {
     let (state, _, _, _ptx) = common::create_test_state();
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     // Create an overlay in normal mode
     let overlay_body = serde_json::json!({

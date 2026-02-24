@@ -160,7 +160,7 @@ async fn test_websocket_receives_close_frame_on_shutdown() {
         "params": {"events": ["lines"], "format": "plain"}
     });
     ws_tx
-        .send(Message::Text(subscribe.to_string()))
+        .send(Message::Text(subscribe.to_string().into()))
         .await
         .expect("should send subscribe");
 

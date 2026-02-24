@@ -10,7 +10,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use tower::ServiceExt;
-use wsh::api::router;
+use wsh::api::{router, RouterConfig};
 
 fn create_test_state() -> wsh::api::AppState {
     let (state, _, _, _ptx) = common::create_test_state();
@@ -32,7 +32,7 @@ async fn json_body(response: axum::http::Response<Body>) -> serde_json::Value {
 #[tokio::test]
 async fn test_panel_crud_flow() {
     let state = create_test_state();
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     // Step 1: Create panel
     let create_body = serde_json::json!({
@@ -153,7 +153,7 @@ async fn test_panel_crud_flow() {
 #[tokio::test]
 async fn test_panel_list_and_clear() {
     let state = create_test_state();
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     // Create two panels
     for pos in ["top", "bottom"] {
@@ -228,7 +228,7 @@ async fn test_panel_list_and_clear() {
 #[tokio::test]
 async fn test_panel_put_replaces_all_fields() {
     let state = create_test_state();
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     // Create panel
     let body = serde_json::json!({
@@ -310,7 +310,7 @@ async fn test_panel_put_replaces_all_fields() {
 #[tokio::test]
 async fn test_panel_not_found() {
     let state = create_test_state();
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     // GET non-existent
     let response = app
@@ -361,7 +361,7 @@ async fn test_panel_not_found() {
 async fn test_panel_visibility_when_space_exhausted() {
     // Use a small terminal (10 rows) to easily test visibility
     let state = create_test_state_with_size(10, 80);
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     // Create a large panel that takes 8 rows (z=10)
     let body = serde_json::json!({
@@ -466,7 +466,7 @@ async fn test_panel_visibility_when_space_exhausted() {
 #[tokio::test]
 async fn test_multiple_panels_cumulative_height() {
     let state = create_test_state();
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     // Create two panels: top=2, bottom=3 (total 5 of 24 rows used)
     let body = serde_json::json!({
@@ -529,7 +529,7 @@ async fn test_multiple_panels_cumulative_height() {
 #[tokio::test]
 async fn test_panel_create_with_background() {
     let state = create_test_state();
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     // Create panel with a background
     let create_body = serde_json::json!({
@@ -579,7 +579,7 @@ async fn test_panel_create_with_background() {
 #[tokio::test]
 async fn test_panel_named_span_update() {
     let state = create_test_state();
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     // Create panel with named spans
     let create_body = serde_json::json!({
@@ -659,7 +659,7 @@ async fn test_panel_named_span_update() {
 #[tokio::test]
 async fn test_panel_region_write() {
     let state = create_test_state();
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     // Create panel with enough height for region writes
     let create_body = serde_json::json!({

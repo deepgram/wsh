@@ -90,7 +90,7 @@ async fn recv_json(
 #[tokio::test]
 async fn test_ws_method_get_input_mode() {
     let (state, _rx, _parser_tx) = create_test_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     let (ws, _) = connect_async(format!("ws://{}/sessions/test/ws/json", addr))
@@ -104,7 +104,7 @@ async fn test_ws_method_get_input_mode() {
 
     // Send method call (no subscribe needed first!)
     tx.send(Message::Text(
-        serde_json::json!({"id": 1, "method": "get_input_mode"}).to_string(),
+        serde_json::json!({"id": 1, "method": "get_input_mode"}).to_string().into(),
     ))
     .await
     .unwrap();
@@ -118,7 +118,7 @@ async fn test_ws_method_get_input_mode() {
 #[tokio::test]
 async fn test_ws_method_get_screen() {
     let (state, _rx, _parser_tx) = create_test_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     let (ws, _) = connect_async(format!("ws://{}/sessions/test/ws/json", addr))
@@ -129,7 +129,7 @@ async fn test_ws_method_get_screen() {
     let _ = recv_json(&mut rx).await; // connected
 
     tx.send(Message::Text(
-        serde_json::json!({"method": "get_screen", "params": {"format": "plain"}}).to_string(),
+        serde_json::json!({"method": "get_screen", "params": {"format": "plain"}}).to_string().into(),
     ))
     .await
     .unwrap();
@@ -143,7 +143,7 @@ async fn test_ws_method_get_screen() {
 #[tokio::test]
 async fn test_ws_method_send_input() {
     let (state, mut input_rx, _parser_tx) = create_test_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     let (ws, _) = connect_async(format!("ws://{}/sessions/test/ws/json", addr))
@@ -154,7 +154,7 @@ async fn test_ws_method_send_input() {
     let _ = recv_json(&mut rx).await; // connected
 
     tx.send(Message::Text(
-        serde_json::json!({"method": "send_input", "params": {"data": "hello"}}).to_string(),
+        serde_json::json!({"method": "send_input", "params": {"data": "hello"}}).to_string().into(),
     ))
     .await
     .unwrap();
@@ -209,7 +209,7 @@ async fn test_ws_subscribe_then_events() {
         server_config: std::sync::Arc::new(api::ServerConfig::new(false)),
             server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     let (ws, _) = connect_async(format!("ws://{}/sessions/test/ws/json", addr))
@@ -225,7 +225,8 @@ async fn test_ws_subscribe_then_events() {
             "method": "subscribe",
             "params": {"events": ["lines"], "format": "plain"}
         })
-        .to_string(),
+        .to_string()
+        .into(),
     ))
     .await
     .unwrap();
@@ -262,7 +263,7 @@ async fn test_ws_subscribe_then_events() {
 #[tokio::test]
 async fn test_ws_unknown_method() {
     let (state, _rx, _parser_tx) = create_test_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     let (ws, _) = connect_async(format!("ws://{}/sessions/test/ws/json", addr))
@@ -273,7 +274,7 @@ async fn test_ws_unknown_method() {
     let _ = recv_json(&mut rx).await; // connected
 
     tx.send(Message::Text(
-        serde_json::json!({"method": "nonexistent"}).to_string(),
+        serde_json::json!({"method": "nonexistent"}).to_string().into(),
     ))
     .await
     .unwrap();
@@ -286,7 +287,7 @@ async fn test_ws_unknown_method() {
 #[tokio::test]
 async fn test_ws_malformed_request() {
     let (state, _rx, _parser_tx) = create_test_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     let (ws, _) = connect_async(format!("ws://{}/sessions/test/ws/json", addr))
@@ -297,7 +298,7 @@ async fn test_ws_malformed_request() {
     let _ = recv_json(&mut rx).await; // connected
 
     // Send JSON without method field
-    tx.send(Message::Text(r#"{"id": 1}"#.to_string()))
+    tx.send(Message::Text(r#"{"id": 1}"#.to_string().into()))
         .await
         .unwrap();
 
@@ -344,7 +345,7 @@ async fn test_ws_methods_interleaved_with_events() {
         server_config: std::sync::Arc::new(api::ServerConfig::new(false)),
             server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     let (ws, _) = connect_async(format!("ws://{}/sessions/test/ws/json", addr))
@@ -360,7 +361,8 @@ async fn test_ws_methods_interleaved_with_events() {
             "method": "subscribe",
             "params": {"events": ["lines"], "format": "plain"}
         })
-        .to_string(),
+        .to_string()
+        .into(),
     ))
     .await
     .unwrap();
@@ -375,7 +377,7 @@ async fn test_ws_methods_interleaved_with_events() {
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     tx.send(Message::Text(
-        serde_json::json!({"id": 42, "method": "get_input_mode"}).to_string(),
+        serde_json::json!({"id": 42, "method": "get_input_mode"}).to_string().into(),
     ))
     .await
     .unwrap();

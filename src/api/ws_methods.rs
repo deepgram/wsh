@@ -359,12 +359,12 @@ fn parse_params<T: serde::de::DeserializeOwned>(req: &WsRequest) -> Result<T, Ws
         .as_ref()
         .cloned()
         .unwrap_or(serde_json::Value::Object(Default::default()));
-    serde_json::from_value(params).map_err(|e| {
+    serde_json::from_value(params).map_err(|_| {
         WsResponse::error(
             req.id.clone(),
             &req.method,
             "invalid_request",
-            &format!("Invalid params: {}.", e),
+            "Invalid parameters for this method.",
         )
     })
 }
@@ -631,8 +631,8 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                 Ok(p) => p,
                 Err(e) => return e,
             };
-            let rows = params.rows.max(1);
-            let cols = params.cols.max(1);
+            let rows = params.rows.clamp(1, 1000);
+            let cols = params.cols.clamp(1, 1000);
             if let Err(e) = session.pty.lock().resize(rows, cols) {
                 tracing::warn!(?e, "failed to resize PTY via WS");
             }

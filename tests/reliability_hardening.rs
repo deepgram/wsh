@@ -16,7 +16,7 @@ use axum::{
 };
 use std::sync::Arc;
 use tower::ServiceExt;
-use wsh::api::{router, AppState, ServerConfig};
+use wsh::api::{router, AppState, RouterConfig, ServerConfig};
 use wsh::session::{RegistryError, SessionRegistry};
 use wsh::shutdown::ShutdownCoordinator;
 
@@ -116,7 +116,7 @@ async fn test_max_sessions_http_503() {
         server_config: Arc::new(ServerConfig::new(false)),
             server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     // Create first session -- should succeed with 201
     let body = serde_json::json!({"name": "only-one"});
@@ -234,7 +234,7 @@ async fn test_scrollback_large_limit_does_not_panic() {
     // crash or panic. The actual cap enforcement is in the HTTP/MCP handler
     // layer, but the parser must handle large values gracefully.
     let (state, _, _, _ptx) = common::create_test_state();
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     // Query scrollback with limit=100000 -- should succeed (capped or not)
     let response = app

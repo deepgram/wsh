@@ -270,6 +270,13 @@ to manage session lifecycle:
 Optional parameters: `rows`, `cols`, `cwd`, `env`, `tags`.
 Returns `{"name": "build", "rows": 24, "cols": 80, "tags": ["build", "ci"]}`.
 
+**Session name rules:** Names must be 1-64 characters and contain only
+letters, digits, dots, hyphens, and underscores (`[a-zA-Z0-9._-]`).
+Invalid names return an `invalid_session_name` error. If omitted, the
+server auto-generates a valid name.
+
+**Terminal dimensions:** `rows` and `cols` are clamped to 1-1000.
+
 Tags are optional string labels (1-64 chars, alphanumeric plus
 hyphens, underscores, and dots). Use them to group and filter
 sessions by purpose.
@@ -277,7 +284,7 @@ sessions by purpose.
 ### Manage Sessions
 
     wsh_manage_session(session="build", action="kill")            # destroy
-    wsh_manage_session(session="build", action="rename", new_name="build-v2")  # rename
+    wsh_manage_session(session="build", action="rename", new_name="build-v2")  # rename (same name rules apply)
     wsh_manage_session(session="build", action="detach")          # disconnect clients
     wsh_manage_session(session="build", action="add_tags", tags=["production"])  # add tags
     wsh_manage_session(session="build", action="remove_tags", tags=["draft"])    # remove tags

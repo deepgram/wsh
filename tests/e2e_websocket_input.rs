@@ -101,7 +101,7 @@ async fn test_websocket_input_reaches_pty_and_output_returns() {
         server_config: std::sync::Arc::new(api::ServerConfig::new(false)),
             server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -119,7 +119,7 @@ async fn test_websocket_input_reaches_pty_and_output_returns() {
     let cmd = format!("echo {}\n", marker);
 
     ws_stream
-        .send(Message::Binary(cmd.as_bytes().to_vec()))
+        .send(Message::Binary(cmd.as_bytes().to_vec().into()))
         .await
         .expect("Failed to send WebSocket message");
 
@@ -247,7 +247,7 @@ async fn test_websocket_text_input_reaches_pty() {
         server_config: std::sync::Arc::new(api::ServerConfig::new(false)),
             server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -262,7 +262,7 @@ async fn test_websocket_text_input_reaches_pty() {
     let cmd = format!("echo {}\n", marker);
 
     ws_stream
-        .send(Message::Text(cmd))
+        .send(Message::Text(cmd.into()))
         .await
         .expect("Failed to send WebSocket text");
 

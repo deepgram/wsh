@@ -99,7 +99,7 @@ async fn test_concurrent_input_from_multiple_sources() {
         server_config: std::sync::Arc::new(api::ServerConfig::new(false)),
             server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -145,7 +145,7 @@ async fn test_concurrent_input_from_multiple_sources() {
 
     let ws_fut = async {
         let cmd = format!("echo {}\n", ws_marker);
-        ws_stream.send(Message::Text(cmd)).await.expect("ws send failed");
+        ws_stream.send(Message::Text(cmd.into())).await.expect("ws send failed");
     };
 
     tokio::join!(stdin_fut, http_fut, ws_fut);
@@ -265,7 +265,7 @@ async fn test_rapid_http_requests() {
         server_config: std::sync::Arc::new(api::ServerConfig::new(false)),
             server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     tokio::time::sleep(Duration::from_millis(500)).await;

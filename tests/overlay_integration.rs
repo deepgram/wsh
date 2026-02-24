@@ -14,12 +14,12 @@ use axum::{
     http::{Request, StatusCode},
 };
 use tower::ServiceExt;
-use wsh::api::router;
+use wsh::api::{router, RouterConfig};
 
 #[tokio::test]
 async fn test_overlay_crud_flow() {
     let (state, _, _, _ptx) = common::create_test_state();
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     // Step 1: Create overlay with styled span (yellow, bold)
     let create_body = serde_json::json!({
@@ -166,7 +166,7 @@ async fn test_overlay_crud_flow() {
 #[tokio::test]
 async fn test_overlay_list_and_clear() {
     let (state, _, _, _ptx) = common::create_test_state();
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     // Create two overlays
     let create_body1 = serde_json::json!({
@@ -271,7 +271,7 @@ async fn test_overlay_list_and_clear() {
 #[tokio::test]
 async fn test_overlay_patch_position() {
     let (state, _, _, _ptx) = common::create_test_state();
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     // Create overlay
     let create_body = serde_json::json!({
@@ -349,7 +349,7 @@ async fn test_overlay_patch_position() {
 #[tokio::test]
 async fn test_overlay_not_found() {
     let (state, _, _, _ptx) = common::create_test_state();
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     // Try to get non-existent overlay
     let response = app
@@ -403,7 +403,7 @@ async fn test_overlay_not_found() {
 #[tokio::test]
 async fn test_overlay_create_with_background() {
     let (state, _, _, _ptx) = common::create_test_state();
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     // Create overlay with an opaque background
     let create_body = serde_json::json!({
@@ -464,7 +464,7 @@ async fn test_overlay_create_with_background() {
 #[tokio::test]
 async fn test_overlay_named_span_update() {
     let (state, _, _, _ptx) = common::create_test_state();
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     // Create overlay with named spans
     let create_body = serde_json::json!({
@@ -554,7 +554,7 @@ async fn test_overlay_named_span_update() {
 #[tokio::test]
 async fn test_overlay_region_write() {
     let (state, _, _, _ptx) = common::create_test_state();
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     // Create overlay with enough height for region writes
     let create_body = serde_json::json!({

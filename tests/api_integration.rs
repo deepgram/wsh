@@ -18,7 +18,7 @@ use tokio::net::TcpListener;
 use tokio::sync::{broadcast, mpsc};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tower::ServiceExt;
-use wsh::api::{router, AppState};
+use wsh::api::{router, AppState, RouterConfig};
 use wsh::broker::Broker;
 use wsh::input::{FocusTracker, InputBroadcaster, InputMode};
 use wsh::overlay::OverlayStore;
@@ -65,7 +65,7 @@ fn create_test_app() -> (axum::Router, mpsc::Receiver<Bytes>, broadcast::Sender<
         server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)),
             server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
-    (router(state, None), input_rx, broker.sender())
+    (router(state, RouterConfig::default()), input_rx, broker.sender())
 }
 
 /// Starts the server on a random available port and returns the address.
@@ -163,7 +163,7 @@ async fn test_api_input_multiple_requests() {
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
     let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new(), server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)), server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)) };
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     let inputs = vec!["first input", "second input", "third input"];
 
@@ -258,7 +258,7 @@ async fn test_websocket_receives_pty_output() {
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
     let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new(), server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)), server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)) };
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     let addr = start_test_server(app).await;
     let ws_url = format!("ws://{}/sessions/test/ws/raw", addr);
@@ -286,7 +286,7 @@ async fn test_websocket_receives_pty_output() {
 
     match received {
         Message::Binary(data) => {
-            assert_eq!(data, test_output.to_vec(), "Received data mismatch");
+            assert_eq!(data.to_vec(), test_output.to_vec(), "Received data mismatch");
         }
         other => panic!("Expected binary message, got: {:?}", other),
     }
@@ -325,7 +325,7 @@ async fn test_websocket_sends_input_to_pty() {
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
     let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new(), server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)), server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)) };
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     let addr = start_test_server(app).await;
     let ws_url = format!("ws://{}/sessions/test/ws/raw", addr);
@@ -341,7 +341,7 @@ async fn test_websocket_sends_input_to_pty() {
     // Send input via WebSocket
     let test_input = b"WebSocket input test";
     ws_stream
-        .send(Message::Binary(test_input.to_vec()))
+        .send(Message::Binary(test_input.to_vec().into()))
         .await
         .expect("Failed to send WebSocket message");
 
@@ -388,7 +388,7 @@ async fn test_websocket_text_input_to_pty() {
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
     let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new(), server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)), server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)) };
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     let addr = start_test_server(app).await;
     let ws_url = format!("ws://{}/sessions/test/ws/raw", addr);
@@ -402,7 +402,7 @@ async fn test_websocket_text_input_to_pty() {
     // Send text input via WebSocket
     let test_text = "text message input";
     ws_stream
-        .send(Message::Text(test_text.to_string()))
+        .send(Message::Text(test_text.to_string().into()))
         .await
         .expect("Failed to send WebSocket text message");
 
@@ -450,7 +450,7 @@ async fn test_websocket_bidirectional_communication() {
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
     let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new(), server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)), server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)) };
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     let addr = start_test_server(app).await;
     let ws_url = format!("ws://{}/sessions/test/ws/raw", addr);
@@ -464,7 +464,7 @@ async fn test_websocket_bidirectional_communication() {
     // Send input via WebSocket
     let test_input = b"bidirectional input";
     ws_stream
-        .send(Message::Binary(test_input.to_vec()))
+        .send(Message::Binary(test_input.to_vec().into()))
         .await
         .expect("Failed to send WebSocket message");
 
@@ -490,7 +490,7 @@ async fn test_websocket_bidirectional_communication() {
 
     match received_output {
         Message::Binary(data) => {
-            assert_eq!(data, test_output.to_vec());
+            assert_eq!(data.to_vec(), test_output.to_vec());
         }
         other => panic!("Expected binary message, got: {:?}", other),
     }
@@ -531,7 +531,7 @@ async fn test_websocket_multiple_outputs() {
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
     let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new(), server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)), server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)) };
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     let addr = start_test_server(app).await;
     let ws_url = format!("ws://{}/sessions/test/ws/raw", addr);
@@ -563,7 +563,7 @@ async fn test_websocket_multiple_outputs() {
 
         match received {
             Message::Binary(data) => {
-                assert_eq!(data, expected.to_vec());
+                assert_eq!(data.to_vec(), expected.to_vec());
             }
             other => panic!("Expected binary message, got: {:?}", other),
         }
@@ -696,7 +696,7 @@ async fn test_websocket_line_event_includes_total_lines() {
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
     let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new(), server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)), server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)) };
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     let addr = start_test_server(app).await;
     let ws_url = format!("ws://{}/sessions/test/ws/json", addr);
@@ -714,7 +714,7 @@ async fn test_websocket_line_event_includes_total_lines() {
     // Subscribe to lines (using new unified protocol)
     let subscribe_msg = serde_json::json!({"method": "subscribe", "params": {"events": ["lines"]}});
     ws_stream
-        .send(Message::Text(subscribe_msg.to_string()))
+        .send(Message::Text(subscribe_msg.to_string().into()))
         .await
         .unwrap();
 
@@ -788,7 +788,7 @@ async fn test_scrollback_endpoint() {
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
     let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new(), server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)), server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)) };
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     // Send enough lines to create scrollback (more than 5 rows)
     // Send to parser channel so terminal state is updated
@@ -859,7 +859,7 @@ async fn test_scrollback_initial_state() {
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
     let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new(), server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)), server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)) };
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     // Query immediately without any output
     let response = app

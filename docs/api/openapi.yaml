@@ -5,6 +5,29 @@ info:
   description: >
     wsh exposes terminal I/O via HTTP and WebSocket. This spec covers every
     endpoint, request/response schema, authentication, and error format.
+
+
+    **Security headers:** All API responses include the following headers:
+    `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`,
+    `Referrer-Policy: no-referrer`.
+
+
+    **WebSocket origin validation:** When the server is running without
+    authentication (localhost only), WebSocket upgrade requests that include
+    an `Origin` header not matching localhost are rejected with
+    `403 origin_not_allowed`. Non-browser clients (no Origin header) are
+    allowed. When authentication is active (token set), origin validation
+    is skipped.
+
+
+    **CORS:** Use the `--cors-origin` CLI flag (repeatable) to allow
+    specific origins. Allowed methods: GET, POST, PUT, PATCH, DELETE,
+    OPTIONS. Allowed headers: Authorization, Content-Type.
+
+
+    **Rate limiting:** Use the `--rate-limit` CLI flag (requests/sec) to
+    enable per-IP rate limiting on protected routes. Excess requests
+    receive 429 Too Many Requests.
   license:
     name: MIT
 
@@ -167,14 +190,22 @@ paths:
       tags: [websocket]
       description: >
         Bidirectional byte stream mirroring the PTY. Output arrives as binary
-        frames. Send binary or text frames to inject input.
+        frames. Send binary or text frames to inject input. When running
+        without auth (localhost), requests with a non-localhost Origin header
+        are rejected with 403 `origin_not_allowed`.
       responses:
         "101":
           description: WebSocket upgrade successful.
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
-          $ref: "#/components/responses/Forbidden"
+          description: >
+            Forbidden. Either invalid credentials or a non-localhost Origin
+            header when running without auth.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /ws/json:
     get:
@@ -186,14 +217,22 @@ paths:
         upgrade, server sends {"connected": true}. Client can immediately
         send method calls (get_screen, send_input, subscribe, etc.) and
         receive responses. Subscribing to events is optional. See
-        websocket.md for the full protocol specification.
+        websocket.md for the full protocol specification. When running
+        without auth (localhost), requests with a non-localhost Origin header
+        are rejected with 403 `origin_not_allowed`.
       responses:
         "101":
           description: WebSocket upgrade successful.
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
-          $ref: "#/components/responses/Forbidden"
+          description: >
+            Forbidden. Either invalid credentials or a non-localhost Origin
+            header when running without auth.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /overlay:
     post:
@@ -948,7 +987,9 @@ paths:
       tags: [session]
       description: >
         Spawns a new PTY session with the specified command (or the user's
-        default shell). Returns the assigned session name.
+        default shell). Returns the assigned session name. Session names
+        must match `[a-zA-Z0-9._-]` and be 1-64 characters long. Terminal
+        dimensions (rows, cols) are clamped to the range 1-1000.
       requestBody:
         required: true
         content:
@@ -962,6 +1003,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SessionInfo"
+        "400":
+          $ref: "#/components/responses/InvalidSessionName"
         "409":
           description: Session name already exists.
           content:
@@ -1018,6 +1061,9 @@ paths:
       operationId: updateSession
       summary: Update a session (rename, add/remove tags)
       tags: [session]
+      description: >
+        Renames the session or modifies its tags. When renaming, the new
+        name must match `[a-zA-Z0-9._-]` and be 1-64 characters long.
       requestBody:
         required: true
         content:
@@ -1031,6 +1077,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SessionInfo"
+        "400":
+          $ref: "#/components/responses/InvalidSessionName"
         "404":
           description: Session not found.
           content:
@@ -1165,10 +1213,19 @@ paths:
             type: string
       description: >
         WebSocket upgrade for per-session real-time events and method calls.
-        Same protocol as /ws/json but scoped to a single session.
+        Same protocol as /ws/json but scoped to a single session. When
+        running without auth (localhost), requests with a non-localhost
+        Origin header are rejected with 403 `origin_not_allowed`.
       responses:
         "101":
           description: WebSocket upgrade.
+        "403":
+          description: >
+            Non-localhost Origin header when running without auth.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "404":
           description: Session not found.
 
@@ -1184,10 +1241,19 @@ paths:
           schema:
             type: string
       description: >
-        WebSocket upgrade for raw PTY I/O on a specific session.
+        WebSocket upgrade for raw PTY I/O on a specific session. When
+        running without auth (localhost), requests with a non-localhost
+        Origin header are rejected with 403 `origin_not_allowed`.
       responses:
         "101":
           description: WebSocket upgrade.
+        "403":
+          description: >
+            Non-localhost Origin header when running without auth.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "404":
           description: Session not found.
 
@@ -1264,6 +1330,14 @@ components:
             $ref: "#/components/schemas/ErrorResponse"
     Forbidden:
       description: Invalid credentials.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    InvalidSessionName:
+      description: >
+        Session name is invalid. Names must match `[a-zA-Z0-9._-]` and
+        be 1-64 characters long.
       content:
         application/json:
           schema:
@@ -1624,20 +1698,27 @@ components:
       properties:
         name:
           type: string
-          description: Session name (auto-generated if omitted).
+          pattern: "^[a-zA-Z0-9._-]{1,64}$"
+          minLength: 1
+          maxLength: 64
+          description: >
+            Session name (auto-generated if omitted). Must contain only
+            letters, digits, dots, hyphens, and underscores. 1-64 chars.
         command:
           type: string
           description: Command to run (defaults to user's shell).
         rows:
           type: integer
           minimum: 1
+          maximum: 1000
           default: 24
-          description: Terminal rows.
+          description: Terminal rows. Values outside 1-1000 are clamped.
         cols:
           type: integer
           minimum: 1
+          maximum: 1000
           default: 80
-          description: Terminal columns.
+          description: Terminal columns. Values outside 1-1000 are clamped.
         cwd:
           type: string
           description: Working directory for the session.
@@ -1657,7 +1738,12 @@ components:
       properties:
         name:
           type: string
-          description: New session name (optional).
+          pattern: "^[a-zA-Z0-9._-]{1,64}$"
+          minLength: 1
+          maxLength: 64
+          description: >
+            New session name (optional). Must contain only letters, digits,
+            dots, hyphens, and underscores. 1-64 chars.
         add_tags:
           type: array
           items: { type: string }
@@ -1753,7 +1839,13 @@ components:
       required: [events]
       properties:
         events: { type: array, items: { $ref: "#/components/schemas/EventType" } }
-        interval_ms: { type: integer, minimum: 0, default: 100 }
+        interval_ms:
+          type: integer
+          minimum: 0
+          default: 100
+          description: >
+            Batching interval in milliseconds. Values exceeding the server's
+            maximum wait ceiling are clamped.
         format: { $ref: "#/components/schemas/Format" }
         idle_timeout_ms:
           type: integer
@@ -1761,7 +1853,8 @@ components:
           default: 0
           description: >
             When > 0, emit a sync event after this many ms of terminal
-            inactivity following any activity. 0 = disabled.
+            inactivity following any activity. 0 = disabled. Values
+            exceeding the server's maximum wait ceiling are clamped.
 
     SendInputParams:
       type: object
@@ -1986,6 +2079,7 @@ components:
                 - panel_not_found
                 - session_not_found
                 - invalid_request
+                - invalid_session_name
                 - invalid_overlay
                 - invalid_input_mode
                 - invalid_format
@@ -2003,5 +2097,7 @@ components:
                 - not_focusable
                 - already_in_alt_screen
                 - not_in_alt_screen
+                - origin_not_allowed
+                - rate_limited
                 - internal_error
             message: { type: string }

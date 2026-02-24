@@ -10,7 +10,7 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use tokio::net::TcpListener;
-use wsh::api::{router, AppState, ServerConfig};
+use wsh::api::{router, AppState, RouterConfig, ServerConfig};
 use wsh::session::SessionRegistry;
 use wsh::shutdown::ShutdownCoordinator;
 
@@ -23,7 +23,7 @@ fn create_test_app() -> axum::Router {
         server_config: std::sync::Arc::new(ServerConfig::new(false)),
             server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
-    router(state, None)
+    router(state, RouterConfig::default())
 }
 
 async fn start_test_server(app: axum::Router) -> SocketAddr {
@@ -269,7 +269,7 @@ async fn test_mcp_endpoint_exempt_from_auth() {
             server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
     // Create router WITH auth token
-    let app = router(state, Some("secret-token".to_string()));
+    let app = router(state, RouterConfig { token: Some("secret-token".to_string()), ..Default::default() });
     let addr = start_test_server(app).await;
     let client = reqwest::Client::new();
 
@@ -1527,7 +1527,7 @@ async fn test_http_and_mcp_coexist() {
         server_config: std::sync::Arc::new(ServerConfig::new(false)),
             server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
     let addr = start_test_server(app).await;
     let client = reqwest::Client::new();
 

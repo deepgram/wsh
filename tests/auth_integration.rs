@@ -14,12 +14,12 @@ use axum::{
     http::{Request, StatusCode},
 };
 use tower::ServiceExt;
-use wsh::api::router;
+use wsh::api::{router, RouterConfig};
 
 #[tokio::test]
 async fn test_auth_required_on_protected_routes() {
     let (state, _, _, _ptx) = common::create_test_state();
-    let app = router(state, Some("test-token".to_string()));
+    let app = router(state, RouterConfig { token: Some("test-token".to_string()), ..Default::default() });
 
     let response = app
         .oneshot(
@@ -43,7 +43,7 @@ async fn test_auth_required_on_protected_routes() {
 #[tokio::test]
 async fn test_health_exempt_from_auth() {
     let (state, _, _, _ptx) = common::create_test_state();
-    let app = router(state, Some("test-token".to_string()));
+    let app = router(state, RouterConfig { token: Some("test-token".to_string()), ..Default::default() });
 
     let response = app
         .oneshot(
@@ -61,7 +61,7 @@ async fn test_health_exempt_from_auth() {
 #[tokio::test]
 async fn test_bearer_token_grants_access() {
     let (state, _, _, _ptx) = common::create_test_state();
-    let app = router(state, Some("test-token".to_string()));
+    let app = router(state, RouterConfig { token: Some("test-token".to_string()), ..Default::default() });
 
     let response = app
         .oneshot(
@@ -80,7 +80,7 @@ async fn test_bearer_token_grants_access() {
 #[tokio::test]
 async fn test_query_param_token_grants_access() {
     let (state, _, _, _ptx) = common::create_test_state();
-    let app = router(state, Some("test-token".to_string()));
+    let app = router(state, RouterConfig { token: Some("test-token".to_string()), ..Default::default() });
 
     let response = app
         .oneshot(
@@ -98,7 +98,7 @@ async fn test_query_param_token_grants_access() {
 #[tokio::test]
 async fn test_wrong_token_returns_403() {
     let (state, _, _, _ptx) = common::create_test_state();
-    let app = router(state, Some("test-token".to_string()));
+    let app = router(state, RouterConfig { token: Some("test-token".to_string()), ..Default::default() });
 
     let response = app
         .oneshot(
@@ -123,7 +123,7 @@ async fn test_wrong_token_returns_403() {
 #[tokio::test]
 async fn test_no_auth_when_token_is_none() {
     let (state, _, _, _ptx) = common::create_test_state();
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     let response = app
         .oneshot(

@@ -112,7 +112,7 @@ async fn http_get(addr: SocketAddr, uri: &str) -> (u16, serde_json::Value) {
 #[tokio::test]
 async fn test_http_idle_returns_screen_state_after_quiet() {
     let (state, _rx, _activity, _parser_tx) = create_test_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     // Terminal should already be idle (no activity for >100ms given setup time)
@@ -134,7 +134,7 @@ async fn test_http_idle_returns_screen_state_after_quiet() {
 #[tokio::test]
 async fn test_http_idle_returns_408_when_deadline_exceeded() {
     let (state, _rx, activity, _parser_tx) = create_test_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     // Keep touching to prevent idle
@@ -158,7 +158,7 @@ async fn test_http_idle_returns_408_when_deadline_exceeded() {
 #[tokio::test]
 async fn test_http_idle_returns_immediately_when_already_idle() {
     let (state, _rx, _activity, _parser_tx) = create_test_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     // Wait for well past the timeout
@@ -184,7 +184,7 @@ async fn test_http_idle_returns_immediately_when_already_idle() {
 #[tokio::test]
 async fn test_http_idle_waits_for_activity_to_stop() {
     let (state, _rx, activity, _parser_tx) = create_test_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     // Generate activity for 200ms then stop
@@ -217,7 +217,7 @@ async fn test_http_idle_waits_for_activity_to_stop() {
 #[tokio::test]
 async fn test_http_input_resets_idle_timer() {
     let (state, _rx, activity, _parser_tx) = create_test_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     // Touch to mark current activity -- the idle request will need to wait
@@ -267,7 +267,7 @@ async fn test_http_input_resets_idle_timer() {
 #[tokio::test]
 async fn test_ws_await_idle_returns_sync_result() {
     let (state, _rx, _activity, _parser_tx) = create_test_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     // Wait for terminal to be idle
@@ -293,7 +293,7 @@ async fn test_ws_await_idle_returns_sync_result() {
         "method": "await_idle",
         "params": {"timeout_ms": 100, "format": "plain"}
     });
-    ws.send(Message::Text(req.to_string())).await.unwrap();
+    ws.send(Message::Text(req.to_string().into())).await.unwrap();
 
     // Read response
     let msg = ws.next().await.unwrap().unwrap();
@@ -309,7 +309,7 @@ async fn test_ws_await_idle_returns_sync_result() {
 #[tokio::test]
 async fn test_ws_await_idle_timeout_error() {
     let (state, _rx, activity, _parser_tx) = create_test_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     // Keep touching
@@ -338,7 +338,7 @@ async fn test_ws_await_idle_timeout_error() {
         "method": "await_idle",
         "params": {"timeout_ms": 500, "max_wait_ms": 200}
     });
-    ws.send(Message::Text(req.to_string())).await.unwrap();
+    ws.send(Message::Text(req.to_string().into())).await.unwrap();
 
     // Read response (should be error)
     let msg = ws.next().await.unwrap().unwrap();
@@ -358,7 +358,7 @@ async fn test_ws_await_idle_timeout_error() {
 #[tokio::test]
 async fn test_ws_idle_timeout_emits_running_then_idle() {
     let (state, _rx, activity, _parser_tx) = create_test_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     let (mut ws, _resp) =
@@ -378,7 +378,7 @@ async fn test_ws_idle_timeout_emits_running_then_idle() {
         "method": "subscribe",
         "params": {"events": ["lines", "activity"], "idle_timeout_ms": 200, "format": "plain"}
     });
-    ws.send(Message::Text(req.to_string())).await.unwrap();
+    ws.send(Message::Text(req.to_string().into())).await.unwrap();
 
     // Read subscribe response
     let msg = ws.next().await.unwrap().unwrap();
@@ -474,7 +474,7 @@ async fn test_ws_idle_timeout_emits_running_then_idle() {
 async fn test_ws_quiesce_ms_alias_still_works() {
     // Verify backward compatibility: quiesce_ms alias is accepted
     let (state, _rx, _activity, _parser_tx) = create_test_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     let (mut ws, _resp) =
@@ -494,7 +494,7 @@ async fn test_ws_quiesce_ms_alias_still_works() {
         "method": "subscribe",
         "params": {"events": ["activity"], "quiesce_ms": 200, "format": "plain"}
     });
-    ws.send(Message::Text(req.to_string())).await.unwrap();
+    ws.send(Message::Text(req.to_string().into())).await.unwrap();
 
     // Read subscribe response — should succeed
     let msg = ws.next().await.unwrap().unwrap();
@@ -510,7 +510,7 @@ async fn test_ws_quiesce_ms_alias_still_works() {
 #[tokio::test]
 async fn test_http_idle_returns_generation() {
     let (state, _rx, activity, _parser_tx) = create_test_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     activity.touch();
@@ -530,7 +530,7 @@ async fn test_http_idle_returns_generation() {
 #[tokio::test]
 async fn test_http_idle_last_generation_prevents_storm() {
     let (state, _rx, activity, _parser_tx) = create_test_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     // Touch once, let it settle
@@ -572,7 +572,7 @@ async fn test_http_idle_last_generation_prevents_storm() {
 #[tokio::test]
 async fn test_http_idle_last_generation_stale_returns_normally() {
     let (state, _rx, activity, _parser_tx) = create_test_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     // Touch twice, let it settle
@@ -599,7 +599,7 @@ async fn test_http_idle_last_generation_stale_returns_normally() {
 #[tokio::test]
 async fn test_http_idle_last_generation_timeout() {
     let (state, _rx, _activity, _parser_tx) = create_test_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     // Terminal is idle at generation=0, no new activity will come
@@ -621,7 +621,7 @@ async fn test_http_idle_last_generation_timeout() {
 #[tokio::test]
 async fn test_http_idle_fresh_always_waits() {
     let (state, _rx, _activity, _parser_tx) = create_test_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     // Wait for terminal to be idle well past the timeout
@@ -648,7 +648,7 @@ async fn test_http_idle_fresh_always_waits() {
 #[tokio::test]
 async fn test_http_idle_fresh_resets_on_activity() {
     let (state, _rx, activity, _parser_tx) = create_test_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     tokio::time::sleep(Duration::from_millis(300)).await;
@@ -684,7 +684,7 @@ async fn test_http_idle_fresh_resets_on_activity() {
 #[tokio::test]
 async fn test_ws_await_idle_returns_generation() {
     let (state, _rx, activity, _parser_tx) = create_test_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     activity.touch();
@@ -706,7 +706,7 @@ async fn test_ws_await_idle_returns_generation() {
         "method": "await_idle",
         "params": {"timeout_ms": 100, "format": "plain"}
     });
-    ws.send(Message::Text(req.to_string())).await.unwrap();
+    ws.send(Message::Text(req.to_string().into())).await.unwrap();
 
     let msg = ws.next().await.unwrap().unwrap();
     let resp: serde_json::Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
@@ -719,7 +719,7 @@ async fn test_ws_await_idle_returns_generation() {
 #[tokio::test]
 async fn test_ws_await_idle_last_generation_blocks() {
     let (state, _rx, activity, _parser_tx) = create_test_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     activity.touch(); // generation = 1
@@ -750,7 +750,7 @@ async fn test_ws_await_idle_last_generation_blocks() {
         "params": {"timeout_ms": 100, "last_generation": 1, "format": "plain"}
     });
     let start = std::time::Instant::now();
-    ws.send(Message::Text(req.to_string())).await.unwrap();
+    ws.send(Message::Text(req.to_string().into())).await.unwrap();
 
     let msg = ws.next().await.unwrap().unwrap();
     let resp: serde_json::Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
@@ -827,7 +827,7 @@ fn create_multi_session_state() -> (api::AppState, ActivityTracker, ActivityTrac
 #[tokio::test]
 async fn test_http_idle_any_returns_first_idle_session() {
     let (state, _activity_a, _activity_b, _ptx_a, _ptx_b) = create_multi_session_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     // Both sessions are idle, so one should be returned
@@ -848,7 +848,7 @@ async fn test_http_idle_any_returns_first_idle_session() {
 #[tokio::test]
 async fn test_http_idle_any_returns_408_when_all_busy() {
     let (state, activity_a, activity_b, _ptx_a, _ptx_b) = create_multi_session_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     // Keep both sessions busy
@@ -872,7 +872,7 @@ async fn test_http_idle_any_returns_408_when_all_busy() {
 #[tokio::test]
 async fn test_http_idle_any_picks_idle_session_while_other_busy() {
     let (state, activity_a, _activity_b, _ptx_a, _ptx_b) = create_multi_session_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     // Keep alpha busy, leave beta idle
@@ -897,7 +897,7 @@ async fn test_http_idle_any_picks_idle_session_while_other_busy() {
 #[tokio::test]
 async fn test_http_idle_any_last_generation_skips_stale_session() {
     let (state, activity_a, activity_b, _ptx_a, _ptx_b) = create_multi_session_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     // Touch alpha once, leave beta untouched
@@ -941,7 +941,7 @@ async fn test_http_idle_any_last_generation_skips_stale_session() {
 #[tokio::test]
 async fn test_http_idle_any_fresh_always_waits() {
     let (state, _activity_a, _activity_b, _ptx_a, _ptx_b) = create_multi_session_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     // Wait well past the timeout
@@ -970,7 +970,7 @@ async fn test_http_idle_any_no_sessions_returns_404() {
         server_config: std::sync::Arc::new(api::ServerConfig::new(false)),
             server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     let (status, json) = http_get(addr, "/idle?timeout_ms=100&format=plain").await;
@@ -986,7 +986,7 @@ async fn test_http_idle_any_no_sessions_returns_404() {
 #[tokio::test]
 async fn test_http_session_info_includes_last_activity_ms() {
     let (state, _rx, _activity, _parser_tx) = create_test_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     let (status, json) = http_get(addr, "/sessions").await;
@@ -1014,7 +1014,7 @@ async fn test_ws_subscribe_activity_initial_idle() {
     // A session that has been idle longer than idle_timeout_ms should emit
     // an immediate Idle event (with screen data) right after subscribe.
     let (state, _rx, _activity, _parser_tx) = create_test_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     // Let the session sit idle for longer than the timeout we'll subscribe with.
@@ -1037,7 +1037,7 @@ async fn test_ws_subscribe_activity_initial_idle() {
         "method": "subscribe",
         "params": {"events": ["activity"], "idle_timeout_ms": 200, "format": "plain"}
     });
-    ws.send(Message::Text(req.to_string())).await.unwrap();
+    ws.send(Message::Text(req.to_string().into())).await.unwrap();
 
     // Read subscribe response
     let msg = ws.next().await.unwrap().unwrap();
@@ -1063,7 +1063,7 @@ async fn test_ws_subscribe_activity_initial_running() {
     // A session with very recent activity should emit an immediate Running
     // event right after subscribe.
     let (state, _rx, activity, _parser_tx) = create_test_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     let (mut ws, _resp) =
@@ -1086,7 +1086,7 @@ async fn test_ws_subscribe_activity_initial_running() {
         "method": "subscribe",
         "params": {"events": ["activity"], "idle_timeout_ms": 5000, "format": "plain"}
     });
-    ws.send(Message::Text(req.to_string())).await.unwrap();
+    ws.send(Message::Text(req.to_string().into())).await.unwrap();
 
     // Read subscribe response
     let msg = ws.next().await.unwrap().unwrap();
@@ -1111,7 +1111,7 @@ async fn test_ws_subscribe_activity_initial_running() {
 async fn test_ws_subscribe_activity_multiple_cycles() {
     // Verify that two activity→idle cycles produce two Running+Idle pairs.
     let (state, _rx, activity, _parser_tx) = create_test_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     let (mut ws, _resp) =
@@ -1131,7 +1131,7 @@ async fn test_ws_subscribe_activity_multiple_cycles() {
         "method": "subscribe",
         "params": {"events": ["activity"], "idle_timeout_ms": 150, "format": "plain"}
     });
-    ws.send(Message::Text(req.to_string())).await.unwrap();
+    ws.send(Message::Text(req.to_string().into())).await.unwrap();
 
     // Read subscribe response
     let _ = ws.next().await.unwrap().unwrap();
@@ -1236,7 +1236,7 @@ async fn test_ws_subscribe_activity_idle_to_running_transition() {
     // After the session becomes idle, new activity should emit a Running
     // event, demonstrating the idle→running transition.
     let (state, _rx, activity, _parser_tx) = create_test_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     let (mut ws, _resp) =
@@ -1256,7 +1256,7 @@ async fn test_ws_subscribe_activity_idle_to_running_transition() {
         "method": "subscribe",
         "params": {"events": ["activity"], "idle_timeout_ms": 150, "format": "plain"}
     });
-    ws.send(Message::Text(req.to_string())).await.unwrap();
+    ws.send(Message::Text(req.to_string().into())).await.unwrap();
 
     // Read subscribe response, sync event, and initial activity state
     let _ = ws.next().await.unwrap().unwrap();
@@ -1322,7 +1322,7 @@ async fn test_ws_subscribe_activity_idle_to_running_transition() {
 #[tokio::test]
 async fn test_http_screen_includes_last_activity_ms() {
     let (state, _rx, _activity, _parser_tx) = create_test_state();
-    let app = api::router(state, None);
+    let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
 
     let (status, json) = http_get(addr, "/sessions/test/screen?format=plain").await;

@@ -294,6 +294,13 @@ endpoint is always available:
 
 Returns `{"name": "build", "tags": ["build", "ci"]}` on success.
 
+**Session name rules:** Names must be 1-64 characters and contain only
+letters, digits, dots, hyphens, and underscores (`[a-zA-Z0-9._-]`).
+Invalid names return `400 invalid_session_name`. If omitted, the server
+auto-generates a valid name.
+
+**Terminal dimensions:** `rows` and `cols` are clamped to 1-1000.
+
 Tags are optional string labels (1-64 chars, alphanumeric plus
 hyphens, underscores, and dots). Use them to group and filter
 sessions by purpose.
@@ -352,7 +359,7 @@ session settles within `max_wait_ms`.
     curl -s http://localhost:8080/sessions/build         # get info
     curl -s -X PATCH http://localhost:8080/sessions/build \
       -H "Content-Type: application/json" \
-      -d '{"name": "build-v2"}'                         # rename
+      -d '{"name": "build-v2"}'                         # rename (same name rules apply)
     curl -s -X PATCH http://localhost:8080/sessions/build \
       -H "Content-Type: application/json" \
       -d '{"add_tags": ["ci"]}'                         # add tags

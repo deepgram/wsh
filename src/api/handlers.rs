@@ -139,7 +139,7 @@ async fn handle_ws_raw(
             result = output_rx.recv() => {
                 match result {
                     Ok(data) => {
-                        match tokio::time::timeout(WS_SEND_TIMEOUT, ws_tx.send(Message::Binary(data.to_vec()))).await {
+                        match tokio::time::timeout(WS_SEND_TIMEOUT, ws_tx.send(Message::Binary(data))).await {
                             Ok(Ok(())) => {}
                             Ok(Err(_)) => break,
                             Err(_) => {
@@ -180,7 +180,7 @@ async fn handle_ws_raw(
                             ));
                             match tokio::time::timeout(
                                 WS_SEND_TIMEOUT,
-                                ws_tx.send(Message::Binary(buf.into_bytes())),
+                                ws_tx.send(Message::Binary(Bytes::from(buf.into_bytes()))),
                             ).await {
                                 Ok(Ok(())) => {}
                                 _ => break,
@@ -196,7 +196,7 @@ async fn handle_ws_raw(
                     Some(Ok(Message::Binary(data))) => {
                         match tokio::time::timeout(
                             std::time::Duration::from_secs(5),
-                            input_tx.send(Bytes::from(data)),
+                            input_tx.send(data),
                         ).await {
                             Ok(Ok(())) => {}
                             Ok(Err(_)) => break,
@@ -235,7 +235,7 @@ async fn handle_ws_raw(
                     tracing::debug!("ws_raw client unresponsive (no pong), closing");
                     break;
                 }
-                match tokio::time::timeout(WS_SEND_TIMEOUT, ws_tx.send(Message::Ping(vec![]))).await {
+                match tokio::time::timeout(WS_SEND_TIMEOUT, ws_tx.send(Message::Ping(Bytes::new()))).await {
                     Ok(Ok(())) => {}
                     Ok(Err(_)) | Err(_) => break,
                 }
@@ -299,7 +299,7 @@ async fn handle_ws_json(
     // Send connected message
     let connected_msg = serde_json::json!({ "connected": true });
     if ws_tx
-        .send(Message::Text(connected_msg.to_string()))
+        .send(Message::Text(connected_msg.to_string().into()))
         .await
         .is_err()
     {
@@ -373,7 +373,7 @@ async fn handle_ws_json(
 
                         if should_send {
                             if let Ok(json) = serde_json::to_string(&event) {
-                                ws_send!(ws_tx, Message::Text(json));
+                                ws_send!(ws_tx, Message::Text(json.into()));
                             }
                         }
                     }
@@ -381,7 +381,7 @@ async fn handle_ws_json(
                         tracing::warn!(skipped = n, "parser event subscriber lagged");
                         let lag_msg = serde_json::json!({"type": "lagged", "skipped": n});
                         if let Ok(json) = serde_json::to_string(&lag_msg) {
-                            ws_send!(ws_tx, Message::Text(json));
+                            ws_send!(ws_tx, Message::Text(json.into()));
                         }
                         // After lag, push a full sync so the client can recover.
                         // Without this, the client has an incomplete view of state.
@@ -398,7 +398,7 @@ async fn handle_ws_json(
                                 scrollback_lines,
                             };
                             if let Ok(json) = serde_json::to_string(&sync_event) {
-                                ws_send!(ws_tx, Message::Text(json));
+                                ws_send!(ws_tx, Message::Text(json.into()));
                             }
                         }
                     }
@@ -416,7 +416,7 @@ async fn handle_ws_json(
                 match input_event {
                     Ok(event) => {
                         if let Ok(json) = serde_json::to_string(&event) {
-                            ws_send!(ws_tx, Message::Text(json));
+                            ws_send!(ws_tx, Message::Text(json.into()));
                         }
                     }
                     Err(broadcast::error::RecvError::Closed) => {
@@ -426,7 +426,7 @@ async fn handle_ws_json(
                         tracing::warn!(skipped = n, "input event subscriber lagged");
                         let lag_msg = serde_json::json!({"type": "input_lagged", "skipped": n});
                         if let Ok(json) = serde_json::to_string(&lag_msg) {
-                            ws_send!(ws_tx, Message::Text(json));
+                            ws_send!(ws_tx, Message::Text(json.into()));
                         }
                     }
                 }
@@ -458,7 +458,7 @@ async fn handle_ws_json(
                                 }),
                             );
                             if let Ok(json) = serde_json::to_string(&resp) {
-                                ws_send!(ws_tx, Message::Text(json));
+                                ws_send!(ws_tx, Message::Text(json.into()));
                             }
                         }
                         _ => {
@@ -469,7 +469,7 @@ async fn handle_ws_json(
                                 "Terminal is idle but screen query failed.",
                             );
                             if let Ok(json) = serde_json::to_string(&resp) {
-                                ws_send!(ws_tx, Message::Text(json));
+                                ws_send!(ws_tx, Message::Text(json.into()));
                             }
                         }
                     }
@@ -482,7 +482,7 @@ async fn handle_ws_json(
                         "Terminal did not become idle within the deadline.",
                     );
                     if let Ok(json) = serde_json::to_string(&resp) {
-                        ws_send!(ws_tx, Message::Text(json));
+                        ws_send!(ws_tx, Message::Text(json.into()));
                     }
                 }
             }
@@ -509,7 +509,7 @@ async fn handle_ws_json(
                                 scrollback_lines,
                             };
                             if let Ok(json) = serde_json::to_string(&idle_event) {
-                                ws_send!(ws_tx, Message::Text(json));
+                                ws_send!(ws_tx, Message::Text(json.into()));
                             }
                         }
                     }
@@ -519,7 +519,7 @@ async fn handle_ws_json(
                             generation,
                         };
                         if let Ok(json) = serde_json::to_string(&running_event) {
-                            ws_send!(ws_tx, Message::Text(json));
+                            ws_send!(ws_tx, Message::Text(json.into()));
                         }
                     }
                     None => {
@@ -535,7 +535,7 @@ async fn handle_ws_json(
                     tracing::debug!("ws_json client unresponsive (no pong), closing");
                     break;
                 }
-                ws_send!(ws_tx, Message::Ping(vec![]));
+                ws_send!(ws_tx, Message::Ping(Bytes::new()));
                 ping_sent = true;
             }
 
@@ -555,7 +555,7 @@ async fn handle_ws_json(
                                     "Invalid JSON or missing 'method' field.",
                                 );
                                 if let Ok(json) = serde_json::to_string(&err) {
-                                    ws_send!(ws_tx, Message::Text(json));
+                                    ws_send!(ws_tx, Message::Text(json.into()));
                                 }
                                 continue;
                             }
@@ -565,7 +565,9 @@ async fn handle_ws_json(
                         if req.method == "subscribe" {
                             let params_value = req.params.clone().unwrap_or(serde_json::Value::Object(Default::default()));
                             match serde_json::from_value::<super::ws_methods::SubscribeParams>(params_value) {
-                                Ok(params) => {
+                                Ok(mut params) => {
+                                    params.idle_timeout_ms = params.idle_timeout_ms.min(MAX_WAIT_CEILING_MS);
+                                    params.interval_ms = params.interval_ms.min(MAX_WAIT_CEILING_MS);
                                     subscribed_types = params.events.clone();
                                     let sub_format = params.format;
 
@@ -662,7 +664,7 @@ async fn handle_ws_json(
                                         serde_json::json!({"events": event_names}),
                                     );
                                     if let Ok(json) = serde_json::to_string(&resp) {
-                                        ws_send!(ws_tx, Message::Text(json));
+                                        ws_send!(ws_tx, Message::Text(json.into()));
                                     }
 
                                     // Send sync event (with timeout to avoid blocking the loop)
@@ -677,7 +679,7 @@ async fn handle_ws_json(
                                             scrollback_lines,
                                         };
                                         if let Ok(json) = serde_json::to_string(&sync_event) {
-                                            ws_send!(ws_tx, Message::Text(json));
+                                            ws_send!(ws_tx, Message::Text(json.into()));
                                         }
                                     }
 
@@ -698,7 +700,7 @@ async fn handle_ws_json(
                                                     scrollback_lines,
                                                 };
                                                 if let Ok(json) = serde_json::to_string(&idle_event) {
-                                                    ws_send!(ws_tx, Message::Text(json));
+                                                    ws_send!(ws_tx, Message::Text(json.into()));
                                                 }
                                             }
                                         } else {
@@ -707,20 +709,20 @@ async fn handle_ws_json(
                                                 generation,
                                             };
                                             if let Ok(json) = serde_json::to_string(&running_event) {
-                                                ws_send!(ws_tx, Message::Text(json));
+                                                ws_send!(ws_tx, Message::Text(json.into()));
                                             }
                                         }
                                     }
                                 }
-                                Err(e) => {
+                                Err(_) => {
                                     let resp = super::ws_methods::WsResponse::error(
                                         req.id.clone(),
                                         "subscribe",
                                         "invalid_request",
-                                        &format!("Invalid subscribe params: {}.", e),
+                                        "Invalid parameters for this method.",
                                     );
                                     if let Ok(json) = serde_json::to_string(&resp) {
-                                        ws_send!(ws_tx, Message::Text(json));
+                                        ws_send!(ws_tx, Message::Text(json.into()));
                                     }
                                 }
                             }
@@ -758,20 +760,20 @@ async fn handle_ws_json(
                                             "A new await_idle request superseded this one.",
                                         );
                                         if let Ok(json) = serde_json::to_string(&resp) {
-                                            ws_send!(ws_tx, Message::Text(json));
+                                            ws_send!(ws_tx, Message::Text(json.into()));
                                         }
                                     }
                                     pending_idle = Some((req.id.clone(), req.method.clone(), format, fut));
                                 }
-                                Err(e) => {
+                                Err(_) => {
                                     let resp = super::ws_methods::WsResponse::error(
                                         req.id.clone(),
                                         &req.method,
                                         "invalid_request",
-                                        &format!("Invalid await_idle params: {}.", e),
+                                        "Invalid parameters for this method.",
                                     );
                                     if let Ok(json) = serde_json::to_string(&resp) {
-                                        ws_send!(ws_tx, Message::Text(json));
+                                        ws_send!(ws_tx, Message::Text(json.into()));
                                     }
                                 }
                             }
@@ -780,7 +782,7 @@ async fn handle_ws_json(
                             let resp = super::ws_methods::dispatch(&req, &session).await;
 
                             if let Ok(json) = serde_json::to_string(&resp) {
-                                ws_send!(ws_tx, Message::Text(json));
+                                ws_send!(ws_tx, Message::Text(json.into()));
                             }
                         }
                     }
@@ -975,7 +977,7 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
     // Send connected message
     let connected_msg = serde_json::json!({ "connected": true });
     if ws_tx
-        .send(Message::Text(connected_msg.to_string()))
+        .send(Message::Text(connected_msg.to_string().into()))
         .await
         .is_err()
     {
@@ -1029,7 +1031,7 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
                                     "Invalid JSON or missing 'method' field.",
                                 );
                                 if let Ok(json) = serde_json::to_string(&err) {
-                                    ws_send!(ws_tx, Message::Text(json));
+                                    ws_send!(ws_tx, Message::Text(json.into()));
                                 }
                                 continue;
                             }
@@ -1051,7 +1053,7 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
                             let subscribe_ok = is_subscribe && resp.error.is_none();
 
                             if let Ok(json) = serde_json::to_string(&resp) {
-                                ws_send!(ws_tx, Message::Text(json));
+                                ws_send!(ws_tx, Message::Text(json.into()));
                             }
 
                             // Send sync event + initial activity state after successful subscribe
@@ -1079,7 +1081,7 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
                                                 }
                                             });
                                             if let Ok(json) = serde_json::to_string(&sync_event) {
-                                                ws_send!(ws_tx, Message::Text(json));
+                                                ws_send!(ws_tx, Message::Text(json.into()));
                                             }
                                         }
 
@@ -1128,7 +1130,7 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
                                                             event_value
                                                         };
                                                         if let Ok(json) = serde_json::to_string(&tagged) {
-                                                            ws_send!(ws_tx, Message::Text(json));
+                                                            ws_send!(ws_tx, Message::Text(json.into()));
                                                         }
                                                     }
                                                 }
@@ -1154,7 +1156,7 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
                     tracing::debug!("server ws_json client unresponsive (no pong), closing");
                     break;
                 }
-                ws_send!(ws_tx, Message::Ping(vec![]));
+                ws_send!(ws_tx, Message::Ping(Bytes::new()));
                 ping_sent = true;
             }
 
@@ -1164,7 +1166,7 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
                     Ok(event) => {
                         let event_json = format_registry_event(&event, &mut sub_handles);
                         if let Ok(json) = serde_json::to_string(&event_json) {
-                            ws_send!(ws_tx, Message::Text(json));
+                            ws_send!(ws_tx, Message::Text(json.into()));
                         }
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
@@ -1189,7 +1191,7 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
                                         event_value
                                     };
                                     if let Ok(json) = serde_json::to_string(&tagged_json) {
-                                        ws_send!(ws_tx, Message::Text(json));
+                                        ws_send!(ws_tx, Message::Text(json.into()));
                                     }
                                 }
                             }
@@ -1203,7 +1205,7 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
                             "skipped": n,
                         });
                         if let Ok(json) = serde_json::to_string(&lag_msg) {
-                            ws_send!(ws_tx, Message::Text(json));
+                            ws_send!(ws_tx, Message::Text(json.into()));
                         }
                         // After lag, push a full sync so the client can recover,
                         // matching the per-session ws_json behavior.
@@ -1228,7 +1230,7 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
                                         event_value
                                     };
                                     if let Ok(json) = serde_json::to_string(&tagged_json) {
-                                        ws_send!(ws_tx, Message::Text(json));
+                                        ws_send!(ws_tx, Message::Text(json.into()));
                                     }
                                 }
                             }
@@ -1295,12 +1297,12 @@ async fn handle_server_ws_request(
             let params: CreateParams = match &req.params {
                 Some(v) => match serde_json::from_value(v.clone()) {
                     Ok(p) => p,
-                    Err(e) => {
+                    Err(_) => {
                         return Some(super::ws_methods::WsResponse::error(
                             id,
                             method,
                             "invalid_request",
-                            &format!("Invalid params: {}.", e),
+                            "Invalid parameters for this method.",
                         ));
                     }
                 },
@@ -1326,8 +1328,8 @@ async fn handle_server_ws_request(
                 },
             };
 
-            let rows = params.rows.unwrap_or(24).max(1);
-            let cols = params.cols.unwrap_or(80).max(1);
+            let rows = params.rows.unwrap_or(24).clamp(1, 1000);
+            let cols = params.cols.unwrap_or(80).clamp(1, 1000);
 
             // Advisory pre-check — see name_available() doc for TOCTOU rationale.
             // The authoritative check is insert_and_get() below.
@@ -1356,6 +1358,12 @@ async fn handle_server_ws_request(
                         method,
                         "invalid_tag",
                         &format!("Invalid tag: {}.", msg),
+                    ),
+                    RegistryError::InvalidName(msg) => super::ws_methods::WsResponse::error(
+                        id,
+                        method,
+                        "invalid_session_name",
+                        &format!("Invalid session name: {}.", msg),
                     ),
                 });
             }
@@ -1447,6 +1455,12 @@ async fn handle_server_ws_request(
                             "invalid_tag",
                             &format!("Invalid tag: {}.", msg),
                         ),
+                        RegistryError::InvalidName(msg) => super::ws_methods::WsResponse::error(
+                            id,
+                            method,
+                            "invalid_session_name",
+                            &format!("Invalid session name: {}.", msg),
+                        ),
                     });
                 }
             }
@@ -1501,12 +1515,12 @@ async fn handle_server_ws_request(
             let params: KillParams = match &req.params {
                 Some(v) => match serde_json::from_value(v.clone()) {
                     Ok(p) => p,
-                    Err(e) => {
+                    Err(_) => {
                         return Some(super::ws_methods::WsResponse::error(
                             id,
                             method,
                             "invalid_request",
-                            &format!("Invalid params: {}.", e),
+                            "Invalid parameters for this method.",
                         ));
                     }
                 },
@@ -1552,12 +1566,12 @@ async fn handle_server_ws_request(
             let params: DetachParams = match &req.params {
                 Some(v) => match serde_json::from_value(v.clone()) {
                     Ok(p) => p,
-                    Err(e) => {
+                    Err(_) => {
                         return Some(super::ws_methods::WsResponse::error(
                             id,
                             method,
                             "invalid_request",
-                            &format!("Invalid params: {}.", e),
+                            "Invalid parameters for this method.",
                         ));
                     }
                 },
@@ -1600,12 +1614,12 @@ async fn handle_server_ws_request(
             let params: RenameParams = match &req.params {
                 Some(v) => match serde_json::from_value(v.clone()) {
                     Ok(p) => p,
-                    Err(e) => {
+                    Err(_) => {
                         return Some(super::ws_methods::WsResponse::error(
                             id,
                             method,
                             "invalid_request",
-                            &format!("Invalid params: {}.", e),
+                            "Invalid parameters for this method.",
                         ));
                     }
                 },
@@ -1666,6 +1680,14 @@ async fn handle_server_ws_request(
                         &format!("Invalid tag: {}.", msg),
                     ));
                 }
+                Err(RegistryError::InvalidName(msg)) => {
+                    return Some(super::ws_methods::WsResponse::error(
+                        id,
+                        method,
+                        "invalid_session_name",
+                        &format!("Invalid session name: {}.", msg),
+                    ));
+                }
             }
         }
 
@@ -1681,12 +1703,12 @@ async fn handle_server_ws_request(
             let params: UpdateTagsParams = match &req.params {
                 Some(v) => match serde_json::from_value(v.clone()) {
                     Ok(p) => p,
-                    Err(e) => {
+                    Err(_) => {
                         return Some(super::ws_methods::WsResponse::error(
                             id,
                             method,
                             "invalid_request",
-                            &format!("Invalid params: {}.", e),
+                            "Invalid parameters for this method.",
                         ));
                     }
                 },
@@ -1801,7 +1823,9 @@ async fn handle_server_ws_request(
             .clone()
             .unwrap_or(serde_json::Value::Object(Default::default()));
         match serde_json::from_value::<super::ws_methods::SubscribeParams>(params_value) {
-            Ok(params) => {
+            Ok(mut params) => {
+                params.idle_timeout_ms = params.idle_timeout_ms.min(MAX_WAIT_CEILING_MS);
+                params.interval_ms = params.interval_ms.min(MAX_WAIT_CEILING_MS);
                 let subscribed_types = params.events.clone();
 
                 // Abort previous subscription for this session if any
@@ -2014,12 +2038,12 @@ async fn handle_server_ws_request(
                     serde_json::json!({ "events": event_names }),
                 ));
             }
-            Err(e) => {
+            Err(_) => {
                 return Some(super::ws_methods::WsResponse::error(
                     id,
                     method,
                     "invalid_request",
-                    &format!("Invalid subscribe params: {}.", e),
+                    "Invalid parameters for this method.",
                 ));
             }
         }
@@ -2868,8 +2892,8 @@ pub(super) async fn session_create(
         },
     };
 
-    let rows = req.rows.unwrap_or(24).max(1);
-    let cols = req.cols.unwrap_or(80).max(1);
+    let rows = req.rows.unwrap_or(24).clamp(1, 1000);
+    let cols = req.cols.unwrap_or(80).clamp(1, 1000);
 
     // Advisory pre-check — see name_available() doc for TOCTOU rationale.
     // The authoritative check is insert_and_get() below.
@@ -2878,6 +2902,7 @@ pub(super) async fn session_create(
         RegistryError::NotFound(n) => ApiError::SessionNotFound(n),
         RegistryError::MaxSessionsReached => ApiError::MaxSessionsReached,
         RegistryError::InvalidTag(msg) => ApiError::InvalidTag(msg),
+        RegistryError::InvalidName(msg) => ApiError::InvalidSessionName(msg),
     })?;
 
     // Use a placeholder name for spawn; registry.insert will assign the real name.
@@ -2913,6 +2938,7 @@ pub(super) async fn session_create(
                 RegistryError::NotFound(n) => ApiError::SessionNotFound(n),
                 RegistryError::MaxSessionsReached => ApiError::MaxSessionsReached,
                 RegistryError::InvalidTag(msg) => ApiError::InvalidTag(msg),
+                RegistryError::InvalidName(msg) => ApiError::InvalidSessionName(msg),
             });
         }
     };
@@ -2946,6 +2972,7 @@ pub(super) async fn session_update(
             RegistryError::NotFound(n) => ApiError::SessionNotFound(n),
             RegistryError::MaxSessionsReached => ApiError::MaxSessionsReached,
             RegistryError::InvalidTag(e) => ApiError::InvalidTag(e),
+            RegistryError::InvalidName(msg) => ApiError::InvalidSessionName(msg),
         })?;
         new_name
     } else {

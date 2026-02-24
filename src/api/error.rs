@@ -57,8 +57,12 @@ pub enum ApiError {
     NotInAltScreen,
     /// 400 - Invalid tag value.
     InvalidTag(String),
+    /// 400 - Invalid session name.
+    InvalidSessionName(String),
     /// 429 - Resource limit reached (too many overlays, panels, etc.).
     ResourceLimitReached(String),
+    /// 403 - WebSocket origin not allowed (CSWSH protection).
+    OriginNotAllowed,
     /// 500 - Catch-all internal error.
     InternalError(String),
 }
@@ -90,7 +94,9 @@ impl ApiError {
             ApiError::AlreadyInAltScreen => StatusCode::CONFLICT,
             ApiError::NotInAltScreen => StatusCode::CONFLICT,
             ApiError::InvalidTag(_) => StatusCode::BAD_REQUEST,
+            ApiError::InvalidSessionName(_) => StatusCode::BAD_REQUEST,
             ApiError::ResourceLimitReached(_) => StatusCode::TOO_MANY_REQUESTS,
+            ApiError::OriginNotAllowed => StatusCode::FORBIDDEN,
             ApiError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -121,7 +127,9 @@ impl ApiError {
             ApiError::AlreadyInAltScreen => "already_in_alt_screen",
             ApiError::NotInAltScreen => "not_in_alt_screen",
             ApiError::InvalidTag(_) => "invalid_tag",
+            ApiError::InvalidSessionName(_) => "invalid_session_name",
             ApiError::ResourceLimitReached(_) => "resource_limit_reached",
+            ApiError::OriginNotAllowed => "origin_not_allowed",
             ApiError::InternalError(_) => "internal_error",
         }
     }
@@ -140,7 +148,7 @@ impl ApiError {
             ApiError::InvalidOverlay(detail) => format!("Invalid overlay: {}.", detail),
             ApiError::InvalidInputMode(detail) => format!("Invalid input mode: {}.", detail),
             ApiError::InvalidFormat(detail) => format!("Invalid format: {}.", detail),
-            ApiError::SessionNotFound(name) => format!("Session not found: {}.", name),
+            ApiError::SessionNotFound(name) => format!("Session not found: {}.", &name[..name.len().min(128)]),
             ApiError::ChannelFull => "Server is overloaded. Try again shortly.".to_string(),
             ApiError::ParserUnavailable => "Terminal parser is unavailable.".to_string(),
             ApiError::ParserTimeout => "Terminal parser query timed out.".to_string(),
@@ -168,9 +176,11 @@ impl ApiError {
                 "Session is not in alternate screen mode.".to_string()
             }
             ApiError::InvalidTag(detail) => format!("Invalid tag: {}.", detail),
+            ApiError::InvalidSessionName(detail) => format!("Invalid session name: {}.", detail),
             ApiError::ResourceLimitReached(detail) => {
                 format!("Resource limit reached: {}.", detail)
             }
+            ApiError::OriginNotAllowed => "WebSocket origin not allowed.".to_string(),
             ApiError::InternalError(detail) => format!("Internal error: {}.", detail),
         }
     }

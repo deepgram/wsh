@@ -16,6 +16,21 @@ use crate::pty::{Pty, PtyError, SpawnCommand};
 use crate::shutdown::ShutdownCoordinator;
 use crate::terminal::TerminalSize;
 
+/// Validate a session name. Names must be 1-64 chars, alphanumeric/hyphens/underscores/dots.
+pub fn validate_session_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("session name must not be empty".into());
+    }
+    if name.len() > 64 {
+        return Err(format!("session name too long ({} chars, max 64)", name.len()));
+    }
+    if !name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.') {
+        return Err(format!("session name contains invalid characters: {}",
+            &name[..name.len().min(64)]));
+    }
+    Ok(())
+}
+
 /// Validate a tag string. Tags must be 1-64 chars, alphanumeric/hyphens/underscores/dots.
 pub fn validate_tag(tag: &str) -> Result<(), String> {
     if tag.is_empty() {
@@ -550,6 +565,8 @@ pub enum RegistryError {
     MaxSessionsReached,
     #[error("invalid tag: {0}")]
     InvalidTag(String),
+    #[error("invalid session name: {0}")]
+    InvalidName(String),
 }
 
 struct RegistryInner {
@@ -623,6 +640,7 @@ impl SessionRegistry {
 
         let assigned_name = match name {
             Some(n) => {
+                validate_session_name(&n).map_err(RegistryError::InvalidName)?;
                 if inner.sessions.contains_key(&n) {
                     return Err(RegistryError::NameExists(n));
                 }
@@ -680,6 +698,7 @@ impl SessionRegistry {
 
         let assigned_name = match name {
             Some(n) => {
+                validate_session_name(&n).map_err(RegistryError::InvalidName)?;
                 if inner.sessions.contains_key(&n) {
                     return Err(RegistryError::NameExists(n));
                 }
@@ -758,6 +777,7 @@ impl SessionRegistry {
     /// The clone is returned atomically under the write lock, avoiding a
     /// TOCTOU race with background tasks that may remove the session.
     pub fn rename(&self, old_name: &str, new_name: &str) -> Result<Session, RegistryError> {
+        validate_session_name(new_name).map_err(RegistryError::InvalidName)?;
         let mut inner = self.inner.write();
 
         if !inner.sessions.contains_key(old_name) {
@@ -840,6 +860,7 @@ impl SessionRegistry {
     /// far worse than the occasional wasted spawn.
     pub fn name_available(&self, name: &Option<String>) -> Result<(), RegistryError> {
         if let Some(n) = name {
+            validate_session_name(n).map_err(RegistryError::InvalidName)?;
             let inner = self.inner.read();
             if inner.sessions.contains_key(n) {
                 return Err(RegistryError::NameExists(n.clone()));
@@ -1601,5 +1622,53 @@ mod tests {
             rx.recv(),
         ).await;
         assert!(result.is_err(), "should not receive TagsChanged for duplicate add");
+    }
+
+    // ---- Session name validation tests ----
+
+    #[test]
+    fn validate_session_name_valid() {
+        assert!(validate_session_name("my-session").is_ok());
+        assert!(validate_session_name("test.1").is_ok());
+        assert!(validate_session_name("a").is_ok());
+        assert!(validate_session_name("under_score").is_ok());
+        assert!(validate_session_name("123").is_ok());
+    }
+
+    #[test]
+    fn validate_session_name_empty() {
+        assert!(validate_session_name("").is_err());
+    }
+
+    #[test]
+    fn validate_session_name_too_long() {
+        let long = "a".repeat(65);
+        assert!(validate_session_name(&long).is_err());
+    }
+
+    #[test]
+    fn validate_session_name_max_length_ok() {
+        let exact = "a".repeat(64);
+        assert!(validate_session_name(&exact).is_ok());
+    }
+
+    #[test]
+    fn validate_session_name_invalid_chars() {
+        assert!(validate_session_name("has spaces").is_err());
+        assert!(validate_session_name("../escape").is_err());
+        assert!(validate_session_name("null\0byte").is_err());
+        assert!(validate_session_name("semi;colon").is_err());
+        assert!(validate_session_name("slash/path").is_err());
+    }
+
+    #[test]
+    fn registry_insert_invalid_name_returns_error() {
+        let registry = SessionRegistry::new();
+        // We can't create a real Session without a PTY, but we can test name_available
+        assert!(registry.name_available(&Some("../bad".to_string())).is_err());
+        assert!(registry.name_available(&Some("has spaces".to_string())).is_err());
+        assert!(registry.name_available(&Some("".to_string())).is_err());
+        assert!(registry.name_available(&Some("valid-name".to_string())).is_ok());
+        assert!(registry.name_available(&None).is_ok()); // auto-generated names bypass validation
     }
 }

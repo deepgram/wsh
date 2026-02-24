@@ -99,6 +99,14 @@ enum Commands {
         /// Maximum number of concurrent sessions (no limit if omitted)
         #[arg(long)]
         max_sessions: Option<usize>,
+
+        /// Allowed CORS origins (can be specified multiple times)
+        #[arg(long = "cors-origin")]
+        cors_origins: Vec<String>,
+
+        /// Rate limit in requests per second (disabled if omitted)
+        #[arg(long)]
+        rate_limit: Option<u32>,
     },
 
     /// Attach to an existing session on the server
@@ -244,8 +252,8 @@ async fn main() -> Result<(), WshError> {
     let server_name = cli.server_name.clone();
 
     match cli.command {
-        Some(Commands::Server { bind, token, ephemeral, max_sessions }) => {
-            run_server(bind, token, socket, ephemeral, max_sessions, server_name).await
+        Some(Commands::Server { bind, token, ephemeral, max_sessions, cors_origins, rate_limit }) => {
+            run_server(bind, token, socket, ephemeral, max_sessions, server_name, cors_origins, rate_limit).await
         }
         Some(Commands::Attach { name, scrollback, alt_screen }) => {
             run_attach(name, scrollback, socket, alt_screen, server_name).await
@@ -312,6 +320,8 @@ async fn run_server(
     ephemeral: bool,
     max_sessions: Option<usize>,
     server_name: String,
+    cors_origins: Vec<String>,
+    rate_limit: Option<u32>,
 ) -> Result<(), WshError> {
     tracing::info!(instance = %server_name, "wsh server starting");
 
@@ -339,8 +349,15 @@ async fn run_server(
         server_ws_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
 
+    if !cors_origins.is_empty() {
+        tracing::info!(origins = ?cors_origins, "CORS origins configured");
+    }
+    if let Some(rps) = rate_limit {
+        tracing::info!(rps, "rate limiting configured");
+    }
+
     let socket_token = token.clone();
-    let app = api::router(state, token);
+    let app = api::router(state, api::RouterConfig { token, bind, cors_origins, rate_limit });
 
     // Cancellation token for HTTP server shutdown (supports multiple listeners)
     let http_cancel = tokio_util::sync::CancellationToken::new();

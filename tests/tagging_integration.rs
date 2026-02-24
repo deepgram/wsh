@@ -13,7 +13,7 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::net::TcpListener;
-use wsh::api::{router, AppState};
+use wsh::api::{router, AppState, RouterConfig};
 use wsh::session::SessionRegistry;
 use wsh::shutdown::ShutdownCoordinator;
 
@@ -26,7 +26,7 @@ fn create_empty_test_app() -> axum::Router {
         server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)),
         server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
-    router(state, None)
+    router(state, RouterConfig::default())
 }
 
 async fn start_test_server(app: axum::Router) -> SocketAddr {

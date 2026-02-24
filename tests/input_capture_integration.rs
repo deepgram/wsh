@@ -14,12 +14,12 @@ use axum::{
     http::{Request, StatusCode},
 };
 use tower::ServiceExt;
-use wsh::api::router;
+use wsh::api::{router, RouterConfig};
 
 #[tokio::test]
 async fn test_input_capture_flow() {
     let (state, _, _, _ptx) = common::create_test_state();
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     // Step 1: Verify default mode is passthrough
     let response = app
@@ -114,7 +114,7 @@ async fn test_input_capture_flow() {
 #[tokio::test]
 async fn test_input_capture_idempotent() {
     let (state, _, _, _ptx) = common::create_test_state();
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     // Capture multiple times should be idempotent
     for _ in 0..3 {
@@ -189,7 +189,7 @@ async fn test_input_capture_idempotent() {
 #[tokio::test]
 async fn test_input_mode_wrong_method() {
     let (state, _, _, _ptx) = common::create_test_state();
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     // POST on /input/mode should fail (only GET is allowed)
     let response = app
@@ -240,7 +240,7 @@ async fn test_input_mode_wrong_method() {
 async fn test_input_mode_state_shared_across_requests() {
     // Test that state is properly shared across multiple requests
     let (state, _, _, _ptx) = common::create_test_state();
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     // Capture mode
     let _ = app
@@ -279,7 +279,7 @@ async fn test_input_mode_state_shared_across_requests() {
 #[tokio::test]
 async fn test_focus_and_unfocus_flow() {
     let (state, _, _, _ptx) = common::create_test_state();
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     // Create a focusable overlay
     let create_body = serde_json::json!({
@@ -404,7 +404,7 @@ async fn test_focus_and_unfocus_flow() {
 #[tokio::test]
 async fn test_focus_cleared_on_input_release() {
     let (state, _, _, _ptx) = common::create_test_state();
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     // Create a focusable overlay
     let create_body = serde_json::json!({
@@ -516,7 +516,7 @@ async fn test_focus_cleared_on_input_release() {
 #[tokio::test]
 async fn test_focus_cleared_on_element_delete() {
     let (state, _, _, _ptx) = common::create_test_state();
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     // Create a focusable overlay
     let create_body = serde_json::json!({
@@ -616,7 +616,7 @@ async fn test_focus_cleared_on_element_delete() {
 #[tokio::test]
 async fn test_focus_non_focusable_returns_400() {
     let (state, _, _, _ptx) = common::create_test_state();
-    let app = router(state, None);
+    let app = router(state, RouterConfig::default());
 
     // Create a non-focusable overlay (focusable defaults to false)
     let create_body = serde_json::json!({

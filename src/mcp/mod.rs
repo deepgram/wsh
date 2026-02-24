@@ -169,6 +169,10 @@ impl WshMcpServer {
                 format!("invalid tag: {msg}"),
                 None,
             ),
+            RegistryError::InvalidName(msg) => ErrorData::invalid_params(
+                format!("invalid session name: {msg}"),
+                None,
+            ),
         })?;
 
         // spawn_with_options calls fork()/exec() — run on blocking pool.
@@ -217,6 +221,10 @@ impl WshMcpServer {
                         ),
                         RegistryError::InvalidTag(msg) => ErrorData::invalid_params(
                             format!("invalid tag: {msg}"),
+                            None,
+                        ),
+                        RegistryError::InvalidName(msg) => ErrorData::invalid_params(
+                            format!("invalid session name: {msg}"),
                             None,
                         ),
                     });
@@ -354,6 +362,10 @@ impl WshMcpServer {
                         ),
                         RegistryError::InvalidTag(msg) => ErrorData::invalid_params(
                             format!("invalid tag: {msg}"),
+                            None,
+                        ),
+                        RegistryError::InvalidName(msg) => ErrorData::invalid_params(
+                            format!("invalid session name: {msg}"),
                             None,
                         ),
                     })?;
