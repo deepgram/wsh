@@ -1,14 +1,16 @@
 # wsh: An API for Your Terminal
 
+HTTP, WebSocket, and MCP server APIs for terminal I/O — plus [AI skills](#ai-skills-claude-code-plugin) that teach agents how to use them.
+
+## Vision
+
 **The AI revolution has reached your desktop. Now it has reached your terminal.**
 
 AI agents are crossing the line from assistants to coworkers — managing files, automating browsers, writing and shipping code. But the revolution can only move as fast as the tools allow, and every human interface that hasn't been AI-enabled is lost productivity at scale. The biggest gap is the terminal. It's a fundamental impedance mismatch: the most universal interface in computing, and agents have never been able to simply sit at one and drive it the way a human does.
 
 `wsh` fixes this. It sits transparently between your terminal and your shell, maintains a full terminal state machine, and exposes everything — screen contents, cursor state, input injection, idle detection, real-time events — as both a structured API and via an MCP server. An agent sees what you see. Types what's needed. Waits for the right moment. Reads the screen. Decides what to do next. Your terminal works exactly as before. But now any program a human can operate through a terminal, an agent can operate through `wsh`.
 
-The implications land fast: orchestrator agents that launch fleets of AI coding tools in parallel terminal sessions, feed them tasks, and collect results. End-to-end automation that doesn't choke the moment a program asks a question. Live copilots that watch your session and render contextual help as overlays directly in your workflow -- true generative UI in the terminal. The terminal protocol survived fifty years because it's simple, universal, and composable. `wsh` doesn't replace it — it teaches AI to speak it, and makes every shell session AI-native.
-
-`wsh`: offering HTTP, WebSocket, and MCP server APIs, as well as a full set of AI skills. See [docs/VISION.md](docs/VISION.md) for the full project vision.
+The implications land fast: orchestrator agents that launch fleets of AI coding tools in parallel terminal sessions, feed them tasks, and collect results. End-to-end automation that doesn't choke the moment a program asks a question. Live copilots that watch your session and render contextual help as overlays directly in your workflow -- true generative UI in the terminal. The terminal protocol survived fifty years because it's simple, universal, and composable. `wsh` doesn't replace it — it teaches AI to speak it, and makes every shell session AI-native. See [docs/VISION.md](docs/VISION.md) for the full project vision.
 
 ## What This Enables
 
