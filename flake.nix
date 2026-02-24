@@ -76,6 +76,10 @@
           # which breaks prompt escapes and any tool that spawns $SHELL
           # interactively (including wsh). Restore the user's login shell.
           # Upstream: https://github.com/NixOS/nix/issues/12008
+          # Use a separate server instance for local development so we
+          # don't collide with any system-wide wsh server.
+          WSH_SERVER_NAME = "dev";
+
           shellHook = ''
             export SHELL="$(getent passwd "$USER" | cut -d: -f7)"
           '';
