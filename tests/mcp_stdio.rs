@@ -61,7 +61,9 @@ fn setup_mcp_test(test_name: &str) -> McpTestHarness {
     // Remove stale socket from a previous run.
     let _ = std::fs::remove_file(&socket_path);
 
-    // 3. Start the server daemon.
+    // 3. Start the server daemon with a unique instance name to avoid lock
+    //    contention with other parallel test processes.
+    let instance_name = format!("mcp-test-{}-{}", std::process::id(), test_name);
     let server = Command::new(env!("CARGO_BIN_EXE_wsh"))
         .arg("server")
         .arg("--ephemeral")
@@ -69,6 +71,8 @@ fn setup_mcp_test(test_name: &str) -> McpTestHarness {
         .arg(addr.to_string())
         .arg("--socket")
         .arg(&socket_path)
+        .arg("--server-name")
+        .arg(&instance_name)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())

@@ -6,6 +6,7 @@
 //! and the server-managed PTY session.
 
 use bytes::Bytes;
+use std::fs::File;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -18,6 +19,37 @@ use crate::protocol::*;
 use crate::pty::SpawnCommand;
 use crate::session::{Session, SessionRegistry};
 
+/// Acquire an exclusive flock on the server instance lock file.
+///
+/// Returns the `File` handle that holds the lock. The lock is released when
+/// the file is dropped (or the process exits, even on crash). Returns
+/// `AddrInUse` if another server already holds the lock.
+pub fn acquire_instance_lock(lock_path: &Path) -> io::Result<File> {
+    if let Some(parent) = lock_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(lock_path)?;
+
+    use std::os::unix::io::AsRawFd;
+    let ret = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if ret != 0 {
+        let errno = io::Error::last_os_error();
+        if errno.raw_os_error() == Some(libc::EWOULDBLOCK) {
+            return Err(io::Error::new(
+                io::ErrorKind::AddrInUse,
+                "another server is already listening for this instance",
+            ));
+        }
+        return Err(errno);
+    }
+
+    Ok(file)
+}
+
 /// Start the Unix socket server, listening for CLI client connections.
 ///
 /// Runs until the `cancel` token is cancelled, then stops accepting new
@@ -29,31 +61,11 @@ pub async fn serve(
     token: Option<String>,
     shutdown_request: tokio_util::sync::CancellationToken,
 ) -> io::Result<()> {
-    // Remove stale socket file if it exists, but check for active server first.
-    // Uses spawn_blocking to avoid blocking the tokio runtime on the connect() syscall
-    // (which could hang if the socket connects to a process that is alive but unresponsive).
+    // Remove stale socket file if it exists. When used with
+    // acquire_instance_lock(), the caller has already proven exclusive
+    // ownership, so any existing socket is guaranteed stale.
     if socket_path.exists() {
-        let path_owned = socket_path.to_path_buf();
-        let is_active = tokio::time::timeout(
-            Duration::from_secs(3),
-            tokio::task::spawn_blocking(move || {
-                std::os::unix::net::UnixStream::connect(&path_owned).is_ok()
-            }),
-        )
-        .await;
-
-        match is_active {
-            Ok(Ok(true)) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::AddrInUse,
-                    format!("another server is already listening on {}", socket_path.display()),
-                ));
-            }
-            _ => {
-                // Socket exists but no server is listening (or check timed out) — stale, safe to remove
-                std::fs::remove_file(socket_path)?;
-            }
-        }
+        std::fs::remove_file(socket_path)?;
     }
 
     // Ensure parent directory exists
@@ -102,11 +114,44 @@ pub async fn serve(
     Ok(())
 }
 
-/// Compute the default Unix socket path for this user.
-pub fn default_socket_path() -> PathBuf {
+/// Base directory for all wsh instance files (sockets, locks).
+///
+/// Returns `$XDG_RUNTIME_DIR/wsh/` or `/tmp/wsh-$USER/wsh/` as fallback.
+pub fn instance_dir() -> PathBuf {
     let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
         .unwrap_or_else(|_| format!("/tmp/wsh-{}", whoami()));
-    PathBuf::from(runtime_dir).join("wsh.sock")
+    PathBuf::from(runtime_dir).join("wsh")
+}
+
+/// Compute the Unix socket path for a named server instance.
+///
+/// Returns `<instance_dir>/<name>.sock`.
+pub fn socket_path_for_instance(name: &str) -> PathBuf {
+    instance_dir().join(format!("{}.sock", name))
+}
+
+/// Compute the server lock path for a named server instance.
+///
+/// The server holds an exclusive flock on this file for its entire lifetime,
+/// providing reliable mutual exclusion without the races of connect-probing.
+pub fn lock_path_for_instance(name: &str) -> PathBuf {
+    instance_dir().join(format!("{}.lock", name))
+}
+
+/// Compute the client spawn-coordination lock path for a named instance.
+///
+/// Clients acquire this lock (blocking) when racing to auto-spawn a server,
+/// preventing duplicate daemons. Separate from the server lock to avoid
+/// deadlock (client takes spawn lock, then server takes server lock).
+pub fn spawn_lock_path_for_instance(name: &str) -> PathBuf {
+    instance_dir().join(format!("{}.spawn.lock", name))
+}
+
+/// Compute the default Unix socket path for this user.
+///
+/// Equivalent to `socket_path_for_instance("default")`.
+pub fn default_socket_path() -> PathBuf {
+    socket_path_for_instance("default")
 }
 
 fn whoami() -> String {
@@ -1170,7 +1215,39 @@ mod tests {
     #[test]
     fn test_default_socket_path() {
         let path = default_socket_path();
-        assert!(path.to_str().unwrap().contains("wsh.sock"));
+        let s = path.to_str().unwrap();
+        // New layout: .../wsh/default.sock
+        assert!(s.ends_with("wsh/default.sock"), "expected path ending with wsh/default.sock, got {}", s);
+    }
+
+    #[test]
+    fn test_socket_path_for_instance() {
+        let path = socket_path_for_instance("staging");
+        let s = path.to_str().unwrap();
+        assert!(s.ends_with("wsh/staging.sock"), "got {}", s);
+    }
+
+    #[test]
+    fn test_lock_path_for_instance() {
+        let path = lock_path_for_instance("staging");
+        let s = path.to_str().unwrap();
+        assert!(s.ends_with("wsh/staging.lock"), "got {}", s);
+    }
+
+    #[test]
+    fn test_spawn_lock_path_for_instance() {
+        let path = spawn_lock_path_for_instance("staging");
+        let s = path.to_str().unwrap();
+        assert!(s.ends_with("wsh/staging.spawn.lock"), "got {}", s);
+    }
+
+    #[test]
+    fn test_instance_paths_share_parent() {
+        let sock = socket_path_for_instance("foo");
+        let lock = lock_path_for_instance("foo");
+        let spawn = spawn_lock_path_for_instance("foo");
+        assert_eq!(sock.parent(), lock.parent());
+        assert_eq!(lock.parent(), spawn.parent());
     }
 
     #[tokio::test]

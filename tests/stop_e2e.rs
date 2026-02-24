@@ -60,6 +60,8 @@ async fn test_wsh_stop_shuts_down_server() {
         .arg(format!("127.0.0.1:{}", port))
         .arg("--socket")
         .arg(&socket_path)
+        .arg("--server-name")
+        .arg("stop-e2e-test")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()

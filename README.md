@@ -69,6 +69,26 @@ wsh kill dev
 
 The server exposes an HTTP/WS API on `127.0.0.1:8080` and a Unix domain socket for client commands (`list`, `kill`, `attach`, `detach`). Use `--ephemeral` to have the server exit when its last session ends. Use `wsh persist` to upgrade a running ephemeral server to persistent mode.
 
+### Named Instances
+
+Run multiple independent servers with `-L` (like tmux's `-L`):
+
+```bash
+# Start two isolated servers
+wsh server -L project-a --bind 127.0.0.1:8080
+wsh server -L project-b --bind 127.0.0.1:9090
+
+# Each has its own sessions
+wsh -L project-a                  # connects to project-a
+wsh list -L project-b             # lists project-b's sessions
+
+# Or set per-project defaults via .envrc
+export WSH_SERVER_NAME=myproject
+wsh                               # automatically uses "myproject" instance
+```
+
+Each instance gets its own socket and lock file under `$XDG_RUNTIME_DIR/wsh/`. The default instance name is `default`.
+
 ## Your Terminal, in a Browser
 
 Start `wsh`. Open a browser.
@@ -184,6 +204,7 @@ Once installed, the skills are available automatically. Claude Code will load th
 | `--name` | | `default` | Name for the session |
 | `--tag` | | | Tag for the session (repeatable) |
 | `--alt-screen` | | | Use alternate screen buffer |
+| `-L`, `--server-name` | `WSH_SERVER_NAME` | `default` | Server instance name (like tmux `-L`) |
 
 ### Subcommands
 
@@ -197,6 +218,8 @@ Once installed, the skills are available automatically. Claude Code will load th
 | `detach <name>` | Detach all clients from a session (session stays alive) |
 | `token` | Print the server's auth token (retrieved via Unix socket) |
 | `persist` | Upgrade a running server to persistent mode |
+| `stop` | Stop the running wsh server |
+| `mcp` | Start an MCP server over stdio (for AI hosts) |
 
 #### `server` Flags
 
@@ -204,22 +227,25 @@ Once installed, the skills are available automatically. Claude Code will load th
 |------|---------|---------|-------------|
 | `--bind` | | `127.0.0.1:8080` | Address to bind the API server |
 | `--token` | `WSH_TOKEN` | (auto-generated) | Authentication token |
-| `--socket` | | `$XDG_RUNTIME_DIR/wsh.sock` | Path to the Unix domain socket |
+| `--socket` | | (derived from `-L`) | Path to the Unix domain socket (overrides `-L`) |
+| `-L`, `--server-name` | `WSH_SERVER_NAME` | `default` | Server instance name (like tmux `-L`) |
 | `--max-sessions` | | (no limit) | Maximum number of concurrent sessions |
 
 #### `attach` Flags
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--scrollback` | `all` | Scrollback to replay: `all`, `none`, or a number of lines |
-| `--socket` | (default path) | Path to the Unix domain socket |
-| `--alt-screen` | | Use alternate screen buffer |
+| Flag | Env Var | Default | Description |
+|------|---------|---------|-------------|
+| `--scrollback` | | `all` | Scrollback to replay: `all`, `none`, or a number of lines |
+| `--socket` | | (derived from `-L`) | Path to the Unix domain socket (overrides `-L`) |
+| `-L`, `--server-name` | `WSH_SERVER_NAME` | `default` | Server instance name |
+| `--alt-screen` | | | Use alternate screen buffer |
 
-#### `list`, `kill`, `detach`, `token` Flags
+#### `list`, `kill`, `detach`, `token`, `tag`, `stop` Flags
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--socket` | (default path) | Path to the Unix domain socket |
+| Flag | Env Var | Default | Description |
+|------|---------|---------|-------------|
+| `--socket` | | (derived from `-L`) | Path to the Unix domain socket (overrides `-L`) |
+| `-L`, `--server-name` | `WSH_SERVER_NAME` | `default` | Server instance name |
 
 #### `persist` Flags
 

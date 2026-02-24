@@ -69,6 +69,10 @@ struct Cli {
     /// disables native terminal scrollback while wsh is running)
     #[arg(long)]
     alt_screen: bool,
+
+    /// Server instance name (like tmux -L). Each instance gets its own socket.
+    #[arg(short = 'L', long = "server-name", env = "WSH_SERVER_NAME", default_value = "default")]
+    server_name: String,
 }
 
 #[derive(Subcommand, Debug)]
@@ -83,7 +87,7 @@ enum Commands {
         #[arg(long, env = "WSH_TOKEN")]
         token: Option<String>,
 
-        /// Path to the Unix domain socket
+        /// Path to the Unix domain socket (overrides -L)
         #[arg(long)]
         socket: Option<PathBuf>,
 
@@ -95,6 +99,10 @@ enum Commands {
         /// Maximum number of concurrent sessions (no limit if omitted)
         #[arg(long)]
         max_sessions: Option<usize>,
+
+        /// Server instance name (like tmux -L). Each instance gets its own socket.
+        #[arg(short = 'L', long = "server-name", env = "WSH_SERVER_NAME", default_value = "default")]
+        server_name: String,
     },
 
     /// Attach to an existing session on the server
@@ -106,7 +114,7 @@ enum Commands {
         #[arg(long, default_value = "all")]
         scrollback: String,
 
-        /// Path to the Unix domain socket
+        /// Path to the Unix domain socket (overrides -L)
         #[arg(long)]
         socket: Option<PathBuf>,
 
@@ -114,13 +122,21 @@ enum Commands {
         /// disables native terminal scrollback while wsh is running)
         #[arg(long)]
         alt_screen: bool,
+
+        /// Server instance name (like tmux -L). Each instance gets its own socket.
+        #[arg(short = 'L', long = "server-name", env = "WSH_SERVER_NAME", default_value = "default")]
+        server_name: String,
     },
 
     /// List active sessions on the server
     List {
-        /// Path to the Unix domain socket
+        /// Path to the Unix domain socket (overrides -L)
         #[arg(long)]
         socket: Option<PathBuf>,
+
+        /// Server instance name (like tmux -L). Each instance gets its own socket.
+        #[arg(short = 'L', long = "server-name", env = "WSH_SERVER_NAME", default_value = "default")]
+        server_name: String,
     },
 
     /// Kill (destroy) a session on the server
@@ -128,9 +144,13 @@ enum Commands {
         /// Session name to kill
         name: String,
 
-        /// Path to the Unix domain socket
+        /// Path to the Unix domain socket (overrides -L)
         #[arg(long)]
         socket: Option<PathBuf>,
+
+        /// Server instance name (like tmux -L). Each instance gets its own socket.
+        #[arg(short = 'L', long = "server-name", env = "WSH_SERVER_NAME", default_value = "default")]
+        server_name: String,
     },
 
     /// Detach all clients from a session (session stays alive)
@@ -138,9 +158,13 @@ enum Commands {
         /// Session name to detach
         name: String,
 
-        /// Path to the Unix domain socket
+        /// Path to the Unix domain socket (overrides -L)
         #[arg(long)]
         socket: Option<PathBuf>,
+
+        /// Server instance name (like tmux -L). Each instance gets its own socket.
+        #[arg(short = 'L', long = "server-name", env = "WSH_SERVER_NAME", default_value = "default")]
+        server_name: String,
     },
 
     /// Query or set server persistence mode.
@@ -163,9 +187,13 @@ enum Commands {
 
     /// Print the server's auth token (retrieved via Unix socket)
     Token {
-        /// Path to the Unix domain socket
+        /// Path to the Unix domain socket (overrides -L)
         #[arg(long)]
         socket: Option<PathBuf>,
+
+        /// Server instance name (like tmux -L). Each instance gets its own socket.
+        #[arg(short = 'L', long = "server-name", env = "WSH_SERVER_NAME", default_value = "default")]
+        server_name: String,
     },
 
     /// Manage tags on a session
@@ -181,16 +209,24 @@ enum Commands {
         #[arg(long = "remove")]
         remove: Vec<String>,
 
-        /// Path to the Unix domain socket
+        /// Path to the Unix domain socket (overrides -L)
         #[arg(long)]
         socket: Option<PathBuf>,
+
+        /// Server instance name (like tmux -L). Each instance gets its own socket.
+        #[arg(short = 'L', long = "server-name", env = "WSH_SERVER_NAME", default_value = "default")]
+        server_name: String,
     },
 
     /// Stop the running wsh server
     Stop {
-        /// Path to the Unix domain socket
+        /// Path to the Unix domain socket (overrides -L)
         #[arg(long)]
         socket: Option<PathBuf>,
+
+        /// Server instance name (like tmux -L). Each instance gets its own socket.
+        #[arg(short = 'L', long = "server-name", env = "WSH_SERVER_NAME", default_value = "default")]
+        server_name: String,
     },
 
     /// Start an MCP server over stdio (for AI hosts like Claude Desktop)
@@ -199,13 +235,17 @@ enum Commands {
         #[arg(long, default_value = "127.0.0.1:8080")]
         bind: SocketAddr,
 
-        /// Path to the Unix domain socket
+        /// Path to the Unix domain socket (overrides -L)
         #[arg(long)]
         socket: Option<PathBuf>,
 
         /// Authentication token
         #[arg(long, env = "WSH_TOKEN")]
         token: Option<String>,
+
+        /// Server instance name (like tmux -L). Each instance gets its own socket.
+        #[arg(short = 'L', long = "server-name", env = "WSH_SERVER_NAME", default_value = "default")]
+        server_name: String,
     },
 }
 
@@ -226,6 +266,13 @@ pub enum WshError {
 
 fn is_loopback(addr: &SocketAddr) -> bool {
     addr.ip().is_loopback()
+}
+
+/// Resolve the Unix socket path from explicit `--socket` or `-L` server name.
+///
+/// `--socket` takes priority; if absent, derives from the server name.
+fn resolve_socket_path(socket: Option<PathBuf>, server_name: &str) -> PathBuf {
+    socket.unwrap_or_else(|| server::socket_path_for_instance(server_name))
 }
 
 fn resolve_token(bind: &SocketAddr, user_token: &Option<String>) -> Option<String> {
@@ -260,35 +307,35 @@ async fn main() -> Result<(), WshError> {
     }
 
     match cli.command {
-        Some(Commands::Server { bind, token, socket, ephemeral, max_sessions }) => {
-            run_server(bind, token, socket, ephemeral, max_sessions).await
+        Some(Commands::Server { bind, token, socket, ephemeral, max_sessions, server_name }) => {
+            run_server(bind, token, socket, ephemeral, max_sessions, server_name).await
         }
-        Some(Commands::Attach { name, scrollback, socket, alt_screen }) => {
-            run_attach(name, scrollback, socket, alt_screen).await
+        Some(Commands::Attach { name, scrollback, socket, alt_screen, server_name }) => {
+            run_attach(name, scrollback, socket, alt_screen, server_name).await
         }
-        Some(Commands::List { socket }) => {
-            run_list(socket).await
+        Some(Commands::List { socket, server_name }) => {
+            run_list(socket, server_name).await
         }
-        Some(Commands::Kill { name, socket }) => {
-            run_kill(name, socket).await
+        Some(Commands::Kill { name, socket, server_name }) => {
+            run_kill(name, socket, server_name).await
         }
-        Some(Commands::Detach { name, socket }) => {
-            run_detach(name, socket).await
+        Some(Commands::Detach { name, socket, server_name }) => {
+            run_detach(name, socket, server_name).await
         }
-        Some(Commands::Token { socket }) => {
-            run_token(socket).await
+        Some(Commands::Token { socket, server_name }) => {
+            run_token(socket, server_name).await
         }
         Some(Commands::Persist { value, bind, token }) => {
             run_persist(value, bind, token).await
         }
-        Some(Commands::Tag { name, add, remove, socket }) => {
-            run_tag(name, add, remove, socket).await
+        Some(Commands::Tag { name, add, remove, socket, server_name }) => {
+            run_tag(name, add, remove, socket, server_name).await
         }
-        Some(Commands::Stop { socket }) => {
-            run_stop(socket).await
+        Some(Commands::Stop { socket, server_name }) => {
+            run_stop(socket, server_name).await
         }
-        Some(Commands::Mcp { bind, socket, token }) => {
-            run_mcp(bind, socket, token).await
+        Some(Commands::Mcp { bind, socket, token, server_name }) => {
+            run_mcp(bind, socket, token, server_name).await
         }
         None => {
             run_default(cli).await
@@ -327,8 +374,9 @@ async fn run_server(
     socket: Option<PathBuf>,
     ephemeral: bool,
     max_sessions: Option<usize>,
+    server_name: String,
 ) -> Result<(), WshError> {
-    tracing::info!("wsh server starting");
+    tracing::info!(instance = %server_name, "wsh server starting");
 
     let token = resolve_token(&bind, &token);
     if token.is_some() {
@@ -410,8 +458,13 @@ async fn run_server(
         })
     });
 
-    // Start Unix socket server
-    let socket_path = socket.unwrap_or_else(server::default_socket_path);
+    // Acquire instance lock (flock) before binding the socket.
+    // The lock file is held for the server's lifetime and released on exit.
+    let socket_path = resolve_socket_path(socket, &server_name);
+    let lock_path = server::lock_path_for_instance(&server_name);
+    let _instance_lock = server::acquire_instance_lock(&lock_path)
+        .map_err(WshError::Io)?;
+
     let socket_path_for_cleanup = socket_path.clone();
     let socket_sessions = sessions.clone();
     let socket_cancel = tokio_util::sync::CancellationToken::new();
@@ -598,10 +651,11 @@ async fn run_mcp(
     bind: SocketAddr,
     socket: Option<PathBuf>,
     token: Option<String>,
+    server_name: String,
 ) -> Result<(), WshError> {
     tracing::info!("wsh mcp stdio bridge starting");
 
-    let socket_path = socket.unwrap_or_else(server::default_socket_path);
+    let socket_path = resolve_socket_path(socket, &server_name);
 
     // Connect to existing server or spawn one (with file lock to prevent races)
     match client::Client::connect(&socket_path).await {
@@ -609,7 +663,7 @@ async fn run_mcp(
             tracing::debug!("connected to existing server");
         }
         Err(_) => {
-            let lock_path = socket_path.with_extension("lock");
+            let lock_path = server::spawn_lock_path_for_instance(&server_name);
             let lp = lock_path.clone();
             let _lock = tokio::task::spawn_blocking(move || acquire_spawn_lock(&lp))
                 .await
@@ -621,7 +675,7 @@ async fn run_mcp(
                 }
                 Err(_) => {
                     tracing::debug!("no server running, spawning daemon");
-                    spawn_server_daemon(&socket_path, &bind, token.as_deref())?;
+                    spawn_server_daemon(&socket_path, &bind, token.as_deref(), &server_name)?;
                     wait_for_socket(&socket_path).await?;
                 }
             }
@@ -922,6 +976,7 @@ fn spawn_server_daemon(
     socket_path: &std::path::Path,
     bind: &SocketAddr,
     token: Option<&str>,
+    server_name: &str,
 ) -> Result<(), WshError> {
     let exe = std::env::current_exe().map_err(WshError::Io)?;
     let mut cmd = std::process::Command::new(exe);
@@ -930,7 +985,9 @@ fn spawn_server_daemon(
         .arg("--bind")
         .arg(bind.to_string())
         .arg("--socket")
-        .arg(socket_path);
+        .arg(socket_path)
+        .arg("--server-name")
+        .arg(server_name);
 
     if let Some(t) = token {
         cmd.arg("--token").arg(t);
@@ -986,7 +1043,8 @@ async fn wait_for_socket(socket_path: &std::path::Path) -> Result<(), WshError> 
 async fn run_default(cli: Cli) -> Result<(), WshError> {
     tracing::info!("wsh starting");
 
-    let socket_path = server::default_socket_path();
+    let server_name = &cli.server_name;
+    let socket_path = server::socket_path_for_instance(server_name);
 
     // Try connecting to an existing server; if none, spawn one.
     // Uses an advisory file lock to prevent two clients from racing to spawn
@@ -998,7 +1056,7 @@ async fn run_default(cli: Cli) -> Result<(), WshError> {
         }
         Err(_) => {
             tracing::debug!("no server running, acquiring spawn lock");
-            let lock_path = socket_path.with_extension("lock");
+            let lock_path = server::spawn_lock_path_for_instance(server_name);
             let lp = lock_path.clone();
             let _lock = tokio::task::spawn_blocking(move || acquire_spawn_lock(&lp))
                 .await
@@ -1013,7 +1071,7 @@ async fn run_default(cli: Cli) -> Result<(), WshError> {
                 }
                 Err(_) => {
                     tracing::debug!("spawning daemon");
-                    spawn_server_daemon(&socket_path, &cli.bind, cli.token.as_deref())?;
+                    spawn_server_daemon(&socket_path, &cli.bind, cli.token.as_deref(), server_name)?;
                     wait_for_socket(&socket_path).await?;
 
                     // If binding to a non-loopback address, retrieve and print the token
@@ -1097,8 +1155,9 @@ async fn run_attach(
     scrollback: String,
     socket: Option<PathBuf>,
     alt_screen: bool,
+    server_name: String,
 ) -> Result<(), WshError> {
-    let socket_path = socket.unwrap_or_else(server::default_socket_path);
+    let socket_path = resolve_socket_path(socket, &server_name);
 
     let scrollback_req = match scrollback.as_str() {
         "none" => ScrollbackRequest::None,
@@ -1172,8 +1231,8 @@ async fn run_attach(
     Ok(())
 }
 
-async fn run_list(socket: Option<PathBuf>) -> Result<(), WshError> {
-    let socket_path = socket.unwrap_or_else(server::default_socket_path);
+async fn run_list(socket: Option<PathBuf>, server_name: String) -> Result<(), WshError> {
+    let socket_path = resolve_socket_path(socket, &server_name);
     let mut c = match client::Client::connect(&socket_path).await {
         Ok(c) => c,
         Err(e) => {
@@ -1218,8 +1277,8 @@ async fn run_list(socket: Option<PathBuf>) -> Result<(), WshError> {
     Ok(())
 }
 
-async fn run_kill(name: String, socket: Option<PathBuf>) -> Result<(), WshError> {
-    let socket_path = socket.unwrap_or_else(server::default_socket_path);
+async fn run_kill(name: String, socket: Option<PathBuf>, server_name: String) -> Result<(), WshError> {
+    let socket_path = resolve_socket_path(socket, &server_name);
     let mut c = match client::Client::connect(&socket_path).await {
         Ok(c) => c,
         Err(e) => {
@@ -1241,8 +1300,8 @@ async fn run_kill(name: String, socket: Option<PathBuf>) -> Result<(), WshError>
     Ok(())
 }
 
-async fn run_detach(name: String, socket: Option<PathBuf>) -> Result<(), WshError> {
-    let socket_path = socket.unwrap_or_else(server::default_socket_path);
+async fn run_detach(name: String, socket: Option<PathBuf>, server_name: String) -> Result<(), WshError> {
+    let socket_path = resolve_socket_path(socket, &server_name);
     let mut c = match client::Client::connect(&socket_path).await {
         Ok(c) => c,
         Err(e) => {
@@ -1269,8 +1328,9 @@ async fn run_tag(
     add: Vec<String>,
     remove: Vec<String>,
     socket: Option<PathBuf>,
+    server_name: String,
 ) -> Result<(), WshError> {
-    let socket_path = socket.unwrap_or_else(server::default_socket_path);
+    let socket_path = resolve_socket_path(socket, &server_name);
     let mut c = match client::Client::connect(&socket_path).await {
         Ok(c) => c,
         Err(e) => {
@@ -1300,8 +1360,8 @@ async fn run_tag(
     Ok(())
 }
 
-async fn run_stop(socket: Option<PathBuf>) -> Result<(), WshError> {
-    let socket_path = socket.unwrap_or_else(server::default_socket_path);
+async fn run_stop(socket: Option<PathBuf>, server_name: String) -> Result<(), WshError> {
+    let socket_path = resolve_socket_path(socket, &server_name);
     let mut c = match client::Client::connect(&socket_path).await {
         Ok(c) => c,
         Err(e) => {
@@ -1341,8 +1401,8 @@ async fn run_stop(socket: Option<PathBuf>) -> Result<(), WshError> {
     Ok(())
 }
 
-async fn run_token(socket: Option<PathBuf>) -> Result<(), WshError> {
-    let socket_path = socket.unwrap_or_else(server::default_socket_path);
+async fn run_token(socket: Option<PathBuf>, server_name: String) -> Result<(), WshError> {
+    let socket_path = resolve_socket_path(socket, &server_name);
     let mut c = match client::Client::connect(&socket_path).await {
         Ok(c) => c,
         Err(e) => {

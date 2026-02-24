@@ -487,21 +487,27 @@ wsh provides several subcommands for interacting with a running server:
 wsh server [--bind <addr>] [--token <token>] [--socket <path>]
 ```
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--bind` | `127.0.0.1:8080` | Address for the HTTP/WebSocket API server |
-| `--token` | (auto-generated if non-localhost) | Authentication token |
-| `--socket` | `$XDG_RUNTIME_DIR/wsh.sock` | Path to the Unix domain socket |
+| Flag | Env Var | Default | Description |
+|------|---------|---------|-------------|
+| `--bind` | | `127.0.0.1:8080` | Address for the HTTP/WebSocket API server |
+| `--token` | `WSH_TOKEN` | (auto-generated if non-localhost) | Authentication token |
+| `--socket` | | (derived from `-L`) | Path to the Unix domain socket (overrides `-L`) |
+| `-L`, `--server-name` | `WSH_SERVER_NAME` | `default` | Server instance name (like tmux `-L`) |
 
 The server starts both an HTTP/WS listener and a Unix domain socket listener.
 The HTTP/WS API serves session management, per-session endpoints, and the
 server-level WebSocket. The Unix socket handles CLI client connections (`wsh
 attach`).
 
+Each server instance acquires an exclusive lock on `$XDG_RUNTIME_DIR/wsh/<name>.lock`.
+This prevents two servers with the same instance name from running simultaneously.
+The lock is released automatically on exit (even on crash), so stale lock files
+are never a problem.
+
 #### `wsh attach`
 
 ```bash
-wsh attach <name> [--scrollback <all|none|N>] [--socket <path>]
+wsh attach <name> [--scrollback <all|none|N>] [-L <name>] [--socket <path>]
 ```
 
 Attaches to a named session. The local terminal enters raw mode and proxies
@@ -509,16 +515,17 @@ I/O between your terminal and the session's PTY via the Unix socket. On attach,
 scrollback and current screen content are replayed to bring your terminal up to
 date.
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--scrollback` | `all` | Scrollback replay: `all`, `none`, or a line count |
-| `--socket` | `$XDG_RUNTIME_DIR/wsh.sock` | Path to the Unix domain socket |
-| `--alt-screen` | off | Use alternate screen buffer (restores previous screen on exit, but disables native terminal scrollback while attached) |
+| Flag | Env Var | Default | Description |
+|------|---------|---------|-------------|
+| `--scrollback` | | `all` | Scrollback replay: `all`, `none`, or a line count |
+| `--socket` | | (derived from `-L`) | Path to the Unix domain socket (overrides `-L`) |
+| `-L`, `--server-name` | `WSH_SERVER_NAME` | `default` | Server instance name |
+| `--alt-screen` | | off | Use alternate screen buffer (restores previous screen on exit, but disables native terminal scrollback while attached) |
 
 #### `wsh list`
 
 ```bash
-wsh list [--socket <path>]
+wsh list [-L <name>] [--socket <path>]
 ```
 
 Lists active sessions on the server via the Unix socket. Output is a table
@@ -528,7 +535,7 @@ session.
 #### `wsh kill`
 
 ```bash
-wsh kill <name> [--socket <path>]
+wsh kill <name> [-L <name>] [--socket <path>]
 ```
 
 Destroys a named session on the server via the Unix socket.
@@ -536,7 +543,7 @@ Destroys a named session on the server via the Unix socket.
 #### `wsh detach`
 
 ```bash
-wsh detach <name> [--socket <path>]
+wsh detach <name> [-L <name>] [--socket <path>]
 ```
 
 Detaches all connected clients from a named session via the Unix socket. The
@@ -545,17 +552,21 @@ session itself remains alive -- only the client connections are dropped.
 #### `wsh tag`
 
 ```bash
-wsh tag <name> --add <tag> --remove <tag> [--socket <path>]
+wsh tag <name> --add <tag> --remove <tag> [-L <name>] [--socket <path>]
 ```
 
 Add or remove tags on a named session. Both `--add` and `--remove` can be
 specified multiple times and are applied in a single operation.
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--add` | | Tag to add (repeatable) |
-| `--remove` | | Tag to remove (repeatable) |
-| `--socket` | (default path) | Path to the Unix domain socket |
+| Flag | Env Var | Default | Description |
+|------|---------|---------|-------------|
+| `--add` | | | Tag to add (repeatable) |
+| `--remove` | | | Tag to remove (repeatable) |
+| `--socket` | | (derived from `-L`) | Path to the Unix domain socket (overrides `-L`) |
+| `-L`, `--server-name` | `WSH_SERVER_NAME` | `default` | Server instance name |
+
+All subcommands that accept `--socket` also accept `-L`/`--server-name` to
+select a named server instance. `--socket` always takes priority over `-L`.
 
 #### `wsh persist`
 

@@ -99,13 +99,18 @@ async fn expect_close_frame(
     }
 }
 
-/// Spawns `wsh server --bind ... --ephemeral` as a background process.
-/// Returns the child process handle.
-fn spawn_server(port: u16) -> std::process::Child {
+/// Spawns `wsh server --bind ... --ephemeral` as a background process
+/// with a unique socket path and server name so tests don't fight over locks.
+fn spawn_server(port: u16, socket_dir: &std::path::Path, instance_name: &str) -> std::process::Child {
+    let socket_path = socket_dir.join("test.sock");
     std::process::Command::new(env!("CARGO_BIN_EXE_wsh"))
         .arg("server")
         .arg("--bind")
         .arg(format!("127.0.0.1:{}", port))
+        .arg("--socket")
+        .arg(&socket_path)
+        .arg("--server-name")
+        .arg(instance_name)
         .arg("--ephemeral")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -120,8 +125,9 @@ async fn test_websocket_receives_close_frame_on_shutdown() {
     let port = listener.local_addr().unwrap().port();
     drop(listener);
 
-    // 1. Spawn wsh server in ephemeral mode
-    let mut child = spawn_server(port);
+    // 1. Spawn wsh server in ephemeral mode with unique socket and instance name
+    let socket_dir = tempfile::TempDir::new().unwrap();
+    let mut child = spawn_server(port, socket_dir.path(), "gs-subscribed");
 
     // 2. Wait for server to be ready
     wait_for_ready(port)
@@ -195,8 +201,9 @@ async fn test_unsubscribed_websocket_receives_close_frame_on_shutdown() {
     let port = listener.local_addr().unwrap().port();
     drop(listener);
 
-    // 1. Spawn wsh server in ephemeral mode
-    let mut child = spawn_server(port);
+    // 1. Spawn wsh server in ephemeral mode with unique socket and instance name
+    let socket_dir = tempfile::TempDir::new().unwrap();
+    let mut child = spawn_server(port, socket_dir.path(), "gs-unsubscribed");
 
     // 2. Wait for server to be ready
     wait_for_ready(port)

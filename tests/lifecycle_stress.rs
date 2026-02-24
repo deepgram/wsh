@@ -134,6 +134,7 @@ impl WshTestHarness {
 
         let wsh_bin = env!("CARGO_BIN_EXE_wsh");
 
+        let instance_name = format!("lifecycle-stress-{}", http_port);
         let child = std::process::Command::new(wsh_bin)
             .arg("server")
             .arg("--ephemeral")
@@ -141,6 +142,8 @@ impl WshTestHarness {
             .arg(format!("127.0.0.1:{}", http_port))
             .arg("--socket")
             .arg(&socket_path)
+            .arg("--server-name")
+            .arg(&instance_name)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped())
