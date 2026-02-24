@@ -50,10 +50,9 @@
           nativeBuildInputs = [ pkgs.pkg-config ];
 
           preBuild = ''
+            export WSH_SKIP_WEB_BUILD=1
             cp -r ${webFrontend} web-dist
           '';
-
-          WSH_SKIP_WEB_BUILD = "1";
 
           # Tests that spawn a PTY need a real shell, which isn't
           # available in the Nix build sandbox.
