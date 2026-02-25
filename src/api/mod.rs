@@ -201,22 +201,10 @@ pub fn router(state: AppState, config: RouterConfig) -> Router {
         .nest_service("/mcp", mcp_service)
         .with_state(state);
 
-    // Apply rate limiting to the protected routes if configured.
-    let protected = if let Some(rps) = config.rate_limit {
-        use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder, key_extractor::PeerIpKeyExtractor};
-        let governor_conf = Arc::new(
-            GovernorConfigBuilder::default()
-                .per_second(u64::from(rps))
-                .burst_size(rps)
-                .key_extractor(PeerIpKeyExtractor)
-                .finish()
-                .unwrap()
-        );
-        protected.layer(GovernorLayer::new(governor_conf))
-    } else {
-        protected
-    };
-
+    // Auth/origin layer is applied first (inner), then rate limiting (outer).
+    // In axum's tower model, .layer(A).layer(B) means B runs first.
+    // This ordering ensures rate limiting runs BEFORE auth, so brute-force
+    // token guessing is throttled even when auth rejects the request.
     let protected = match config.token {
         Some(token) => {
             let ts = Some(ticket_store);
@@ -241,6 +229,22 @@ pub fn router(state: AppState, config: RouterConfig) -> Router {
                 origin::check_ws_origin(origins, req, next)
             }))
         }
+    };
+
+    // Rate limiting applied second (outer) so it runs BEFORE auth.
+    let protected = if let Some(rps) = config.rate_limit {
+        use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder, key_extractor::PeerIpKeyExtractor};
+        let governor_conf = Arc::new(
+            GovernorConfigBuilder::default()
+                .per_second(u64::from(rps))
+                .burst_size(rps)
+                .key_extractor(PeerIpKeyExtractor)
+                .finish()
+                .unwrap()
+        );
+        protected.layer(GovernorLayer::new(governor_conf))
+    } else {
+        protected
     };
 
     let ui = Router::new().fallback(web::web_asset);
