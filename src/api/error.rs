@@ -138,7 +138,7 @@ impl ApiError {
     pub fn message(&self) -> String {
         match self {
             ApiError::AuthRequired => {
-                "Authentication required. Provide a token via Authorization header or ?token= query parameter.".to_string()
+                "Authentication required. Provide a token via the Authorization header.".to_string()
             }
             ApiError::AuthInvalid => "Invalid authentication token.".to_string(),
             ApiError::NotFound => "Not found.".to_string(),
@@ -514,7 +514,7 @@ mod tests {
         let (_, json) = response_parts(ApiError::AuthRequired).await;
         assert_eq!(
             json["error"]["message"],
-            "Authentication required. Provide a token via Authorization header or ?token= query parameter."
+            "Authentication required. Provide a token via the Authorization header."
         );
     }
 

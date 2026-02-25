@@ -98,6 +98,8 @@ async fn test_concurrent_input_from_multiple_sources() {
         shutdown: ShutdownCoordinator::new(),
         server_config: std::sync::Arc::new(api::ServerConfig::new(false)),
             server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()),
     };
     let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
@@ -264,6 +266,8 @@ async fn test_rapid_http_requests() {
         shutdown: ShutdownCoordinator::new(),
         server_config: std::sync::Arc::new(api::ServerConfig::new(false)),
             server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()),
     };
     let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;

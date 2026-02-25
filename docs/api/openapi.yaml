@@ -37,9 +37,10 @@ servers:
 
 security:
   - bearerAuth: []
-  - queryAuth: []
 
 tags:
+  - name: auth
+    description: Authentication helpers (ticket exchange)
   - name: health
     description: Health check (no auth required)
   - name: terminal
@@ -64,6 +65,41 @@ paths:
   # ws/json, overlay, panel, idle, input/mode, input/capture,
   # input/release) are available under /sessions/{name}/ prefix.
   # For example: /sessions/dev/input, /sessions/dev/screen, etc.
+
+  /auth/ws-ticket:
+    post:
+      operationId: acquireWsTicket
+      summary: Acquire a single-use ticket for WebSocket authentication
+      description: |
+        Exchange a Bearer token for a short-lived, single-use ticket that can be
+        passed as a `?ticket=` query parameter on WebSocket upgrade requests.
+        Tickets expire after 30 seconds and are consumed on first use.
+
+        This endpoint exists because browser WebSocket connections cannot set
+        custom HTTP headers. Non-browser clients should use the Authorization
+        header directly.
+      tags: [auth]
+      responses:
+        "200":
+          description: Ticket created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ticket:
+                    type: string
+                    description: Single-use nonce (32 characters)
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          description: Too many pending tickets (limit 1024).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /health:
     get:
@@ -188,11 +224,16 @@ paths:
       operationId: wsRaw
       summary: Raw binary WebSocket
       tags: [websocket]
+      security:
+        - bearerAuth: []
+        - ticketAuth: []
       description: >
         Bidirectional byte stream mirroring the PTY. Output arrives as binary
         frames. Send binary or text frames to inject input. When running
         without auth (localhost), requests with a non-localhost Origin header
-        are rejected with 403 `origin_not_allowed`.
+        are rejected with 403 `origin_not_allowed`. Browser clients should
+        use the ticket exchange flow (POST /auth/ws-ticket) since WebSocket
+        connections cannot set custom headers.
       responses:
         "101":
           description: WebSocket upgrade successful.
@@ -212,6 +253,9 @@ paths:
       operationId: wsJson
       summary: JSON request/response and event WebSocket
       tags: [websocket]
+      security:
+        - bearerAuth: []
+        - ticketAuth: []
       description: >
         Unified request/response protocol with event subscriptions. After
         upgrade, server sends {"connected": true}. Client can immediately
@@ -219,7 +263,9 @@ paths:
         receive responses. Subscribing to events is optional. See
         websocket.md for the full protocol specification. When running
         without auth (localhost), requests with a non-localhost Origin header
-        are rejected with 403 `origin_not_allowed`.
+        are rejected with 403 `origin_not_allowed`. Browser clients should
+        use the ticket exchange flow (POST /auth/ws-ticket) since WebSocket
+        connections cannot set custom headers.
       responses:
         "101":
           description: WebSocket upgrade successful.
@@ -1205,6 +1251,9 @@ paths:
       operationId: sessionWsJson
       summary: Per-session JSON WebSocket
       tags: [session, websocket]
+      security:
+        - bearerAuth: []
+        - ticketAuth: []
       parameters:
         - name: name
           in: path
@@ -1234,6 +1283,9 @@ paths:
       operationId: sessionWsRaw
       summary: Per-session raw binary WebSocket
       tags: [session, websocket]
+      security:
+        - bearerAuth: []
+        - ticketAuth: []
       parameters:
         - name: name
           in: path
@@ -1315,11 +1367,11 @@ components:
       type: http
       scheme: bearer
       description: "Authorization: Bearer <token>"
-    queryAuth:
+    ticketAuth:
       type: apiKey
       in: query
-      name: token
-      description: "?token=<token> query parameter"
+      name: ticket
+      description: "Single-use ticket for WebSocket upgrades, acquired via POST /auth/ws-ticket"
 
   responses:
     Unauthorized:

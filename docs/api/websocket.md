@@ -2,6 +2,47 @@
 
 wsh exposes two WebSocket endpoints for real-time terminal interaction.
 
+## Authentication
+
+When the server requires authentication (binding to a non-loopback address),
+WebSocket connections must be authenticated. There are two methods:
+
+### Authorization Header (non-browser clients)
+
+Clients that can set custom headers (e.g., `websocat -H`) use the
+`Authorization` header directly on the upgrade request:
+
+```bash
+websocat -H 'Authorization: Bearer my-secret-token' ws://host:8080/sessions/default/ws/json
+```
+
+### Ticket Exchange (browser clients)
+
+Browser WebSocket connections cannot set custom HTTP headers. Use the ticket
+exchange flow:
+
+1. **Acquire a ticket** by authenticating with your Bearer token:
+
+   ```bash
+   curl -X POST -H "Authorization: Bearer my-secret-token" \
+     http://host:8080/auth/ws-ticket
+   ```
+
+   Response: `{"ticket": "aB3kM9xR2pL7nQ4wT8yF1vJ6hD5gC0eS"}`
+
+2. **Connect the WebSocket** with the ticket as a query parameter:
+
+   ```bash
+   websocat 'ws://host:8080/sessions/default/ws/json?ticket=aB3kM9xR2pL7nQ4wT8yF1vJ6hD5gC0eS'
+   ```
+
+Tickets are single-use, expire after 30 seconds, and at most 1024 can be
+pending at a time. See [authentication.md](authentication.md) for full details.
+
+When running on localhost (default), no authentication is required.
+
+---
+
 ## Raw Binary WebSocket
 
 ```

@@ -33,6 +33,25 @@ API calls. All endpoints are scoped to a session via
 > 3 resources, 9 prompts) via Streamable HTTP at `/mcp` or the `wsh mcp` stdio
 > bridge. See the `wsh:core-mcp` prompt for MCP-specific guidance.
 
+## Authentication
+
+When wsh binds to localhost (default), no authentication is needed —
+all endpoints are open.
+
+When binding to a non-loopback address (e.g., `--bind 0.0.0.0:8080`),
+every request requires a Bearer token:
+
+    curl -H "Authorization: Bearer <token>" http://host:8080/sessions/default/screen
+
+The token is either auto-generated on startup (printed to stderr) or
+set via `--token` / `WSH_TOKEN`. Retrieve it later with `wsh token`.
+
+**WebSocket connections** from browsers use a ticket exchange: first
+acquire a short-lived ticket via `POST /auth/ws-ticket` with your
+Bearer token, then pass `?ticket=<nonce>` on the WebSocket URL.
+Non-browser clients can use the `Authorization` header directly on
+the upgrade request.
+
 ## The Fundamental Loop
 
 Almost everything you do with wsh follows this pattern:

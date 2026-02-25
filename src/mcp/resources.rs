@@ -346,6 +346,8 @@ mod tests {
             shutdown: crate::shutdown::ShutdownCoordinator::new(),
             server_config: std::sync::Arc::new(crate::api::ServerConfig::new(false)),
             server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            ticket_store: std::sync::Arc::new(crate::api::ticket::TicketStore::new()),
         };
 
         let request = ReadResourceRequestParams {
@@ -364,6 +366,8 @@ mod tests {
             shutdown: crate::shutdown::ShutdownCoordinator::new(),
             server_config: std::sync::Arc::new(crate::api::ServerConfig::new(false)),
             server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            ticket_store: std::sync::Arc::new(crate::api::ticket::TicketStore::new()),
         };
 
         let request = ReadResourceRequestParams {
@@ -382,6 +386,8 @@ mod tests {
             shutdown: crate::shutdown::ShutdownCoordinator::new(),
             server_config: std::sync::Arc::new(crate::api::ServerConfig::new(false)),
             server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            ticket_store: std::sync::Arc::new(crate::api::ticket::TicketStore::new()),
         };
 
         let request = ReadResourceRequestParams {
@@ -410,6 +416,8 @@ mod tests {
             shutdown: crate::shutdown::ShutdownCoordinator::new(),
             server_config: std::sync::Arc::new(crate::api::ServerConfig::new(false)),
             server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            ticket_store: std::sync::Arc::new(crate::api::ticket::TicketStore::new()),
         };
 
         let request = ReadResourceRequestParams {
@@ -430,6 +438,8 @@ mod tests {
             shutdown: crate::shutdown::ShutdownCoordinator::new(),
             server_config: std::sync::Arc::new(crate::api::ServerConfig::new(false)),
             server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            ticket_store: std::sync::Arc::new(crate::api::ticket::TicketStore::new()),
         };
 
         let result = list_resources(&state).await.unwrap();

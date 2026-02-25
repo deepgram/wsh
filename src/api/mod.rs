@@ -2,6 +2,7 @@ pub mod auth;
 pub mod error;
 mod handlers;
 pub mod origin;
+pub mod ticket;
 mod web;
 pub mod ws_methods;
 
@@ -57,6 +58,9 @@ impl ServerConfig {
 /// thousands of connections.
 const MAX_SERVER_WS_CONNECTIONS: usize = 256;
 
+/// Maximum concurrent MCP sessions allowed via the Streamable HTTP transport.
+const MAX_MCP_SESSIONS: usize = 256;
+
 #[derive(Clone)]
 pub struct AppState {
     pub sessions: SessionRegistry,
@@ -64,6 +68,10 @@ pub struct AppState {
     pub server_config: Arc<ServerConfig>,
     /// Counter for server-level WebSocket connections.
     pub server_ws_count: Arc<std::sync::atomic::AtomicUsize>,
+    /// Counter for active MCP sessions (Streamable HTTP transport).
+    pub mcp_session_count: Arc<std::sync::atomic::AtomicUsize>,
+    /// Short-lived ticket store for WebSocket authentication.
+    pub ticket_store: Arc<ticket::TicketStore>,
 }
 
 pub(crate) fn get_session(
@@ -104,14 +112,20 @@ pub fn router(state: AppState, config: RouterConfig) -> Router {
     };
 
     let mcp_state = state.clone();
-    // NOTE: rmcp's StreamableHttpServerConfig (v0.15) does not expose a
-    // max-sessions or session-limit field.  Its only knobs are
-    // `sse_keep_alive`, `sse_retry`, `stateful_mode`, and
-    // `cancellation_token`.  MCP session limiting is therefore not
-    // configurable at this layer -- it is a known limitation of the
-    // upstream rmcp crate.
+    let mcp_counter = state.mcp_session_count.clone();
     let mcp_service = StreamableHttpService::new(
-        move || Ok(crate::mcp::WshMcpServer::new(mcp_state.clone())),
+        move || {
+            let current = mcp_counter.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            if current >= MAX_MCP_SESSIONS {
+                mcp_counter.fetch_sub(1, std::sync::atomic::Ordering::Release);
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "maximum MCP sessions reached",
+                ));
+            }
+            Ok(crate::mcp::WshMcpServer::new(mcp_state.clone())
+                .with_session_counter(mcp_counter.clone()))
+        },
         Arc::new(LocalSessionManager::default()),
         StreamableHttpServerConfig::default(),
     );
@@ -177,9 +191,11 @@ pub fn router(state: AppState, config: RouterConfig) -> Router {
         .route("/server/persist", get(server_persist_get).put(server_persist_set))
         .route("/ws/json", get(ws_json_server));
 
+    let ticket_store = state.ticket_store.clone();
     let protected = Router::new()
         .merge(session_mgmt_routes)
         .nest("/sessions/{name}", session_routes)
+        .route("/auth/ws-ticket", post(ws_ticket))
         .nest_service("/mcp", mcp_service)
         .with_state(state);
 
@@ -200,10 +216,14 @@ pub fn router(state: AppState, config: RouterConfig) -> Router {
     };
 
     let protected = match config.token {
-        Some(token) => protected.layer(axum::middleware::from_fn(move |req, next| {
-            let t = token.clone();
-            async move { auth::require_auth(t, req, next).await }
-        })),
+        Some(token) => {
+            let ts = Some(ticket_store);
+            protected.layer(axum::middleware::from_fn(move |req, next| {
+                let t = token.clone();
+                let ts = ts.clone();
+                async move { auth::require_auth(t, ts, req, next).await }
+            }))
+        }
         None => {
             // When running without auth (localhost), protect against CSWSH attacks
             // by validating the Origin header on WebSocket upgrade requests.
@@ -242,6 +262,17 @@ pub fn router(state: AppState, config: RouterConfig) -> Router {
         .layer(SetResponseHeaderLayer::overriding(
             HeaderName::from_static("referrer-policy"),
             HeaderValue::from_static("no-referrer"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("content-security-policy"),
+            HeaderValue::from_static(
+                "default-src 'self'; script-src 'self'; style-src 'self'; \
+                 connect-src 'self' ws: wss:; img-src 'self' data:; frame-ancestors 'none'"
+            ),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("permissions-policy"),
+            HeaderValue::from_static("geolocation=(), microphone=(), camera=()"),
         ));
 
     // Conditionally apply CORS if origins are configured.
@@ -318,6 +349,8 @@ mod tests {
             shutdown: ShutdownCoordinator::new(),
             server_config: Arc::new(ServerConfig::new(false)),
             server_ws_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            mcp_session_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            ticket_store: Arc::new(ticket::TicketStore::new()),
         };
         (state, input_rx, "test".to_string())
     }
@@ -803,6 +836,65 @@ mod tests {
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
+    #[tokio::test]
+    async fn test_ws_ticket_requires_auth() {
+        let (state, _input_rx, _name) = create_test_state();
+        let app = router(state, RouterConfig { token: Some("secret-token".to_string()), ..Default::default() });
+
+        // Without auth — should 401
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/auth/ws-ticket")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        // With auth — should return ticket
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/auth/ws-ticket")
+                    .header("authorization", "Bearer secret-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json["ticket"].is_string());
+        assert_eq!(json["ticket"].as_str().unwrap().len(), 32);
+    }
+
+    #[tokio::test]
+    async fn test_query_token_no_longer_accepted() {
+        let (state, _input_rx, _name) = create_test_state();
+        let app = router(state, RouterConfig { token: Some("secret-token".to_string()), ..Default::default() });
+
+        // ?token= should NOT work anymore
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/test/screen?token=secret-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
     // ── Session management tests ─────────────────────────────────────
 
     /// Helper: creates a minimal AppState with an empty registry (no pre-seeded sessions).
@@ -812,6 +904,8 @@ mod tests {
             shutdown: ShutdownCoordinator::new(),
             server_config: Arc::new(ServerConfig::new(false)),
             server_ws_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            mcp_session_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            ticket_store: Arc::new(ticket::TicketStore::new()),
         }
     }
 
@@ -1310,6 +1404,8 @@ mod tests {
                 shutdown: ShutdownCoordinator::new(),
                 server_config: config.clone(),
                 server_ws_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                mcp_session_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                ticket_store: Arc::new(ticket::TicketStore::new()),
             },
             RouterConfig::default(),
         );
@@ -1367,6 +1463,8 @@ mod tests {
                 shutdown: ShutdownCoordinator::new(),
                 server_config: config.clone(),
                 server_ws_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                mcp_session_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                ticket_store: Arc::new(ticket::TicketStore::new()),
             },
             RouterConfig::default(),
         );
@@ -1421,6 +1519,8 @@ mod tests {
                 shutdown: ShutdownCoordinator::new(),
                 server_config: config.clone(),
                 server_ws_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                mcp_session_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                ticket_store: Arc::new(ticket::TicketStore::new()),
             },
             RouterConfig::default(),
         );
@@ -2319,6 +2419,14 @@ mod tests {
         assert_eq!(
             response.headers().get("referrer-policy").unwrap(),
             "no-referrer"
+        );
+        assert!(
+            response.headers().get("content-security-policy").unwrap()
+                .to_str().unwrap().contains("default-src 'self'")
+        );
+        assert!(
+            response.headers().get("permissions-policy").unwrap()
+                .to_str().unwrap().contains("geolocation=()")
         );
     }
 

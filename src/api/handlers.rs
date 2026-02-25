@@ -71,6 +71,16 @@ pub(super) async fn health() -> Json<HealthResponse> {
     Json(HealthResponse { status: "ok" })
 }
 
+pub(super) async fn ws_ticket(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let ticket = state
+        .ticket_store
+        .create()
+        .map_err(|_| ApiError::ResourceLimitReached("too many pending tickets".into()))?;
+    Ok(Json(serde_json::json!({ "ticket": ticket })))
+}
+
 pub(super) async fn input(
     State(state): State<AppState>,
     Path(name): Path<String>,

@@ -29,6 +29,13 @@ synchronized — input you send appears on their screen, output they
 generate appears in your tool responses. All tools take a `session`
 parameter to specify which session to operate on (e.g., `"default"`).
 
+## Authentication
+
+When wsh binds to localhost (default), no authentication is needed.
+When binding to a non-loopback address, a Bearer token is required
+on all requests (including MCP). The token is auto-generated on
+startup or set via `--token` / `WSH_TOKEN`.
+
 ## The Fundamental Loop
 
 Almost everything you do with wsh follows this pattern:

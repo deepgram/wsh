@@ -2,6 +2,7 @@ pub mod tools;
 pub mod resources;
 pub mod prompts;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -35,6 +36,8 @@ use tools::{
 pub struct WshMcpServer {
     state: AppState,
     tool_router: ToolRouter<WshMcpServer>,
+    /// Shared counter for active MCP sessions. Decremented on Drop.
+    session_counter: Option<Arc<std::sync::atomic::AtomicUsize>>,
 }
 
 impl WshMcpServer {
@@ -42,7 +45,14 @@ impl WshMcpServer {
         Self {
             state,
             tool_router: Self::tool_router(),
+            session_counter: None,
         }
+    }
+
+    /// Attach a shared session counter that is decremented when this server is dropped.
+    pub fn with_session_counter(mut self, counter: Arc<std::sync::atomic::AtomicUsize>) -> Self {
+        self.session_counter = Some(counter);
+        self
     }
 
     fn get_session(&self, name: &str) -> Result<crate::session::Session, ErrorData> {
@@ -50,6 +60,14 @@ impl WshMcpServer {
             .sessions
             .get(name)
             .ok_or_else(|| ErrorData::invalid_params(format!("session not found: {name}"), None))
+    }
+}
+
+impl Drop for WshMcpServer {
+    fn drop(&mut self) {
+        if let Some(ref counter) = self.session_counter {
+            counter.fetch_sub(1, std::sync::atomic::Ordering::Release);
+        }
     }
 }
 

@@ -63,46 +63,52 @@ The flag takes precedence over the environment variable.
 
 ## Sending Credentials
 
-wsh accepts tokens via two mechanisms, checked in this order:
+### Authorization Header
 
-### 1. Authorization Header (Preferred)
+All HTTP and WebSocket requests authenticate via the `Authorization` header:
 
 ```
 Authorization: Bearer <token>
 ```
 
 ```bash
-curl -H "Authorization: Bearer my-secret-token" http://host:8080/screen
+curl -H "Authorization: Bearer my-secret-token" http://host:8080/sessions
 ```
 
-### 2. Query Parameter (Convenience)
+### WebSocket Authentication (Ticket Exchange)
 
-```
-?token=<token>
-```
+Browser WebSocket connections cannot set custom HTTP headers, so wsh provides
+a ticket exchange flow:
+
+1. **Acquire a ticket** by authenticating with your Bearer token:
+
+   ```bash
+   curl -X POST -H "Authorization: Bearer my-secret-token" \
+     http://host:8080/auth/ws-ticket
+   ```
+
+   Response:
+
+   ```json
+   { "ticket": "aB3kM9xR2pL7nQ4wT8yF1vJ6hD5gC0eS" }
+   ```
+
+2. **Connect the WebSocket** with the ticket as a query parameter:
+
+   ```bash
+   websocat 'ws://host:8080/sessions/default/ws/json?ticket=aB3kM9xR2pL7nQ4wT8yF1vJ6hD5gC0eS'
+   ```
+
+Tickets are:
+- **Single-use**: consumed on first WebSocket upgrade
+- **Short-lived**: expire after 30 seconds
+- **Limited**: at most 1024 pending tickets at a time
+
+For non-browser clients that can set headers (e.g., `websocat -H`), the
+Authorization header works directly on WebSocket upgrade requests:
 
 ```bash
-curl 'http://host:8080/screen?token=my-secret-token'
-```
-
-The query parameter is provided as a convenience for contexts where setting
-headers is awkward (browser bookmarks, simple scripts, WebSocket URLs). Prefer
-the Authorization header when possible -- query parameters may appear in server
-logs and browser history.
-
-If both are present, the Authorization header takes precedence.
-
-### WebSocket Authentication
-
-WebSocket connections use the same mechanisms. The token is checked during the
-HTTP upgrade request:
-
-```bash
-# Via query parameter (most common for WebSockets)
-websocat 'ws://host:8080/ws/json?token=my-secret-token'
-
-# Via header (if your client supports it)
-websocat -H 'Authorization: Bearer my-secret-token' ws://host:8080/ws/json
+websocat -H 'Authorization: Bearer my-secret-token' ws://host:8080/sessions/default/ws/json
 ```
 
 ## Error Responses
@@ -118,7 +124,7 @@ websocat -H 'Authorization: Bearer my-secret-token' ws://host:8080/ws/json
 {
   "error": {
     "code": "auth_required",
-    "message": "Authentication required. Provide a token via Authorization header or ?token= query parameter."
+    "message": "Authentication required. Provide a token via the Authorization header."
   }
 }
 ```
@@ -139,8 +145,9 @@ websocat -H 'Authorization: Bearer my-secret-token' ws://host:8080/ws/json
 When the web UI (`/ui`) connects to a server that requires authentication, it
 automatically detects the 401/403 response and presents a token prompt. Enter
 the token (from `wsh token` or the server's stderr output) and the web UI will
-store it in `localStorage` for future sessions. If the server restarts with a
-different token, the web UI will prompt again.
+store it in `localStorage` for future sessions. The web UI uses the ticket
+exchange flow internally -- it acquires a short-lived ticket via
+`POST /auth/ws-ticket` before each WebSocket connection.
 
 ## Security Notes
 
@@ -150,3 +157,5 @@ different token, the web UI will prompt again.
 - Tokens are compared in constant time to prevent timing attacks.
 - `/health`, `/docs`, and `/openapi.yaml` are always unauthenticated so
   monitoring tools and documentation browsers work without credentials.
+- When binding to a non-localhost address, rate limiting (100 req/s per IP)
+  is applied by default. Override with `--rate-limit`.

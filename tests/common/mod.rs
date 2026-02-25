@@ -85,7 +85,9 @@ pub fn create_test_state_with_size(rows: u16, cols: u16) -> (wsh::api::AppState,
         sessions: registry,
         shutdown: ShutdownCoordinator::new(),
         server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)),
-            server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()),
     };
     (state, ts.input_rx, output_tx, parser_tx)
 }

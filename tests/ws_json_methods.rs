@@ -53,6 +53,8 @@ fn create_test_state() -> (api::AppState, mpsc::Receiver<Bytes>, mpsc::Sender<By
         shutdown: ShutdownCoordinator::new(),
         server_config: std::sync::Arc::new(api::ServerConfig::new(false)),
             server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()),
     };
     (state, input_rx, parser_tx)
 }
@@ -208,6 +210,8 @@ async fn test_ws_subscribe_then_events() {
         shutdown: ShutdownCoordinator::new(),
         server_config: std::sync::Arc::new(api::ServerConfig::new(false)),
             server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()),
     };
     let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
@@ -344,6 +348,8 @@ async fn test_ws_methods_interleaved_with_events() {
         shutdown: ShutdownCoordinator::new(),
         server_config: std::sync::Arc::new(api::ServerConfig::new(false)),
             server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()),
     };
     let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;

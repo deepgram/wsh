@@ -330,6 +330,15 @@ async fn run_server(
         tracing::info!("auth token configured");
     }
 
+    let rate_limit = match rate_limit {
+        Some(rps) => Some(rps),
+        None if !is_loopback(&bind) => {
+            tracing::info!("applying default rate limit (100 req/s per IP) for non-localhost binding");
+            Some(100)
+        }
+        None => None,
+    };
+
     let persistent = !ephemeral;
     // When --max-sessions is explicitly provided, use that value.
     // Otherwise, the registry uses its built-in default (256).
@@ -347,6 +356,8 @@ async fn run_server(
         shutdown: shutdown.clone(),
         server_config: server_config.clone(),
         server_ws_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        mcp_session_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        ticket_store: Arc::new(api::ticket::TicketStore::new()),
     };
 
     if !cors_origins.is_empty() {

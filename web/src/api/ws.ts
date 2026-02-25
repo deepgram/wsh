@@ -87,19 +87,46 @@ export class WshClient {
     }
   }
 
-  /** Append token query param to a URL if a token is configured. */
-  private buildAuthUrl(url: string): string {
-    if (!this.token) return url;
-    const sep = url.includes("?") ? "&" : "?";
-    return `${url}${sep}token=${encodeURIComponent(this.token)}`;
+  /** Derive the HTTP base URL from a WebSocket URL. */
+  private deriveHttpBase(wsUrl: string): string {
+    return wsUrl
+      .replace(/^ws:/, "http:")
+      .replace(/^wss:/, "https:")
+      .replace(/\/ws\/json$/, "");
   }
 
   /** Derive an HTTP URL from a WebSocket URL for the auth probe. */
   private deriveHttpUrl(wsUrl: string): string {
-    return wsUrl
-      .replace(/^ws:/, "http:")
-      .replace(/^wss:/, "https:")
-      .replace(/\/ws\/json$/, "/sessions");
+    return this.deriveHttpBase(wsUrl) + "/sessions";
+  }
+
+  /**
+   * Acquire a short-lived ticket for WebSocket authentication.
+   *
+   * Browser WebSocket connections cannot set custom HTTP headers, so we
+   * exchange a Bearer token for a single-use ticket via POST /auth/ws-ticket,
+   * then pass the ticket as a query parameter on the WebSocket URL.
+   */
+  private async acquireTicket(): Promise<string | null> {
+    if (!this.token) return null;
+    const httpBase = this.deriveHttpBase(this.url);
+    try {
+      const resp = await fetch(`${httpBase}/auth/ws-ticket`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${this.token}` },
+      });
+      if (!resp.ok) return null;
+      const data = await resp.json();
+      return data.ticket || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Append a ticket query param to a URL. */
+  private buildTicketUrl(url: string, ticket: string): string {
+    const sep = url.includes("?") ? "&" : "?";
+    return `${url}${sep}ticket=${encodeURIComponent(ticket)}`;
   }
 
   /**
@@ -150,11 +177,16 @@ export class WshClient {
     // WebSocket connection attempts that will be rejected.
     this.probeAuth().then((isAuth) => {
       if (isAuth) return; // onAuthRequired already fired
-      this.connectWebSocket();
+      // Acquire a ticket before connecting (single ticket shared across
+      // all Happy Eyeballs attempts — first server-side upgrade consumes
+      // it, losers get 403 and close normally).
+      this.acquireTicket().then((ticket) => {
+        this.connectWebSocket(ticket);
+      });
     });
   }
 
-  private connectWebSocket(): void {
+  private connectWebSocket(ticket: string | null): void {
     const urls = buildWsUrls(this.url);
 
     // Track all in-flight attempts so the winner can close the losers.
@@ -210,7 +242,8 @@ export class WshClient {
     };
 
     const tryConnect = (url: string) => {
-      const ws = new WebSocket(this.buildAuthUrl(url));
+      const wsUrl = ticket ? this.buildTicketUrl(url, ticket) : url;
+      const ws = new WebSocket(wsUrl);
       attempts.push(ws);
 
       ws.onopen = () => settle(ws);
