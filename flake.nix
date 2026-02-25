@@ -28,7 +28,7 @@
             # FOD: allows network access; hash must be updated when web/ changes
             outputHashAlgo = "sha256";
             outputHashMode = "recursive";
-            outputHash = "sha256-5Rd0a2td8Ej2pJsMZfSn3/vvtVAub1RFz9ZiarJ/Gjg=";
+            outputHash = "sha256-4AgZw+WAxDoTqJatqvEjzBMm4uRSz9bLwZL8gStblo4=";
 
             buildPhase = ''
               export HOME=$TMPDIR
