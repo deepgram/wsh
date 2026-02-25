@@ -196,6 +196,8 @@ pub fn router(state: AppState, config: RouterConfig) -> Router {
         .merge(session_mgmt_routes)
         .nest("/sessions/{name}", session_routes)
         .route("/auth/ws-ticket", post(ws_ticket))
+        .route("/openapi.yaml", get(openapi_spec))
+        .route("/docs", get(docs_index))
         .nest_service("/mcp", mcp_service)
         .with_state(state);
 
@@ -246,8 +248,6 @@ pub fn router(state: AppState, config: RouterConfig) -> Router {
     let router = Router::new()
         .route("/", get(|| async { Redirect::temporary("/ui") }))
         .route("/health", get(health))
-        .route("/openapi.yaml", get(openapi_spec))
-        .route("/docs", get(docs_index))
         .merge(protected)
         .nest("/ui", ui)
         .layer(DefaultBodyLimit::max(1024 * 1024)) // 1 MB
@@ -267,7 +267,7 @@ pub fn router(state: AppState, config: RouterConfig) -> Router {
             HeaderName::from_static("content-security-policy"),
             HeaderValue::from_static(
                 "default-src 'self'; script-src 'self'; style-src 'self'; \
-                 connect-src 'self' ws: wss:; img-src 'self' data:; frame-ancestors 'none'"
+                 connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'"
             ),
         ))
         .layer(SetResponseHeaderLayer::overriding(
@@ -778,11 +778,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_docs_and_openapi_exempt_from_auth() {
+    async fn test_docs_and_openapi_require_auth() {
         let (state, _input_rx, _name) = create_test_state();
         let app = router(state, RouterConfig { token: Some("secret-token".to_string()), ..Default::default() });
 
-        // /openapi.yaml should work without auth
+        // /openapi.yaml should require auth
         let response = app
             .clone()
             .oneshot(
@@ -793,14 +793,42 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
-        // /docs should work without auth
+        // /docs should require auth
         let response = app
             .clone()
             .oneshot(
                 Request::builder()
                     .uri("/docs")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        // /openapi.yaml with valid auth should return 200
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/openapi.yaml")
+                    .header("authorization", "Bearer secret-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // /docs with valid auth should return 200
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/docs")
+                    .header("authorization", "Bearer secret-token")
                     .body(Body::empty())
                     .unwrap(),
             )

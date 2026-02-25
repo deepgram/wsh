@@ -202,6 +202,9 @@ pub enum WshError {
 
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("configuration error: {0}")]
+    Config(String),
 }
 
 fn is_loopback(addr: &SocketAddr) -> bool {
@@ -215,12 +218,22 @@ fn resolve_socket_path(socket: Option<PathBuf>, server_name: &str) -> PathBuf {
     socket.unwrap_or_else(|| server::socket_path_for_instance(server_name))
 }
 
-fn resolve_token(bind: &SocketAddr, user_token: &Option<String>) -> Option<String> {
+/// Minimum token length for non-localhost bindings.  Tokens shorter than this
+/// are rejected to prevent accidental auth bypass (e.g. `WSH_TOKEN=""`).
+const MIN_TOKEN_LENGTH: usize = 16;
+
+fn resolve_token(bind: &SocketAddr, user_token: &Option<String>) -> Result<Option<String>, WshError> {
     if is_loopback(bind) {
-        return None;
+        return Ok(None);
     }
     match user_token {
-        Some(token) => Some(token.clone()),
+        Some(token) if token.len() >= MIN_TOKEN_LENGTH => Ok(Some(token.clone())),
+        Some(token) => Err(WshError::Config(format!(
+            "auth token too short ({} chars, minimum {}). \
+             Use a strong token or omit --token to auto-generate one.",
+            token.len(),
+            MIN_TOKEN_LENGTH,
+        ))),
         None => {
             use rand::Rng;
             let token: String = rand::thread_rng()
@@ -229,7 +242,7 @@ fn resolve_token(bind: &SocketAddr, user_token: &Option<String>) -> Option<Strin
                 .map(char::from)
                 .collect();
             eprintln!("wsh: API token (required for non-localhost): {}", token);
-            Some(token)
+            Ok(Some(token))
         }
     }
 }
@@ -325,7 +338,7 @@ async fn run_server(
 ) -> Result<(), WshError> {
     tracing::info!(instance = %server_name, "wsh server starting");
 
-    let token = resolve_token(&bind, &token);
+    let token = resolve_token(&bind, &token)?;
     if token.is_some() {
         tracing::info!("auth token configured");
     }
