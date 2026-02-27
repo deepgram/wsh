@@ -93,6 +93,54 @@ wsh                               # automatically uses "myproject" instance
 
 Each instance gets its own socket and lock file under `$XDG_RUNTIME_DIR/wsh/`. The default instance name is `default`.
 
+### Federation (Multi-Server Clusters)
+
+`wsh` supports federation -- a single hub server orchestrating sessions across multiple backend servers. This lets you distribute terminal sessions across machines while managing everything from one API endpoint.
+
+**Configure via TOML** (`~/.config/wsh/federation.toml`):
+
+```toml
+# Optional: override the hub's hostname
+[server]
+hostname = "orchestrator"
+
+# Default auth token for backends
+default_token = "shared-secret"
+
+# Backend servers
+[[servers]]
+address = "10.0.1.10:8080"
+
+[[servers]]
+address = "10.0.1.11:8080"
+token = "per-server-token"
+```
+
+**Or manage at runtime:**
+
+```bash
+# Start the hub
+wsh server --bind 127.0.0.1:8080
+
+# Register backends via API
+curl -X POST http://localhost:8080/servers \
+  -H 'Content-Type: application/json' \
+  -d '{"address": "10.0.1.10:8080"}'
+
+# List all servers in the cluster
+curl http://localhost:8080/servers
+
+# Create a session on a specific backend
+curl -X POST 'http://localhost:8080/sessions?server=backend-1' \
+  -H 'Content-Type: application/json' \
+  -d '{"name": "remote-build"}'
+
+# List sessions across all servers
+curl http://localhost:8080/sessions
+```
+
+The hub proxies session operations transparently -- all existing session endpoints work the same, with an optional `?server=<hostname>` parameter for targeting specific backends. Session listings aggregate across all healthy servers.
+
 ## Your Terminal, in a Browser
 
 Start `wsh`. Open a browser.
@@ -173,6 +221,7 @@ Skills encode operational expertise: the send/wait/read pattern, how to detect e
 | `wsh:visual-feedback` | Using overlays and panels to communicate with users |
 | `wsh:input-capture` | Intercepting keyboard input for dialogs and approvals |
 | `wsh:generative-ui` | Building dynamic, interactive terminal experiences |
+| `wsh:cluster-orchestration` | Managing sessions across multiple federated wsh servers |
 
 ### Installing as a Claude Code Plugin
 
@@ -324,6 +373,15 @@ When input is captured, local keyboard input is not forwarded to the PTY. Press 
 |--------|------|-------------|
 | `POST` | `/server/persist` | Upgrade server to persistent mode |
 | `GET` | `/ws/json` | Server-level multiplexed WebSocket |
+
+### Federation
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/servers` | List all servers in the cluster |
+| `POST` | `/servers` | Register a backend server |
+| `GET` | `/servers/{hostname}` | Get server status |
+| `DELETE` | `/servers/{hostname}` | Deregister a backend server |
 
 ### Global
 
@@ -493,14 +551,23 @@ src/
 ├── protocol.rs          # Unix socket wire protocol (messages, serialization)
 ├── pty.rs               # PTY management (spawn, read, write, resize)
 ├── server.rs            # Unix socket server (session management daemon)
+├── config.rs            # Federation config (TOML loading, hostname resolution)
 ├── session.rs           # Session struct, SessionRegistry, session events
 ├── shutdown.rs          # Graceful shutdown coordination
 ├── terminal.rs          # Raw mode guard, terminal size, screen mode
+├── federation/
+│   ├── mod.rs           # Federation module exports
+│   ├── auth.rs          # Backend token resolution cascade
+│   ├── connection.rs    # Persistent WebSocket connection to backends
+│   ├── manager.rs       # FederationManager (registry + connections)
+│   ├── registry.rs      # BackendRegistry, health tracking, validation
+│   └── sanitize.rs      # Response sanitization for proxied data
 ├── api/
 │   ├── mod.rs           # Router, AppState, route definitions
 │   ├── auth.rs          # Bearer token authentication middleware
 │   ├── error.rs         # ApiError type with structured JSON responses
 │   ├── handlers.rs      # All HTTP/WebSocket handlers
+│   ├── proxy.rs         # Federation proxy helpers (forward to backends)
 │   ├── web.rs           # Embedded web UI asset serving (rust_embed)
 │   └── ws_methods.rs    # WebSocket JSON-RPC dispatch and param types
 ├── input/
@@ -565,7 +632,8 @@ skills/
     ├── monitor/SKILL.md           # Watching and reacting
     ├── visual-feedback/SKILL.md   # Overlays and panels
     ├── input-capture/SKILL.md     # Keyboard interception
-    └── generative-ui/SKILL.md     # Dynamic terminal experiences
+    ├── generative-ui/SKILL.md     # Dynamic terminal experiences
+    └── cluster-orchestration/SKILL.md # Distributed session management
 
 tests/
 ├── common/

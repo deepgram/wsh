@@ -71,6 +71,15 @@ Per-session endpoints are nested under `/sessions/:name`.
 | `PUT` | `/server/persist` | Set persistence mode (on/off) |
 | `GET` | `/ws/json` | Server-level JSON WebSocket (multi-session) |
 
+### Federation Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/servers` | List all servers in the cluster (includes self) |
+| `POST` | `/servers` | Register a new backend server |
+| `GET` | `/servers/{hostname}` | Get status for a specific server |
+| `DELETE` | `/servers/{hostname}` | Deregister a backend server |
+
 ### Global Endpoints
 
 | Method | Path | Description |
@@ -594,27 +603,36 @@ Returns an array of all active sessions.
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
 | `tag` | string | (none) | Comma-separated tag filter (union/OR semantics) |
+| `server` | string | (none) | Target a specific server by hostname (federation) |
 
 When `tag` is provided, only sessions matching at least one of the specified tags
 are returned.
+
+When `server` is provided, only sessions from that server are returned. When
+omitted, sessions are aggregated from all healthy servers in the cluster (or just
+the local server if federation is not configured). Each session in the response
+includes a `server` field indicating which server it lives on.
 
 **Response:** `200 OK`
 
 ```json
 [
-  {"name": "dev", "pid": 12345, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 1, "tags": ["frontend"]},
-  {"name": "build", "pid": 12346, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 0, "tags": ["build", "ci"]}
+  {"name": "dev", "pid": 12345, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 1, "tags": ["frontend"], "server": "hub-host"},
+  {"name": "build", "pid": 12346, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 0, "tags": ["build", "ci"], "server": "backend-1"}
 ]
 ```
 
 **Example:**
 
 ```bash
-# List all sessions
+# List all sessions (aggregated across cluster)
 curl http://localhost:8080/sessions
 
 # List only sessions tagged "build" or "test"
 curl 'http://localhost:8080/sessions?tag=build,test'
+
+# List sessions on a specific backend
+curl 'http://localhost:8080/sessions?server=backend-1'
 ```
 
 #### Create a Session
@@ -623,6 +641,15 @@ curl 'http://localhost:8080/sessions?tag=build,test'
 POST /sessions
 Content-Type: application/json
 ```
+
+**Query parameters:**
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `server` | string | (none) | Create the session on a specific server by hostname (federation) |
+
+When `server` is provided, the session is created on the specified backend server.
+When omitted, the session is created locally on the hub.
 
 **Request body:**
 
@@ -651,7 +678,7 @@ Content-Type: application/json
 **Response:** `201 Created`
 
 ```json
-{"name": "dev", "pid": 12345, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 0, "tags": ["build", "ci"]}
+{"name": "dev", "pid": 12345, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 0, "tags": ["build", "ci"], "server": "hub-host"}
 ```
 
 **Errors:**
@@ -1052,6 +1079,153 @@ See [alt-screen.md](alt-screen.md) for full alternate screen mode documentation.
 Alternate screen mode lets agents create temporary UI contexts. Overlays and
 panels created in alt mode are isolated from normal-mode elements and are
 automatically cleaned up when exiting alt screen.
+
+## Federation
+
+Federation lets a single wsh server (the **hub**) orchestrate sessions across
+multiple backend wsh servers. The hub proxies session operations to the appropriate
+backend, aggregates session listings, and monitors backend health.
+
+Federation is configured via a TOML config file (see the README for config format)
+or managed at runtime via the `/servers` endpoints.
+
+### The `server` Query Parameter
+
+Most session endpoints accept an optional `?server=<hostname>` query parameter.
+When provided, the operation is routed to the specified backend server. When
+omitted, the operation targets the local server (or aggregates across all servers
+for listing operations).
+
+This applies to: `GET /sessions`, `POST /sessions`, `GET /sessions/:name`,
+`PATCH /sessions/:name`, `DELETE /sessions/:name`, `POST /sessions/:name/input`,
+`GET /sessions/:name/screen`, `GET /sessions/:name/scrollback`,
+`GET /sessions/:name/idle`, and all overlay/panel/input-capture endpoints.
+
+### List Servers
+
+```
+GET /servers
+```
+
+Returns all servers in the cluster, including the hub itself.
+
+**Response:** `200 OK`
+
+```json
+[
+  {
+    "hostname": "hub-host",
+    "address": "local",
+    "health": "healthy",
+    "role": "member",
+    "sessions": 3
+  },
+  {
+    "hostname": "backend-1",
+    "address": "10.0.1.10:8080",
+    "health": "healthy",
+    "role": "member"
+  }
+]
+```
+
+The hub always appears with `"address": "local"` and includes a `sessions` count.
+Backend entries include their network address and current health status.
+
+### Register a Backend Server
+
+```
+POST /servers
+Content-Type: application/json
+```
+
+**Request body:**
+
+```json
+{
+  "address": "10.0.1.10:8080",
+  "token": "optional-auth-token"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `address` | string | yes | Backend address in `host:port` format |
+| `token` | string | no | Authentication token for the backend |
+
+The address must not be a localhost/loopback address (SSRF prevention), must not
+contain a scheme (`http://`), and must include a valid port.
+
+**Response:** `201 Created`
+
+```json
+{
+  "address": "10.0.1.10:8080",
+  "health": "connecting"
+}
+```
+
+The backend starts in `connecting` state and transitions to `healthy` once the
+hub establishes a connection and resolves the backend's hostname.
+
+**Errors:**
+
+| Status | Code | When |
+|--------|------|------|
+| 400 | `invalid_request` | Invalid address format or SSRF violation |
+| 409 | `server_already_registered` | Address already registered |
+
+### Get Server Status
+
+```
+GET /servers/{hostname}
+```
+
+Returns detailed status for a single server.
+
+**Response:** `200 OK`
+
+```json
+{
+  "hostname": "backend-1",
+  "address": "10.0.1.10:8080",
+  "health": "healthy",
+  "role": "member"
+}
+```
+
+**Errors:**
+
+| Status | Code | When |
+|--------|------|------|
+| 404 | `server_not_found` | No server with that hostname |
+
+### Deregister a Backend Server
+
+```
+DELETE /servers/{hostname}
+```
+
+Removes a backend from the cluster and disconnects from it.
+
+**Response:** `204 No Content`
+
+**Errors:**
+
+| Status | Code | When |
+|--------|------|------|
+| 404 | `server_not_found` | No server with that hostname |
+
+### Backend Health States
+
+| State | Description |
+|-------|-------------|
+| `healthy` | Connected and responding normally |
+| `connecting` | Initial connection or reconnection in progress |
+| `unavailable` | Connection lost, not responding |
+
+Only healthy backends participate in session aggregation and proxy operations.
+The hub automatically reconnects to backends that become unavailable.
 
 ## Related Documents
 
