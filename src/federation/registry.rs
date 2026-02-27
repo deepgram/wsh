@@ -243,7 +243,7 @@ impl BackendRegistry {
     /// Add a backend entry. Validates the address (and hostname if present),
     /// then rejects duplicate addresses and hostname collisions.
     pub fn add(&self, entry: BackendEntry) -> Result<(), RegistryError> {
-        // Validate address format and SSRF safety.
+        // Validate address format.
         validate_backend_address(&entry.address)
             .map_err(RegistryError::InvalidAddress)?;
 

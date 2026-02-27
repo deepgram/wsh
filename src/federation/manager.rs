@@ -4,6 +4,7 @@ use crate::config::FederationConfig;
 use crate::federation::auth::resolve_backend_token;
 use crate::federation::connection::BackendConnection;
 use crate::federation::registry::{BackendEntry, BackendHealth, BackendRegistry, BackendRole};
+use uuid::Uuid;
 
 /// Owns the backend registry and all active WebSocket connections.
 ///
@@ -23,13 +24,16 @@ pub struct FederationManager {
 
 impl FederationManager {
     /// Create an empty manager (no backends, no tokens).
+    ///
+    /// Generates a random UUID for self-loop detection. Use `from_config()`
+    /// to share the server's actual UUID with spawned connections.
     pub fn new() -> Self {
         Self {
             registry: BackendRegistry::new(),
             connections: HashMap::new(),
             default_token: None,
             local_token: None,
-            server_id: String::new(),
+            server_id: Uuid::new_v4().to_string(),
         }
     }
 

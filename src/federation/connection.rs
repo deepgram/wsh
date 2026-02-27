@@ -123,9 +123,21 @@ async fn connection_loop(
                             );
                             registry.set_server_id(&address, remote_id);
                             registry.set_health(&address, BackendHealth::Rejected);
+                            // Clean close before returning.
+                            let (mut sink, _) = ws_stream.split();
+                            let _ = sink.send(Message::Close(None)).await;
                             return; // Permanent — no retry.
                         }
                     }
+                }
+
+                // Log if server info fetch failed (self-loop check was skipped).
+                if let Err(ref e) = server_info {
+                    tracing::warn!(
+                        backend = %address,
+                        error = %e,
+                        "failed to fetch /server/info — self-loop detection skipped"
+                    );
                 }
 
                 // Not a self-loop — mark healthy.
@@ -399,5 +411,153 @@ mod tests {
         timeout(Duration::from_secs(5), conn.join())
             .await
             .expect("should shut down within 5s");
+    }
+
+    /// Spawn a mock backend server with both HTTP `/server/info` and WS `/ws/json`.
+    async fn spawn_mock_backend(
+        server_id: &str,
+        hostname: &str,
+    ) -> std::net::SocketAddr {
+        use axum::{extract::WebSocketUpgrade, routing::get, Json};
+
+        let server_id = server_id.to_string();
+        let hostname = hostname.to_string();
+
+        let app = axum::Router::new()
+            .route(
+                "/server/info",
+                get({
+                    let server_id = server_id.clone();
+                    let hostname = hostname.clone();
+                    move || async move {
+                        Json(serde_json::json!({
+                            "hostname": hostname,
+                            "version": "0.1.0",
+                            "server_id": server_id,
+                        }))
+                    }
+                }),
+            )
+            .route(
+                "/ws/json",
+                get(|ws: WebSocketUpgrade| async move {
+                    ws.on_upgrade(|mut socket| async move {
+                        // Keep connection alive until the other side closes.
+                        use axum::extract::ws::Message as AxumMsg;
+                        while let Some(Ok(msg)) = socket.recv().await {
+                            if let AxumMsg::Close(_) = msg {
+                                break;
+                            }
+                        }
+                    })
+                }),
+            );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        addr
+    }
+
+    #[tokio::test]
+    async fn self_loop_detected_and_marked_rejected() {
+        let local_id = "same-uuid-for-self-loop-test";
+        // Spawn a mock backend that returns the SAME server_id as our local.
+        let addr = spawn_mock_backend(local_id, "mock-backend").await;
+        let address = format!("http://{}", addr);
+
+        let registry = BackendRegistry::new();
+        registry
+            .add_unchecked(BackendEntry {
+                address: address.clone(),
+                token: None,
+                hostname: None,
+                health: BackendHealth::Connecting,
+                role: BackendRole::Member,
+                server_id: None,
+            })
+            .unwrap();
+
+        let conn = BackendConnection::spawn(
+            address.clone(),
+            None,
+            registry.clone(),
+            local_id.into(), // Same UUID as the mock backend.
+        );
+
+        // Wait for the connection task to detect the self-loop and mark rejected.
+        timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(entry) = registry.get_by_address(&address) {
+                    if entry.health == BackendHealth::Rejected {
+                        break;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("should become rejected within 5s");
+
+        // Verify the server_id was stored on the entry.
+        let entry = registry.get_by_address(&address).unwrap();
+        assert_eq!(entry.server_id.as_deref(), Some(local_id));
+
+        // The task should have exited (no retry loop).
+        timeout(Duration::from_secs(5), conn.join())
+            .await
+            .expect("connection task should have exited after self-loop detection");
+    }
+
+    #[tokio::test]
+    async fn different_server_id_stays_healthy() {
+        let local_id = "local-uuid-abc";
+        let remote_id = "remote-uuid-xyz";
+        // Spawn a mock backend with a DIFFERENT server_id.
+        let addr = spawn_mock_backend(remote_id, "remote-backend").await;
+        let address = format!("http://{}", addr);
+
+        let registry = BackendRegistry::new();
+        registry
+            .add_unchecked(BackendEntry {
+                address: address.clone(),
+                token: None,
+                hostname: None,
+                health: BackendHealth::Connecting,
+                role: BackendRole::Member,
+                server_id: None,
+            })
+            .unwrap();
+
+        let conn = BackendConnection::spawn(
+            address.clone(),
+            None,
+            registry.clone(),
+            local_id.into(), // Different from mock backend.
+        );
+
+        // Wait for healthy.
+        timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(entry) = registry.get_by_address(&address) {
+                    if entry.health == BackendHealth::Healthy {
+                        break;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("should become healthy within 5s");
+
+        // Verify hostname and server_id were enriched.
+        let entry = registry.get_by_address(&address).unwrap();
+        assert_eq!(entry.hostname.as_deref(), Some("remote-backend"));
+        assert_eq!(entry.server_id.as_deref(), Some(remote_id));
+
+        conn.shutdown();
+        conn.join().await;
     }
 }

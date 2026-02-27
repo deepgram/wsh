@@ -83,6 +83,7 @@ async fn list_servers_includes_self() {
     assert_eq!(self_entry["address"], "local");
     assert_eq!(self_entry["health"], "healthy");
     assert_eq!(self_entry["role"], "member");
+    assert_eq!(self_entry["server_id"], "test-server-id");
     assert!(
         self_entry["sessions"].is_number(),
         "sessions count should be a number"
@@ -191,6 +192,7 @@ async fn get_server_self_returns_details() {
     assert_eq!(body["hostname"], "test-host");
     assert_eq!(body["address"], "local");
     assert_eq!(body["health"], "healthy");
+    assert_eq!(body["server_id"], "test-server-id");
 }
 
 // ── Test 6: GET /servers/{hostname} unknown returns 404 ──────────

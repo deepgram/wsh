@@ -917,4 +917,5 @@ async fn server_info_returns_hostname_and_version() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["hostname"], "test");
     assert!(json["version"].is_string());
+    assert_eq!(json["server_id"], "test-server-id");
 }

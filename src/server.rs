@@ -797,8 +797,14 @@ async fn handle_list_servers<S: AsyncRead + AsyncWrite + Unpin>(
         servers.push(ServerInfoEntry {
             hostname: entry.hostname,
             address: entry.address,
-            health: format!("{:?}", entry.health).to_lowercase(),
-            role: format!("{:?}", entry.role).to_lowercase(),
+            health: serde_json::to_value(entry.health)
+                .ok()
+                .and_then(|v| v.as_str().map(String::from))
+                .unwrap_or_else(|| format!("{:?}", entry.health).to_lowercase()),
+            role: serde_json::to_value(entry.role)
+                .ok()
+                .and_then(|v| v.as_str().map(String::from))
+                .unwrap_or_else(|| format!("{:?}", entry.role).to_lowercase()),
             sessions: None,
             server_id: entry.server_id,
         });
