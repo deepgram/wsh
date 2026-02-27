@@ -302,6 +302,56 @@ server daemon and creates a session named `default`. Use
 `session="default"` for all tool calls. If started with `--name`,
 the session has that name instead.
 
+## Federation (Multi-Server)
+
+When wsh is configured with federated backends, all session tools accept an
+optional `server` parameter to target a specific backend by hostname. When
+omitted, operations target the local server (or aggregate across all servers
+for listings).
+
+### Server Parameter on Session Tools
+
+Add `server="<hostname>"` to any session tool to route it to a specific backend:
+
+    wsh_create_session(name="build", server="prod-1", command="cargo build")
+    wsh_get_screen(session="build", server="prod-1")
+    wsh_list_sessions(server="prod-1")       # list sessions on one backend
+    wsh_list_sessions()                       # aggregate across all servers
+
+Session responses include a `server` field indicating which server owns
+the session. Once a session exists, all operations are automatically routed
+to the correct server.
+
+### Server Management Tools
+
+Use these tools to discover and manage the cluster:
+
+**List all servers:**
+
+    wsh_list_servers()
+
+Returns all servers (hub + backends) with hostname, address, health
+(`healthy`, `connecting`, `unavailable`), and role.
+
+**Add a backend:**
+
+    wsh_add_server(address="http://10.0.1.10:8080")
+    wsh_add_server(address="https://10.0.1.11:8443", token="secret")
+
+Addresses require `http://` or `https://` scheme. The backend starts
+in `connecting` state and transitions to `healthy` once reachable.
+
+**Check a specific server:**
+
+    wsh_server_status(hostname="prod-1")
+
+**Remove a backend:**
+
+    wsh_remove_server(hostname="prod-1")
+
+For detailed federation patterns (cross-server workflows, failure
+handling, distributed quiescence), invoke `wsh:cluster-orchestration`.
+
 ## Specialized Skills
 
 When your task matches one of these patterns, invoke the

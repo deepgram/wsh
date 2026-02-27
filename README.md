@@ -97,7 +97,7 @@ Each instance gets its own socket and lock file under `$XDG_RUNTIME_DIR/wsh/`. T
 
 `wsh` supports federation -- a single hub server orchestrating sessions across multiple backend servers. This lets you distribute terminal sessions across machines while managing everything from one API endpoint.
 
-**Configure via TOML** (`~/.config/wsh/federation.toml`):
+**Configure via TOML** (`~/.config/wsh/config.toml`):
 
 ```toml
 # Optional: override the hub's hostname
@@ -121,26 +121,41 @@ blocklist = ["169.254.0.0/16"]
 allowlist = ["10.0.0.0/8", "192.168.0.0/16"]
 ```
 
-**Or manage at runtime:**
+**Or manage at runtime via CLI or API:**
 
 ```bash
-# Start the hub
-wsh server --bind 127.0.0.1:8080
+# Start the hub with a config file
+wsh server --config ~/.config/wsh/config.toml
 
-# Register backends via API (addresses require http:// or https:// scheme)
+# Or start and add backends at runtime via CLI
+wsh server --bind 127.0.0.1:8080
+wsh servers add http://10.0.1.10:8080
+wsh servers add https://10.0.1.11:8443 --token per-server-token
+
+# List all servers in the cluster
+wsh servers list
+
+# Check a specific server's status
+wsh servers info
+
+# Remove a backend
+wsh servers remove backend-1
+
+# Reload config from file (picks up new backends)
+wsh servers reload
+
+# Create a session on a specific backend
+wsh list --server backend-1
+wsh kill remote-build --server backend-1
+
+# Or manage via HTTP API
 curl -X POST http://localhost:8080/servers \
   -H 'Content-Type: application/json' \
   -d '{"address": "http://10.0.1.10:8080"}'
-
-# List all servers in the cluster
 curl http://localhost:8080/servers
-
-# Create a session on a specific backend
 curl -X POST 'http://localhost:8080/sessions?server=backend-1' \
   -H 'Content-Type: application/json' \
   -d '{"name": "remote-build"}'
-
-# List sessions across all servers
 curl http://localhost:8080/sessions
 ```
 
@@ -283,6 +298,7 @@ Once installed, the skills are available automatically. Claude Code will load th
 | `token` | Print the server's auth token (retrieved via Unix socket) |
 | `persist` | Upgrade a running server to persistent mode |
 | `stop` | Stop the running wsh server |
+| `servers` | Manage federated backend servers |
 | `mcp` | Start an MCP server over stdio (for AI hosts) |
 
 #### `server` Flags
@@ -293,8 +309,13 @@ Once installed, the skills are available automatically. Claude Code will load th
 | `--token` | `WSH_TOKEN` | (auto-generated) | Authentication token |
 | `--socket` | | (derived from `-L`) | Path to the Unix domain socket (overrides `-L`) |
 | `-L`, `--server-name` | `WSH_SERVER_NAME` | `default` | Server instance name (like tmux `-L`) |
+| `--ephemeral` | | | Exit when the last session ends |
 | `--max-sessions` | | (no limit) | Maximum number of concurrent sessions |
+| `--config` | `WSH_CONFIG` | `~/.config/wsh/config.toml` | Path to federation config file (TOML) |
+| `--hostname` | `WSH_HOSTNAME` | (system hostname) | Override system hostname for server identity |
 | `--base-prefix` | `WSH_BASE_PREFIX` | (none) | Base path prefix for all API routes (e.g., `/wsh`) |
+| `--cors-origin` | | (none) | Allowed CORS origins (repeatable) |
+| `--rate-limit` | | (disabled) | Rate limit in requests per second |
 | `--tls-cert` | `WSH_TLS_CERT` | (none) | Path to TLS certificate file (PEM). Requires `--tls-key` |
 | `--tls-key` | `WSH_TLS_KEY` | (none) | Path to TLS private key file (PEM). Requires `--tls-cert` |
 
@@ -313,6 +334,24 @@ Once installed, the skills are available automatically. Claude Code will load th
 |------|---------|---------|-------------|
 | `--socket` | | (derived from `-L`) | Path to the Unix domain socket (overrides `-L`) |
 | `-L`, `--server-name` | `WSH_SERVER_NAME` | `default` | Server instance name |
+
+#### `list`, `kill` Federation Flag
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-s`, `--server` | (local) | Target a specific federated server by hostname |
+
+#### `servers` Subcommands
+
+| Subcommand | Description |
+|------------|-------------|
+| `servers list` | List all servers (local + federated backends) |
+| `servers add <address>` | Add a remote backend server |
+| `servers remove <hostname>` | Remove a backend by hostname |
+| `servers info` | Show local server info (hostname, version) |
+| `servers reload` | Reload federation config from file |
+
+`servers add` accepts an optional `--token <TOKEN>` flag for per-backend authentication.
 
 #### `persist` Flags
 
@@ -392,6 +431,7 @@ When input is captured, local keyboard input is not forwarded to the PTY. Press 
 
 | Method | Path | Description |
 |--------|------|-------------|
+| `GET` | `/server/info` | Server identity (hostname, version) |
 | `GET` | `/servers` | List all servers in the cluster |
 | `POST` | `/servers` | Register a backend server |
 | `GET` | `/servers/{hostname}` | Get server status |
@@ -585,6 +625,7 @@ src/
 │   ├── auth.rs          # Backend token resolution cascade
 │   ├── connection.rs    # Persistent WebSocket connection to backends
 │   ├── manager.rs       # FederationManager (registry + connections)
+│   ├── ip_access.rs     # CIDR-based blocklist/allowlist for SSRF prevention
 │   ├── registry.rs      # BackendRegistry, health tracking, validation
 │   └── sanitize.rs      # Response sanitization for proxied data
 ├── api/
@@ -622,8 +663,10 @@ src/
 
 docs/
 ├── VISION.md            # Project vision and architecture
+├── FUTURE.md            # Deferred design decisions and future features
 └── api/
     ├── README.md        # API reference (served at /docs)
+    ├── alt-screen.md
     ├── authentication.md
     ├── errors.md
     ├── input-capture.md
@@ -650,6 +693,7 @@ web/                             # Browser-based terminal client (Preact + TypeS
 skills/
 └── wsh/
     ├── core/SKILL.md              # API mechanics and primitives
+    ├── core-mcp/SKILL.md          # MCP tool reference (auto-loaded for MCP clients)
     ├── drive-process/SKILL.md     # CLI command interaction
     ├── tui/SKILL.md               # Full-screen TUI operation
     ├── multi-session/SKILL.md     # Parallel session orchestration
@@ -669,6 +713,9 @@ tests/
 ├── e2e_http.rs                 # HTTP end-to-end test
 ├── e2e_input.rs                # Input end-to-end test
 ├── e2e_websocket_input.rs      # WebSocket input end-to-end test
+├── federation_api.rs           # Federation API endpoint tests
+├── federation_e2e.rs           # Federation end-to-end tests
+├── federation_security.rs      # Federation security tests (SSRF, sanitization)
 ├── graceful_shutdown.rs        # Graceful shutdown tests
 ├── input_capture_integration.rs # Input capture integration tests
 ├── interactive_shell.rs        # Interactive shell tests

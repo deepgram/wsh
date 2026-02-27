@@ -75,6 +75,7 @@ Per-session endpoints are nested under `/sessions/:name`.
 
 | Method | Path | Description |
 |--------|------|-------------|
+| `GET` | `/server/info` | Server identity (hostname, version) |
 | `GET` | `/servers` | List all servers in the cluster (includes self) |
 | `POST` | `/servers` | Register a new backend server |
 | `GET` | `/servers/{hostname}` | Get status for a specific server |
@@ -1107,6 +1108,23 @@ This applies to: `GET /sessions`, `POST /sessions`, `GET /sessions/:name`,
 `GET /sessions/:name/screen`, `GET /sessions/:name/scrollback`,
 `GET /sessions/:name/idle`, and all overlay/panel/input-capture endpoints.
 
+### Server Info
+
+```
+GET /server/info
+```
+
+Returns this server's identity.
+
+**Response:** `200 OK`
+
+```json
+{
+  "hostname": "hub-host",
+  "version": "0.1.0"
+}
+```
+
 ### List Servers
 
 ```
@@ -1235,6 +1253,30 @@ Removes a backend from the cluster and disconnects from it.
 
 Only healthy backends participate in session aggregation and proxy operations.
 The hub automatically reconnects to backends that become unavailable.
+
+### Backend Connections
+
+The hub maintains a persistent WebSocket connection to each registered backend.
+These connections serve three purposes:
+
+1. **Health signaling** — Connection state directly maps to health status.
+   When the connection drops, the backend is immediately marked `unavailable`.
+2. **Hostname discovery** — On initial connection, the hub queries `GET /server/info`
+   on the backend to learn its hostname.
+3. **Keepalive** — Ping/pong frames are sent every 30 seconds to detect silent failures.
+
+Reconnection uses exponential backoff (1s initial, 60s maximum). When a backend
+recovers, its sessions reappear in aggregated listings automatically.
+
+### Token Resolution
+
+When connecting to backends, the hub resolves authentication tokens using a cascade:
+
+1. **Per-server token** — Explicit token configured for that specific backend
+2. **Default token** — `default_token` from the config file
+3. **Local server token** — The hub's own `--token` value
+
+If no token is available at any level, the connection proceeds without authentication.
 
 ## Related Documents
 

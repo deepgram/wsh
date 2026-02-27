@@ -49,6 +49,13 @@ change between versions.
 | Status | Code | Message | When |
 |--------|------|---------|------|
 | `409` | `session_name_conflict` | Session name already exists: {name}. | Session name already in use |
+| `409` | `server_already_registered` | Server already registered at this address. | Backend address already registered in federation |
+
+### Federation Errors
+
+| Status | Code | Message | When |
+|--------|------|---------|------|
+| `404` | `server_not_found` | No server with that hostname. | Backend hostname not found in `GET /servers/{hostname}` or `DELETE /servers/{hostname}` |
 
 ### Not Found Errors (Sessions)
 
