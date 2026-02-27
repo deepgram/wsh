@@ -395,11 +395,13 @@ async fn run_server(
 
     // Create the FederationManager: spawns persistent WebSocket connections
     // for each configured backend server.
-    let federation_manager = wsh::federation::manager::FederationManager::from_config(
-        fed_config,
-        token.clone(),
-        fed_default_token.clone(),
-    );
+    let federation_manager = Arc::new(tokio::sync::Mutex::new(
+        wsh::federation::manager::FederationManager::from_config(
+            fed_config,
+            token.clone(),
+            fed_default_token.clone(),
+        ),
+    ));
 
     let persistent = !ephemeral;
     // When --max-sessions is explicitly provided, use that value.
@@ -420,7 +422,8 @@ async fn run_server(
         server_ws_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         mcp_session_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         ticket_store: Arc::new(api::ticket::TicketStore::new()),
-        backends: federation_manager.registry().clone(),
+        backends: federation_manager.lock().await.registry().clone(),
+        federation: federation_manager.clone(),
         hostname,
         federation_config_path: if config_path.exists() { Some(config_path) } else { None },
         local_token: token.clone(),
@@ -640,7 +643,7 @@ async fn run_server(
     }
 
     // 4. Shut down federation backend connections
-    federation_manager.shutdown_all().await;
+    federation_manager.lock().await.shutdown_all().await;
 
     // 5. Drain sessions (detach clients, SIGHUP children, schedule SIGKILL)
     let kill_handle = sessions.drain();

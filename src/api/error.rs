@@ -63,6 +63,12 @@ pub enum ApiError {
     ResourceLimitReached(String),
     /// 403 - WebSocket origin not allowed (CSWSH protection).
     OriginNotAllowed,
+    /// 404 - A specific server hostname was not found in the federation.
+    ServerNotFound(String),
+    /// 409 - A server address is already registered.
+    ServerAlreadyRegistered(String),
+    /// 503 - A backend server is unavailable.
+    ServerUnavailable(String),
     /// 500 - Catch-all internal error.
     InternalError(String),
 }
@@ -97,6 +103,9 @@ impl ApiError {
             ApiError::InvalidSessionName(_) => StatusCode::BAD_REQUEST,
             ApiError::ResourceLimitReached(_) => StatusCode::TOO_MANY_REQUESTS,
             ApiError::OriginNotAllowed => StatusCode::FORBIDDEN,
+            ApiError::ServerNotFound(_) => StatusCode::NOT_FOUND,
+            ApiError::ServerAlreadyRegistered(_) => StatusCode::CONFLICT,
+            ApiError::ServerUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             ApiError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -130,6 +139,9 @@ impl ApiError {
             ApiError::InvalidSessionName(_) => "invalid_session_name",
             ApiError::ResourceLimitReached(_) => "resource_limit_reached",
             ApiError::OriginNotAllowed => "origin_not_allowed",
+            ApiError::ServerNotFound(_) => "server_not_found",
+            ApiError::ServerAlreadyRegistered(_) => "server_already_registered",
+            ApiError::ServerUnavailable(_) => "server_unavailable",
             ApiError::InternalError(_) => "internal_error",
         }
     }
@@ -181,6 +193,15 @@ impl ApiError {
                 format!("Resource limit reached: {}.", detail)
             }
             ApiError::OriginNotAllowed => "WebSocket origin not allowed.".to_string(),
+            ApiError::ServerNotFound(hostname) => {
+                format!("Server not found: {}.", &hostname[..hostname.len().min(128)])
+            }
+            ApiError::ServerAlreadyRegistered(addr) => {
+                format!("Server already registered: {}.", &addr[..addr.len().min(128)])
+            }
+            ApiError::ServerUnavailable(detail) => {
+                format!("Server unavailable: {}.", detail)
+            }
             ApiError::InternalError(detail) => format!("Internal error: {}.", detail),
         }
     }
@@ -620,5 +641,70 @@ mod tests {
         let (_, json) = response_parts(ApiError::InvalidTag("tag must not be empty".into())).await;
         let msg = json["error"]["message"].as_str().unwrap();
         assert_eq!(msg, "Invalid tag: tag must not be empty.");
+    }
+
+    // ── Server federation error tests ──────────────────────────────
+
+    #[tokio::test]
+    async fn server_not_found_status() {
+        let (status, _) = response_parts(ApiError::ServerNotFound("host-1".into())).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn server_not_found_code() {
+        let (_, json) = response_parts(ApiError::ServerNotFound("host-1".into())).await;
+        assert_eq!(json["error"]["code"], "server_not_found");
+    }
+
+    #[tokio::test]
+    async fn server_not_found_includes_hostname() {
+        let (_, json) = response_parts(ApiError::ServerNotFound("prod-1".into())).await;
+        let msg = json["error"]["message"].as_str().unwrap();
+        assert_eq!(msg, "Server not found: prod-1.");
+    }
+
+    #[tokio::test]
+    async fn server_already_registered_status() {
+        let (status, _) =
+            response_parts(ApiError::ServerAlreadyRegistered("10.0.1.10:8080".into())).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn server_already_registered_code() {
+        let (_, json) =
+            response_parts(ApiError::ServerAlreadyRegistered("10.0.1.10:8080".into())).await;
+        assert_eq!(json["error"]["code"], "server_already_registered");
+    }
+
+    #[tokio::test]
+    async fn server_already_registered_includes_address() {
+        let (_, json) =
+            response_parts(ApiError::ServerAlreadyRegistered("10.0.1.10:8080".into())).await;
+        let msg = json["error"]["message"].as_str().unwrap();
+        assert_eq!(msg, "Server already registered: 10.0.1.10:8080.");
+    }
+
+    #[tokio::test]
+    async fn server_unavailable_status() {
+        let (status, _) =
+            response_parts(ApiError::ServerUnavailable("connection refused".into())).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn server_unavailable_code() {
+        let (_, json) =
+            response_parts(ApiError::ServerUnavailable("connection refused".into())).await;
+        assert_eq!(json["error"]["code"], "server_unavailable");
+    }
+
+    #[tokio::test]
+    async fn server_unavailable_includes_detail() {
+        let (_, json) =
+            response_parts(ApiError::ServerUnavailable("connection refused".into())).await;
+        let msg = json["error"]["message"].as_str().unwrap();
+        assert_eq!(msg, "Server unavailable: connection refused.");
     }
 }

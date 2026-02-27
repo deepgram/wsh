@@ -3120,3 +3120,93 @@ pub(super) async fn server_persist_set(
         (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "missing or invalid 'persistent' boolean field"})))
     }
 }
+
+// ── Federation: /servers endpoints ─────────────────────────────────
+
+/// GET /servers -- list all servers (always includes self).
+pub(super) async fn list_servers(
+    State(state): State<AppState>,
+) -> Json<serde_json::Value> {
+    let mut servers = vec![serde_json::json!({
+        "hostname": state.hostname,
+        "address": "local",
+        "health": "healthy",
+        "role": "member",
+        "sessions": state.sessions.len(),
+    })];
+
+    for backend in state.backends.list() {
+        servers.push(serde_json::json!({
+            "hostname": backend.hostname,
+            "address": backend.address,
+            "health": backend.health,
+            "role": backend.role,
+        }));
+    }
+
+    Json(serde_json::json!(servers))
+}
+
+/// POST /servers -- register a new backend server.
+pub(super) async fn add_server(
+    State(state): State<AppState>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let address = body["address"]
+        .as_str()
+        .ok_or_else(|| ApiError::InvalidRequest("missing 'address' field".into()))?;
+    let token = body["token"].as_str();
+
+    let mut manager = state.federation.lock().await;
+    manager.add_backend(address, token)
+        .map_err(|e| match e {
+            crate::federation::registry::RegistryError::DuplicateAddress(addr) => {
+                ApiError::ServerAlreadyRegistered(addr)
+            }
+            other => ApiError::InternalError(other.to_string()),
+        })?;
+
+    Ok((StatusCode::CREATED, Json(serde_json::json!({
+        "address": address,
+        "health": "connecting",
+    }))))
+}
+
+/// DELETE /servers/{hostname} -- deregister a backend server.
+pub(super) async fn remove_server(
+    State(state): State<AppState>,
+    Path(hostname): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let mut manager = state.federation.lock().await;
+    if !manager.remove_backend_by_hostname(&hostname) {
+        return Err(ApiError::ServerNotFound(hostname));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// GET /servers/{hostname} -- detailed status for one server.
+pub(super) async fn get_server(
+    State(state): State<AppState>,
+    Path(hostname): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Check if it's self
+    if hostname == state.hostname {
+        return Ok(Json(serde_json::json!({
+            "hostname": state.hostname,
+            "address": "local",
+            "health": "healthy",
+            "role": "member",
+            "sessions": state.sessions.len(),
+        })));
+    }
+
+    let backend = state.backends.get_by_hostname(&hostname)
+        .ok_or_else(|| ApiError::ServerNotFound(hostname))?;
+
+    Ok(Json(serde_json::json!({
+        "hostname": backend.hostname,
+        "address": backend.address,
+        "health": backend.health,
+        "role": backend.role,
+    })))
+}

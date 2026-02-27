@@ -129,8 +129,8 @@ impl FederationManager {
     }
 
     /// Shut down all backend connections.
-    pub async fn shutdown_all(self) {
-        for (_, conn) in self.connections {
+    pub async fn shutdown_all(&mut self) {
+        for (_, conn) in self.connections.drain() {
             conn.shutdown();
         }
         // Note: we don't join here to avoid blocking shutdown.
@@ -166,7 +166,7 @@ mod tests {
                 },
             ],
         };
-        let manager = FederationManager::from_config(config, None, None);
+        let mut manager = FederationManager::from_config(config, None, None);
         let backends = manager.registry().list();
         assert_eq!(backends.len(), 2);
         // All start in Connecting state

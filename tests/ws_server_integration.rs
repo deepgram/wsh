@@ -20,6 +20,7 @@ fn create_empty_state() -> api::AppState {
             mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()),
             backends: wsh::federation::registry::BackendRegistry::new(),
+            federation: std::sync::Arc::new(tokio::sync::Mutex::new(wsh::federation::manager::FederationManager::new())),
             hostname: "test".to_string(),
             federation_config_path: None,
             local_token: None,

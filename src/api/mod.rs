@@ -74,6 +74,8 @@ pub struct AppState {
     pub ticket_store: Arc<ticket::TicketStore>,
     /// Registry of known backend servers for federation.
     pub backends: crate::federation::registry::BackendRegistry,
+    /// FederationManager for server add/remove operations (behind Mutex for mutation).
+    pub federation: Arc<tokio::sync::Mutex<crate::federation::manager::FederationManager>>,
     /// This server's hostname (for federation identity).
     pub hostname: String,
     /// Path to the federation config file (if any).
@@ -200,6 +202,8 @@ pub fn router(state: AppState, config: RouterConfig) -> Router {
         .route("/idle", get(idle_any))
         .route("/server/info", get(server_info))
         .route("/server/persist", get(server_persist_get).put(server_persist_set))
+        .route("/servers", get(list_servers).post(add_server))
+        .route("/servers/{hostname}", get(get_server).delete(remove_server))
         .route("/ws/json", get(ws_json_server));
 
     let ticket_store = state.ticket_store.clone();
@@ -367,6 +371,7 @@ mod tests {
             mcp_session_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             ticket_store: Arc::new(ticket::TicketStore::new()),
             backends: crate::federation::registry::BackendRegistry::new(),
+            federation: std::sync::Arc::new(tokio::sync::Mutex::new(crate::federation::manager::FederationManager::new())),
             hostname: "test".to_string(),
             federation_config_path: None,
             local_token: None,
@@ -955,6 +960,7 @@ mod tests {
             mcp_session_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             ticket_store: Arc::new(ticket::TicketStore::new()),
             backends: crate::federation::registry::BackendRegistry::new(),
+            federation: std::sync::Arc::new(tokio::sync::Mutex::new(crate::federation::manager::FederationManager::new())),
             hostname: "test".to_string(),
             federation_config_path: None,
             local_token: None,
@@ -1460,6 +1466,7 @@ mod tests {
                 mcp_session_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 ticket_store: Arc::new(ticket::TicketStore::new()),
                 backends: crate::federation::registry::BackendRegistry::new(),
+                federation: std::sync::Arc::new(tokio::sync::Mutex::new(crate::federation::manager::FederationManager::new())),
                 hostname: "test".to_string(),
                 federation_config_path: None,
                 local_token: None,
@@ -1524,6 +1531,7 @@ mod tests {
                 mcp_session_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 ticket_store: Arc::new(ticket::TicketStore::new()),
                 backends: crate::federation::registry::BackendRegistry::new(),
+                federation: std::sync::Arc::new(tokio::sync::Mutex::new(crate::federation::manager::FederationManager::new())),
                 hostname: "test".to_string(),
                 federation_config_path: None,
                 local_token: None,
@@ -1585,6 +1593,7 @@ mod tests {
                 mcp_session_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 ticket_store: Arc::new(ticket::TicketStore::new()),
                 backends: crate::federation::registry::BackendRegistry::new(),
+                federation: std::sync::Arc::new(tokio::sync::Mutex::new(crate::federation::manager::FederationManager::new())),
                 hostname: "test".to_string(),
                 federation_config_path: None,
                 local_token: None,
