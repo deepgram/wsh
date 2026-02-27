@@ -83,6 +83,20 @@ impl std::fmt::Display for ConfigError {
 
 impl std::error::Error for ConfigError {}
 
+/// Resolve the server's hostname. Uses config override if present,
+/// otherwise falls back to system hostname.
+pub fn resolve_hostname(server_config: Option<&ServerIdentityConfig>) -> String {
+    if let Some(config) = server_config {
+        if let Some(hostname) = &config.hostname {
+            return hostname.clone();
+        }
+    }
+    hostname::get()
+        .ok()
+        .and_then(|h| h.into_string().ok())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -134,6 +148,26 @@ mod tests {
         let toml = "";
         let config: FederationConfig = toml::from_str(toml).unwrap();
         assert!(config.servers.is_empty());
+    }
+
+    #[test]
+    fn resolve_hostname_from_config() {
+        let config = FederationConfig {
+            server: Some(ServerIdentityConfig {
+                hostname: Some("my-custom-host".into()),
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_hostname(config.server.as_ref()),
+            "my-custom-host"
+        );
+    }
+
+    #[test]
+    fn resolve_hostname_falls_back_to_system() {
+        let hostname = resolve_hostname(None);
+        assert!(!hostname.is_empty());
     }
 
     #[test]
