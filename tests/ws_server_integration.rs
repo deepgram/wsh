@@ -21,6 +21,7 @@ fn create_empty_state() -> api::AppState {
             ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()),
             backends: wsh::federation::registry::BackendRegistry::new(),
             federation: std::sync::Arc::new(tokio::sync::Mutex::new(wsh::federation::manager::FederationManager::new())),
+            ip_access: None,
             hostname: "test".to_string(),
             federation_config_path: None,
             local_token: None,

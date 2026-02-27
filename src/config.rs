@@ -10,6 +10,29 @@ pub struct FederationConfig {
     /// Backend servers to connect to.
     #[serde(default)]
     pub servers: Vec<BackendServerConfig>,
+    /// IP access control for backend connections (SSRF mitigation).
+    pub ip_access: Option<IpAccessConfig>,
+}
+
+/// IP access control configuration for SSRF mitigation.
+///
+/// ```toml
+/// [ip_access]
+/// blocklist = ["169.254.0.0/16", "::1/128"]
+/// allowlist = ["10.0.0.0/8", "192.168.0.0/16"]
+/// ```
+///
+/// Evaluation order: blocklist denies first, then allowlist permits.
+/// If an allowlist is configured, only listed CIDRs are allowed.
+/// If no allowlist is configured, all non-blocked IPs are allowed.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IpAccessConfig {
+    /// CIDR ranges to always deny (checked first).
+    #[serde(default)]
+    pub blocklist: Vec<String>,
+    /// CIDR ranges to allow. If non-empty, only these ranges are permitted.
+    #[serde(default)]
+    pub allowlist: Vec<String>,
 }
 
 /// Server identity section.
@@ -22,7 +45,7 @@ pub struct ServerIdentityConfig {
 /// A single backend server entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackendServerConfig {
-    /// Network address (host:port).
+    /// Full URL with scheme (e.g. `http://10.0.1.10:8080` or `https://proxy.example.com/wsh-node-1`).
     pub address: String,
     /// Per-server auth token.
     pub token: Option<String>,
@@ -147,11 +170,11 @@ mod tests {
     fn parse_minimal_config() {
         let toml = r#"
             [[servers]]
-            address = "10.0.1.10:8080"
+            address = "http://10.0.1.10:8080"
         "#;
         let config: FederationConfig = toml::from_str(toml).unwrap();
         assert_eq!(config.servers.len(), 1);
-        assert_eq!(config.servers[0].address, "10.0.1.10:8080");
+        assert_eq!(config.servers[0].address, "http://10.0.1.10:8080");
         assert!(config.servers[0].token.is_none());
         assert!(config.server.is_none());
         assert!(config.default_token.is_none());
@@ -166,10 +189,10 @@ mod tests {
             hostname = "orchestrator-1"
 
             [[servers]]
-            address = "10.0.1.10:8080"
+            address = "http://10.0.1.10:8080"
 
             [[servers]]
-            address = "10.0.1.11:8080"
+            address = "http://10.0.1.11:8080"
             token = "per-server-token"
         "#;
         let config: FederationConfig = toml::from_str(toml).unwrap();
@@ -283,18 +306,43 @@ mod tests {
             default_token: Some("tok".into()),
             servers: vec![
                 BackendServerConfig {
-                    address: "10.0.1.10:8080".into(),
+                    address: "http://10.0.1.10:8080".into(),
                     token: None,
                 },
                 BackendServerConfig {
-                    address: "10.0.1.11:8080".into(),
+                    address: "http://10.0.1.11:8080".into(),
                     token: Some("specific".into()),
                 },
             ],
+            ip_access: None,
         };
         let serialized = toml::to_string_pretty(&config).unwrap();
         let reparsed: FederationConfig = toml::from_str(&serialized).unwrap();
         assert_eq!(reparsed.servers.len(), 2);
         assert_eq!(reparsed.default_token.as_deref(), Some("tok"));
+    }
+
+    #[test]
+    fn parse_ip_access_config() {
+        let toml = r#"
+            [ip_access]
+            blocklist = ["169.254.0.0/16", "::1/128"]
+            allowlist = ["10.0.0.0/8", "192.168.0.0/16"]
+        "#;
+        let config: FederationConfig = toml::from_str(toml).unwrap();
+        let ip = config.ip_access.unwrap();
+        assert_eq!(ip.blocklist.len(), 2);
+        assert_eq!(ip.allowlist.len(), 2);
+        assert_eq!(ip.blocklist[0], "169.254.0.0/16");
+    }
+
+    #[test]
+    fn parse_config_without_ip_access() {
+        let toml = r#"
+            [[servers]]
+            address = "http://10.0.1.10:8080"
+        "#;
+        let config: FederationConfig = toml::from_str(toml).unwrap();
+        assert!(config.ip_access.is_none());
     }
 }

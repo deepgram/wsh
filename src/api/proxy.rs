@@ -30,7 +30,7 @@ pub(super) async fn proxy_get(
     backend: &BackendEntry,
     path: &str,
 ) -> Result<(StatusCode, serde_json::Value), ApiError> {
-    let url = format!("http://{}{}", backend.address, path);
+    let url = backend.url_for(path);
     let client = build_client()?;
 
     let mut req = client.get(&url);
@@ -61,7 +61,7 @@ pub(super) async fn proxy_post(
     path: &str,
     body: serde_json::Value,
 ) -> Result<(StatusCode, serde_json::Value), ApiError> {
-    let url = format!("http://{}{}", backend.address, path);
+    let url = backend.url_for(path);
     let client = build_client()?;
 
     let mut req = client.post(&url).json(&body);
@@ -92,7 +92,7 @@ pub(super) async fn proxy_post_bytes(
     path: &str,
     body: bytes::Bytes,
 ) -> Result<StatusCode, ApiError> {
-    let url = format!("http://{}{}", backend.address, path);
+    let url = backend.url_for(path);
     let client = build_client()?;
 
     let mut req = client.post(&url).body(body);
@@ -115,7 +115,7 @@ pub(super) async fn proxy_delete(
     backend: &BackendEntry,
     path: &str,
 ) -> Result<StatusCode, ApiError> {
-    let url = format!("http://{}{}", backend.address, path);
+    let url = backend.url_for(path);
     let client = build_client()?;
 
     let mut req = client.delete(&url);
@@ -139,7 +139,7 @@ pub(super) async fn proxy_patch(
     path: &str,
     body: serde_json::Value,
 ) -> Result<(StatusCode, serde_json::Value), ApiError> {
-    let url = format!("http://{}{}", backend.address, path);
+    let url = backend.url_for(path);
     let client = build_client()?;
 
     let mut req = client.patch(&url).json(&body);

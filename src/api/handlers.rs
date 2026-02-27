@@ -3359,6 +3359,13 @@ pub(super) async fn add_server(
     crate::federation::registry::validate_backend_address(address)
         .map_err(|detail| ApiError::InvalidRequest(detail))?;
 
+    // Check resolved IPs against IP access control (if configured).
+    if let Some(ref ip_access) = state.ip_access {
+        crate::federation::ip_access::check_backend_url(ip_access, address)
+            .await
+            .map_err(|detail| ApiError::InvalidRequest(detail))?;
+    }
+
     let mut manager = state.federation.lock().await;
     manager.add_backend(address, token)
         .map_err(|e| match e {

@@ -73,7 +73,7 @@ async fn proxy_get(
     backend: &BackendEntry,
     path: &str,
 ) -> Result<CallToolResult, ErrorData> {
-    let url = format!("http://{}{}", backend.address, path);
+    let url = backend.url_for(path);
     let client = build_proxy_client()?;
 
     let mut req = client.get(&url);
@@ -93,7 +93,7 @@ async fn proxy_get_long(
     backend: &BackendEntry,
     path: &str,
 ) -> Result<CallToolResult, ErrorData> {
-    let url = format!("http://{}{}", backend.address, path);
+    let url = backend.url_for(path);
     let client = build_idle_proxy_client()?;
 
     let mut req = client.get(&url);
@@ -114,7 +114,7 @@ async fn proxy_post_json(
     path: &str,
     body: serde_json::Value,
 ) -> Result<CallToolResult, ErrorData> {
-    let url = format!("http://{}{}", backend.address, path);
+    let url = backend.url_for(path);
     let client = build_proxy_client()?;
 
     let mut req = client.post(&url).json(&body);
@@ -135,7 +135,7 @@ async fn proxy_post_bytes(
     path: &str,
     body: Bytes,
 ) -> Result<CallToolResult, ErrorData> {
-    let url = format!("http://{}{}", backend.address, path);
+    let url = backend.url_for(path);
     let client = build_proxy_client()?;
 
     let mut req = client.post(&url).body(body);
@@ -168,7 +168,7 @@ async fn proxy_delete(
     backend: &BackendEntry,
     path: &str,
 ) -> Result<CallToolResult, ErrorData> {
-    let url = format!("http://{}{}", backend.address, path);
+    let url = backend.url_for(path);
     let client = build_proxy_client()?;
 
     let mut req = client.delete(&url);
@@ -201,7 +201,7 @@ async fn proxy_patch_json(
     path: &str,
     body: serde_json::Value,
 ) -> Result<CallToolResult, ErrorData> {
-    let url = format!("http://{}{}", backend.address, path);
+    let url = backend.url_for(path);
     let client = build_proxy_client()?;
 
     let mut req = client.patch(&url).json(&body);
@@ -1836,6 +1836,13 @@ impl WshMcpServer {
         &self,
         Parameters(params): Parameters<AddServerParams>,
     ) -> Result<CallToolResult, ErrorData> {
+        // Check resolved IPs against IP access control (if configured).
+        if let Some(ref ip_access) = self.state.ip_access {
+            crate::federation::ip_access::check_backend_url(ip_access, &params.address)
+                .await
+                .map_err(|detail| ErrorData::invalid_params(detail, None))?;
+        }
+
         let mut federation = self.state.federation.lock().await;
         federation
             .add_backend(&params.address, params.token.as_deref())

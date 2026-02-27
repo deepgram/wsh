@@ -63,6 +63,7 @@ pub struct FederationState {
     pub config_path: Option<PathBuf>,
     pub local_token: Option<String>,
     pub default_backend_token: Option<String>,
+    pub ip_access: Option<Arc<crate::federation::ip_access::IpAccessControl>>,
 }
 
 impl Default for FederationState {
@@ -73,6 +74,7 @@ impl Default for FederationState {
             config_path: None,
             local_token: None,
             default_backend_token: None,
+            ip_access: None,
         }
     }
 }
@@ -226,7 +228,7 @@ const PROXY_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Make a GET request to a remote backend and return the response body.
 async fn proxy_get(backend: &BackendEntry, path: &str) -> Result<serde_json::Value, String> {
-    let url = format!("http://{}{}", backend.address, path);
+    let url = backend.url_for(path);
     let client = reqwest::Client::builder()
         .connect_timeout(PROXY_CONNECT_TIMEOUT)
         .timeout(PROXY_REQUEST_TIMEOUT)
@@ -247,7 +249,7 @@ async fn proxy_post(
     path: &str,
     body: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let url = format!("http://{}{}", backend.address, path);
+    let url = backend.url_for(path);
     let client = reqwest::Client::builder()
         .connect_timeout(PROXY_CONNECT_TIMEOUT)
         .timeout(PROXY_REQUEST_TIMEOUT)
@@ -264,7 +266,7 @@ async fn proxy_post(
 
 /// Make a DELETE request to a remote backend and return the response body.
 async fn proxy_delete(backend: &BackendEntry, path: &str) -> Result<serde_json::Value, String> {
-    let url = format!("http://{}{}", backend.address, path);
+    let url = backend.url_for(path);
     let client = reqwest::Client::builder()
         .connect_timeout(PROXY_CONNECT_TIMEOUT)
         .timeout(PROXY_REQUEST_TIMEOUT)
@@ -811,6 +813,20 @@ async fn handle_add_server<S: AsyncRead + AsyncWrite + Unpin>(
     msg: AddServerMsg,
     fed_state: &FederationState,
 ) -> io::Result<()> {
+    // Check resolved IPs against IP access control (if configured).
+    if let Some(ref ip_access) = fed_state.ip_access {
+        if let Err(detail) = crate::federation::ip_access::check_backend_url(ip_access, &msg.address).await {
+            let err = ErrorMsg {
+                code: "add_server_failed".to_string(),
+                message: detail,
+            };
+            let err_frame = Frame::control(FrameType::Error, &err)
+                .map_err(io::Error::other)?;
+            err_frame.write_to(stream).await?;
+            return Ok(());
+        }
+    }
+
     let mut manager = fed_state.federation.lock().await;
     match manager.add_backend(&msg.address, msg.token.as_deref()) {
         Ok(()) => {

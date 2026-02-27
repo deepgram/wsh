@@ -39,6 +39,7 @@ fn create_test_app_with_registry() -> (axum::Router, wsh::federation::registry::
         ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()),
         backends: backends.clone(),
         federation: std::sync::Arc::new(tokio::sync::Mutex::new(federation_manager)),
+        ip_access: None,
         hostname: "test-host".to_string(),
         federation_config_path: None,
         local_token: None,
@@ -98,7 +99,7 @@ async fn add_server_returns_created() {
     let resp = client
         .post(format!("http://{addr}/servers"))
         .json(&serde_json::json!({
-            "address": "10.0.1.99:8080",
+            "address": "http://10.0.1.99:8080",
             "token": "my-token"
         }))
         .send()
@@ -107,7 +108,7 @@ async fn add_server_returns_created() {
     assert_eq!(resp.status(), 201);
 
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["address"], "10.0.1.99:8080");
+    assert_eq!(body["address"], "http://10.0.1.99:8080");
     assert_eq!(body["health"], "connecting");
 
     // GET /servers should now return 2 entries (self + new)
@@ -132,7 +133,7 @@ async fn add_duplicate_server_returns_conflict() {
     // First add
     let resp = client
         .post(format!("http://{addr}/servers"))
-        .json(&serde_json::json!({ "address": "10.0.1.50:8080" }))
+        .json(&serde_json::json!({ "address": "http://10.0.1.50:8080" }))
         .send()
         .await
         .unwrap();
@@ -141,7 +142,7 @@ async fn add_duplicate_server_returns_conflict() {
     // Duplicate add
     let resp = client
         .post(format!("http://{addr}/servers"))
-        .json(&serde_json::json!({ "address": "10.0.1.50:8080" }))
+        .json(&serde_json::json!({ "address": "http://10.0.1.50:8080" }))
         .send()
         .await
         .unwrap();
@@ -580,7 +581,7 @@ async fn server_param_with_unavailable_backend_returns_503() {
     // Directly add a backend with a known hostname and Unavailable health.
     backends
         .add(BackendEntry {
-            address: "10.99.99.99:9999".into(),
+            address: "http://10.99.99.99:9999".into(),
             token: None,
             hostname: Some("unavailable-host".into()),
             health: BackendHealth::Unavailable,

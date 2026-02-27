@@ -151,11 +151,20 @@ exchange flow internally -- it acquires a short-lived ticket via
 
 ## Security Notes
 
-- wsh provides **authentication**, not **encryption**. For remote access over
-  untrusted networks, use SSH tunneling, Tailscale/WireGuard, or a reverse
-  proxy with TLS.
+- wsh supports **native TLS** via `--tls-cert` and `--tls-key` (or
+  `WSH_TLS_CERT` / `WSH_TLS_KEY` environment variables). When configured, the
+  server listens on HTTPS/WSS. A warning is logged when binding to a
+  non-loopback address without TLS.
+- For environments where TLS termination happens elsewhere, compose wsh with
+  your existing stack: SSH tunneling, Tailscale/WireGuard, or a reverse proxy.
+  The `--base-prefix` flag (e.g., `--base-prefix /wsh`) nests all API routes
+  under a path prefix for clean reverse-proxy deployment; `/health` stays at
+  root for load balancer probes.
 - Tokens are compared in constant time to prevent timing attacks.
 - `/health`, `/docs`, and `/openapi.yaml` are always unauthenticated so
   monitoring tools and documentation browsers work without credentials.
 - When binding to a non-localhost address, rate limiting (100 req/s per IP)
   is applied by default. Override with `--rate-limit`.
+- For federated deployments, the `[ip_access]` section in the federation
+  config provides CIDR-based `blocklist` and `allowlist` arrays, checked
+  when backends are registered via the API, MCP, or Unix socket.

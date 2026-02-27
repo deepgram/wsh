@@ -1,4 +1,4 @@
-use crate::federation::registry::{BackendHealth, BackendRegistry};
+use crate::federation::registry::{BackendEntry, BackendHealth, BackendRegistry};
 use futures::{SinkExt, StreamExt};
 use std::time::Duration;
 use tokio_tungstenite::tungstenite::Message;
@@ -55,7 +55,25 @@ async fn connection_loop(
             return;
         }
 
-        let ws_url = format!("ws://{}/ws/json", address);
+        // Build WS URL from the backend's base address.
+        let backend_stub = BackendEntry {
+            address: address.clone(),
+            token: token.clone(),
+            hostname: None,
+            health: BackendHealth::Connecting,
+            role: crate::federation::registry::BackendRole::Member,
+        };
+        let ws_url = backend_stub.ws_url_for("/ws/json");
+
+        // Extract host authority for the Host header.
+        let host_authority = address
+            .strip_prefix("https://")
+            .or_else(|| address.strip_prefix("http://"))
+            .unwrap_or(&address)
+            .split('/')
+            .next()
+            .unwrap_or(&address)
+            .to_string();
 
         // Build connection request with optional auth header.
         let connect_result = if let Some(ref tok) = token {
@@ -70,7 +88,7 @@ async fn connection_loop(
                     "Sec-WebSocket-Key",
                     tokio_tungstenite::tungstenite::handshake::client::generate_key(),
                 )
-                .header("Host", &address)
+                .header("Host", &host_authority)
                 .body(())
                 .unwrap();
             tokio_tungstenite::connect_async(req).await
@@ -155,7 +173,14 @@ async fn fetch_hostname(
     address: &str,
     token: Option<&str>,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let url = format!("http://{}/server/info", address);
+    let backend_stub = BackendEntry {
+        address: address.to_string(),
+        token: None,
+        hostname: None,
+        health: BackendHealth::Connecting,
+        role: crate::federation::registry::BackendRole::Member,
+    };
+    let url = backend_stub.url_for("/server/info");
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(10))

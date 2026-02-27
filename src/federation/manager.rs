@@ -161,14 +161,15 @@ mod tests {
             default_token: Some("default-tok".into()),
             servers: vec![
                 BackendServerConfig {
-                    address: "10.0.1.10:8080".into(),
+                    address: "http://10.0.1.10:8080".into(),
                     token: None,
                 },
                 BackendServerConfig {
-                    address: "10.0.1.11:8080".into(),
+                    address: "http://10.0.1.11:8080".into(),
                     token: Some("specific".into()),
                 },
             ],
+            ip_access: None,
         };
         let mut manager = FederationManager::from_config(config, None, None);
         let backends = manager.registry().list();
@@ -184,24 +185,24 @@ mod tests {
     #[tokio::test]
     async fn manager_add_and_remove() {
         let mut manager = FederationManager::new();
-        manager.add_backend("10.0.99.1:9999", Some("tok")).unwrap();
+        manager.add_backend("http://10.0.99.1:9999", Some("tok")).unwrap();
         assert_eq!(manager.registry().list().len(), 1);
-        assert!(manager.remove_backend_by_address("10.0.99.1:9999"));
+        assert!(manager.remove_backend_by_address("http://10.0.99.1:9999"));
         assert!(manager.registry().list().is_empty());
     }
 
     #[tokio::test]
     async fn manager_rejects_duplicate() {
         let mut manager = FederationManager::new();
-        manager.add_backend("10.0.99.1:9999", None).unwrap();
-        assert!(manager.add_backend("10.0.99.1:9999", None).is_err());
+        manager.add_backend("http://10.0.99.1:9999", None).unwrap();
+        assert!(manager.add_backend("http://10.0.99.1:9999", None).is_err());
         manager.shutdown_all().await;
     }
 
     #[tokio::test]
     async fn manager_rejects_localhost_address() {
         let mut manager = FederationManager::new();
-        let result = manager.add_backend("127.0.0.1:9999", None);
+        let result = manager.add_backend("http://127.0.0.1:9999", None);
         assert!(result.is_err());
     }
 }

@@ -250,9 +250,17 @@ wsh --bind 0.0.0.0:8080      # all interfaces, requires auth
 
 When binding to any non-localhost address, `wsh` requires a bearer token for all API and WebSocket connections. On startup, `wsh` either generates a random token or accepts one via `--token` or environment variable.
 
-**Layer 3: Your Network, Your Responsibility**
+**Layer 3: Native TLS**
 
-`wsh` provides authentication, not encryption. For remote access, compose it with your existing security stack: SSH tunneling, Tailscale/WireGuard, or a reverse proxy with TLS.
+`wsh` supports native TLS via `--tls-cert` and `--tls-key`. When configured, the server listens on HTTPS/WSS. A warning is logged when binding to a non-loopback address without TLS. For environments where TLS termination happens elsewhere, compose `wsh` with your existing stack: SSH tunneling, Tailscale/WireGuard, or a reverse proxy with TLS.
+
+**Layer 4: IP Access Control (Federation)**
+
+For federated deployments, the `[ip_access]` section in the federation config provides CIDR-based blocklists and allowlists. These are checked when backends are registered via the API, MCP, or Unix socket. There is no hardcoded blocklist -- the user owns the threat model entirely.
+
+**Layer 5: Base Prefix for Reverse Proxies**
+
+The `--base-prefix` flag nests all API routes under a path prefix (e.g., `/wsh`), enabling clean reverse-proxy deployment. The `/health` endpoint remains at the root for load balancer probes.
 
 ---
 

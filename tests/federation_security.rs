@@ -25,6 +25,7 @@ fn create_test_app_with_registry() -> (axum::Router, wsh::federation::registry::
         ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()),
         backends: backends.clone(),
         federation: std::sync::Arc::new(tokio::sync::Mutex::new(federation_manager)),
+        ip_access: None,
         hostname: "test-host".to_string(),
         federation_config_path: None,
         local_token: None,
@@ -60,7 +61,7 @@ async fn ssrf_reject_ipv4_loopback() {
 
     let resp = client
         .post(format!("http://{addr}/servers"))
-        .json(&serde_json::json!({"address": "127.0.0.1:8080"}))
+        .json(&serde_json::json!({"address": "http://127.0.0.1:8080"}))
         .send()
         .await
         .unwrap();
@@ -78,7 +79,7 @@ async fn ssrf_reject_localhost() {
 
     let resp = client
         .post(format!("http://{addr}/servers"))
-        .json(&serde_json::json!({"address": "localhost:8080"}))
+        .json(&serde_json::json!({"address": "http://localhost:8080"}))
         .send()
         .await
         .unwrap();
@@ -96,7 +97,7 @@ async fn ssrf_reject_ipv6_loopback() {
 
     let resp = client
         .post(format!("http://{addr}/servers"))
-        .json(&serde_json::json!({"address": "[::1]:8080"}))
+        .json(&serde_json::json!({"address": "http://[::1]:8080"}))
         .send()
         .await
         .unwrap();
@@ -114,7 +115,7 @@ async fn ssrf_reject_unspecified() {
 
     let resp = client
         .post(format!("http://{addr}/servers"))
-        .json(&serde_json::json!({"address": "0.0.0.0:8080"}))
+        .json(&serde_json::json!({"address": "http://0.0.0.0:8080"}))
         .send()
         .await
         .unwrap();
@@ -129,54 +130,54 @@ async fn ssrf_reject_unspecified() {
 // ══════════════════════════════════════════════════════════════════
 
 #[tokio::test]
-async fn reject_address_with_scheme() {
+async fn reject_address_bad_scheme() {
     let app = create_test_app();
     let addr = start_test_server(app).await;
     let client = reqwest::Client::new();
 
     let resp = client
         .post(format!("http://{addr}/servers"))
-        .json(&serde_json::json!({"address": "http://example.com:8080"}))
+        .json(&serde_json::json!({"address": "ftp://example.com:8080"}))
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 400, "address with scheme should be rejected");
+    assert_eq!(resp.status(), 400, "address with non-http scheme should be rejected");
 
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["error"]["code"], "invalid_request");
 }
 
 #[tokio::test]
-async fn reject_address_missing_port() {
+async fn reject_address_schemeless() {
     let app = create_test_app();
     let addr = start_test_server(app).await;
     let client = reqwest::Client::new();
 
     let resp = client
         .post(format!("http://{addr}/servers"))
-        .json(&serde_json::json!({"address": "example.com"}))
+        .json(&serde_json::json!({"address": "example.com:8080"}))
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 400, "address without port should be rejected");
+    assert_eq!(resp.status(), 400, "schemeless address should be rejected");
 
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["error"]["code"], "invalid_request");
 }
 
 #[tokio::test]
-async fn reject_address_empty_host() {
+async fn reject_address_empty_authority() {
     let app = create_test_app();
     let addr = start_test_server(app).await;
     let client = reqwest::Client::new();
 
     let resp = client
         .post(format!("http://{addr}/servers"))
-        .json(&serde_json::json!({"address": ":8080"}))
+        .json(&serde_json::json!({"address": "http://"}))
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 400, "address with empty host should be rejected");
+    assert_eq!(resp.status(), 400, "address with empty authority should be rejected");
 
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["error"]["code"], "invalid_request");
@@ -195,7 +196,7 @@ async fn token_not_leaked_in_list_servers() {
     // Add a backend directly to the registry with a secret token.
     backends
         .add(BackendEntry {
-            address: "10.0.1.50:8080".into(),
+            address: "http://10.0.1.50:8080".into(),
             token: Some("super-secret-token-12345".into()),
             hostname: Some("backend-1".into()),
             health: BackendHealth::Healthy,
@@ -228,7 +229,7 @@ async fn token_not_leaked_in_get_server() {
     // Add a backend directly to the registry with a secret token.
     backends
         .add(BackendEntry {
-            address: "10.0.1.51:8080".into(),
+            address: "http://10.0.1.51:8080".into(),
             token: Some("another-secret-token".into()),
             hostname: Some("backend-2".into()),
             health: BackendHealth::Healthy,
@@ -263,7 +264,7 @@ async fn registry_rejects_invalid_hostname_on_add() {
     // an invalid hostname.
     let registry = wsh::federation::registry::BackendRegistry::new();
     let result = registry.add(BackendEntry {
-        address: "10.0.1.60:8080".into(),
+        address: "http://10.0.1.60:8080".into(),
         token: None,
         hostname: Some("-invalid".into()),
         health: BackendHealth::Connecting,
@@ -276,7 +277,7 @@ async fn registry_rejects_invalid_hostname_on_add() {
 async fn registry_rejects_hostname_with_spaces() {
     let registry = wsh::federation::registry::BackendRegistry::new();
     let result = registry.add(BackendEntry {
-        address: "10.0.1.61:8080".into(),
+        address: "http://10.0.1.61:8080".into(),
         token: None,
         hostname: Some("invalid host".into()),
         health: BackendHealth::Connecting,
@@ -294,7 +295,7 @@ async fn valid_address_accepted() {
     // A valid non-loopback address should be accepted.
     let resp = client
         .post(format!("http://{addr}/servers"))
-        .json(&serde_json::json!({"address": "10.0.1.100:8080"}))
+        .json(&serde_json::json!({"address": "http://10.0.1.100:8080"}))
         .send()
         .await
         .unwrap();

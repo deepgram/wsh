@@ -115,6 +115,19 @@ enum Commands {
         /// Override system hostname for server identity
         #[arg(long, env = "WSH_HOSTNAME")]
         hostname: Option<String>,
+
+        /// Base path prefix for all API routes (e.g. "/wsh" for reverse-proxy deployment).
+        /// Must start with "/" and must NOT end with "/".
+        #[arg(long, env = "WSH_BASE_PREFIX")]
+        base_prefix: Option<String>,
+
+        /// Path to TLS certificate file (PEM format). Requires --tls-key.
+        #[arg(long, env = "WSH_TLS_CERT", requires = "tls_key")]
+        tls_cert: Option<PathBuf>,
+
+        /// Path to TLS private key file (PEM format). Requires --tls-cert.
+        #[arg(long, env = "WSH_TLS_KEY", requires = "tls_cert")]
+        tls_key: Option<PathBuf>,
     },
 
     /// Attach to an existing session on the server
@@ -227,7 +240,7 @@ enum ServersAction {
 
     /// Add a remote backend server
     Add {
-        /// Address of the backend (e.g., "10.0.1.10:8080")
+        /// URL of the backend (e.g., "http://10.0.1.10:8080" or "https://proxy.example.com/wsh")
         address: String,
 
         /// Authentication token for the backend
@@ -324,8 +337,8 @@ async fn main() -> Result<(), WshError> {
     let server_name = cli.server_name.clone();
 
     match cli.command {
-        Some(Commands::Server { bind, token, ephemeral, max_sessions, cors_origins, rate_limit, config, hostname }) => {
-            run_server(bind, token, socket, ephemeral, max_sessions, server_name, cors_origins, rate_limit, config, hostname).await
+        Some(Commands::Server { bind, token, ephemeral, max_sessions, cors_origins, rate_limit, config, hostname, base_prefix, tls_cert, tls_key }) => {
+            run_server(bind, token, socket, ephemeral, max_sessions, server_name, cors_origins, rate_limit, config, hostname, base_prefix, tls_cert, tls_key).await
         }
         Some(Commands::Attach { name, scrollback, alt_screen }) => {
             run_attach(name, scrollback, socket, alt_screen, server_name).await
@@ -399,8 +412,42 @@ async fn run_server(
     rate_limit: Option<u32>,
     config_arg: Option<PathBuf>,
     hostname_arg: Option<String>,
+    base_prefix: Option<String>,
+    tls_cert: Option<PathBuf>,
+    tls_key: Option<PathBuf>,
 ) -> Result<(), WshError> {
     tracing::info!(instance = %server_name, "wsh server starting");
+
+    // Validate base_prefix format.
+    if let Some(ref prefix) = base_prefix {
+        if !prefix.starts_with('/') {
+            return Err(WshError::Config("--base-prefix must start with '/'".into()));
+        }
+        if prefix.ends_with('/') && prefix.len() > 1 {
+            return Err(WshError::Config("--base-prefix must not end with '/'".into()));
+        }
+    }
+
+    // Load TLS configuration if cert + key are provided.
+    let tls_acceptor = match (tls_cert, tls_key) {
+        (Some(cert), Some(key)) => {
+            let acceptor = wsh::tls::load_tls_config(&cert, &key)
+                .map_err(|e| WshError::Config(e.to_string()))?;
+            tracing::info!(cert = %cert.display(), key = %key.display(), "TLS configured");
+            Some(acceptor)
+        }
+        _ => {
+            if !is_loopback(&bind) {
+                tracing::warn!(
+                    "Binding to non-loopback address {} without TLS. \
+                     Bearer tokens and terminal data will be transmitted in cleartext. \
+                     Consider using --tls-cert and --tls-key, or a TLS-terminating reverse proxy.",
+                    bind
+                );
+            }
+            None
+        }
+    };
 
     let token = resolve_token(&bind, &token)?;
     if token.is_some() {
@@ -447,6 +494,31 @@ async fn run_server(
     // Save default_token before fed_config is consumed by FederationManager.
     let fed_default_token = fed_config.default_token.clone();
 
+    // Build IP access control from config (if configured).
+    let ip_access_control = fed_config.ip_access.as_ref().map(|cfg| {
+        let ctrl = wsh::federation::ip_access::IpAccessControl::from_config(cfg);
+        if ctrl.is_unconfigured() {
+            tracing::debug!("IP access control config present but empty");
+        } else {
+            tracing::info!("IP access control configured");
+        }
+        if !is_loopback(&bind) && ctrl.is_unconfigured() {
+            tracing::warn!(
+                "Binding to non-loopback address without IP access control. \
+                 Consider configuring [ip_access] blocklist/allowlist in the config file."
+            );
+        }
+        Arc::new(ctrl)
+    });
+
+    // Warn if non-loopback with no ip_access config at all.
+    if !is_loopback(&bind) && ip_access_control.is_none() {
+        tracing::warn!(
+            "Binding to non-loopback address without IP access control. \
+             Consider adding [ip_access] to your federation config file."
+        );
+    }
+
     // Create the FederationManager: spawns persistent WebSocket connections
     // for each configured backend server.
     let federation_manager = Arc::new(tokio::sync::Mutex::new(
@@ -478,6 +550,7 @@ async fn run_server(
         ticket_store: Arc::new(api::ticket::TicketStore::new()),
         backends: federation_manager.lock().await.registry().clone(),
         federation: federation_manager.clone(),
+        ip_access: ip_access_control,
         hostname,
         federation_config_path: if config_path.exists() { Some(config_path) } else { None },
         local_token: token.clone(),
@@ -499,8 +572,12 @@ async fn run_server(
         config_path: state.federation_config_path.clone(),
         local_token: state.local_token.clone(),
         default_backend_token: state.default_backend_token.clone(),
+        ip_access: state.ip_access.clone(),
     };
-    let app = api::router(state, api::RouterConfig { token, bind, cors_origins, rate_limit });
+    if let Some(ref prefix) = base_prefix {
+        tracing::info!(prefix = %prefix, "base path prefix configured");
+    }
+    let app = api::router(state, api::RouterConfig { token, bind, cors_origins, rate_limit, base_prefix: base_prefix.clone() });
 
     // Cancellation token for HTTP server shutdown (supports multiple listeners)
     let http_cancel = tokio_util::sync::CancellationToken::new();
@@ -508,7 +585,8 @@ async fn run_server(
     let listener = tokio::net::TcpListener::bind(bind)
         .await
         .map_err(WshError::Io)?;
-    tracing::info!(addr = %bind, "HTTP/WS server listening");
+    let scheme = if tls_acceptor.is_some() { "HTTPS/WSS" } else { "HTTP/WS" };
+    tracing::info!(addr = %bind, scheme, "server listening");
 
     // When binding to IPv4 loopback, also listen on IPv6 loopback.
     // Browsers (especially Firefox) may resolve "localhost" to ::1 and
@@ -520,7 +598,7 @@ async fn run_server(
         );
         match tokio::net::TcpListener::bind(v6_addr).await {
             Ok(l) => {
-                tracing::info!(addr = %v6_addr, "HTTP/WS server listening (IPv6 loopback)");
+                tracing::info!(addr = %v6_addr, scheme, "server listening (IPv6 loopback)");
                 Some(l)
             }
             Err(e) => {
@@ -532,28 +610,51 @@ async fn run_server(
         None
     };
 
-    let app_v6 = app.clone();
-    let cancel4 = http_cancel.clone();
-    let http_handle = tokio::spawn(async move {
-        if let Err(e) = axum::serve(listener, app)
-            .with_graceful_shutdown(cancel4.cancelled_owned())
-            .await
-        {
-            tracing::error!(?e, "HTTP server error");
-        }
-    });
+    // Spawn the HTTP(S) server task(s).
+    //
+    // Without TLS: use axum::serve() (simple, well-tested).
+    // With TLS: manual accept loop → TlsAcceptor → hyper-util serve_connection.
+    // axum::serve()'s `Listener` trait is sealed and only accepts TcpListener,
+    // so TLS requires the manual approach.
+    let http_handle;
+    let http6_handle;
 
-    let http6_handle = ipv6_listener.map(|l| {
-        let cancel6 = http_cancel.clone();
-        tokio::spawn(async move {
-            if let Err(e) = axum::serve(l, app_v6)
-                .with_graceful_shutdown(cancel6.cancelled_owned())
+    if let Some(acceptor) = tls_acceptor {
+        let cancel4 = http_cancel.clone();
+        let app4 = app.clone();
+        let acceptor4 = acceptor.clone();
+        http_handle = tokio::spawn(serve_tls(listener, acceptor4, app4, cancel4));
+
+        http6_handle = ipv6_listener.map(|l| {
+            let cancel6 = http_cancel.clone();
+            let app6 = app.clone();
+            let acceptor6 = acceptor.clone();
+            tokio::spawn(serve_tls(l, acceptor6, app6, cancel6))
+        });
+    } else {
+        let cancel4 = http_cancel.clone();
+        let app_v6 = app.clone();
+        http_handle = tokio::spawn(async move {
+            if let Err(e) = axum::serve(listener, app)
+                .with_graceful_shutdown(cancel4.cancelled_owned())
                 .await
             {
-                tracing::error!(?e, "HTTP server error (IPv6)");
+                tracing::error!(?e, "HTTP server error");
             }
-        })
-    });
+        });
+
+        http6_handle = ipv6_listener.map(|l| {
+            let cancel6 = http_cancel.clone();
+            tokio::spawn(async move {
+                if let Err(e) = axum::serve(l, app_v6)
+                    .with_graceful_shutdown(cancel6.cancelled_owned())
+                    .await
+                {
+                    tracing::error!(?e, "HTTP server error (IPv6)");
+                }
+            })
+        });
+    };
 
     // Acquire instance lock (flock) before binding the socket.
     // The lock file is held for the server's lifetime and released on exit.
@@ -741,6 +842,68 @@ async fn run_server(
 
     tracing::info!("wsh server exiting");
     Ok(())
+}
+
+/// Manual TLS accept loop for HTTPS serving.
+///
+/// `axum::serve()` only accepts `TcpListener` (sealed `Listener` trait), so
+/// TLS requires a manual loop: accept TCP → TLS handshake → hyper-util
+/// `serve_connection`. Each connection is handled in its own spawned task.
+async fn serve_tls(
+    listener: tokio::net::TcpListener,
+    acceptor: tokio_rustls::TlsAcceptor,
+    app: axum::Router,
+    cancel: tokio_util::sync::CancellationToken,
+) {
+    use hyper_util::rt::TokioIo;
+
+    loop {
+        let (tcp_stream, peer_addr) = tokio::select! {
+            _ = cancel.cancelled() => break,
+            result = listener.accept() => {
+                match result {
+                    Ok(conn) => conn,
+                    Err(e) => {
+                        tracing::debug!(?e, "TCP accept error");
+                        continue;
+                    }
+                }
+            }
+        };
+
+        let acceptor = acceptor.clone();
+        let app = app.clone();
+        let cancel = cancel.clone();
+
+        tokio::spawn(async move {
+            let tls_stream = match acceptor.accept(tcp_stream).await {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::debug!(?e, %peer_addr, "TLS handshake failed");
+                    return;
+                }
+            };
+
+            let io = TokioIo::new(tls_stream);
+            let service = hyper_util::service::TowerToHyperService::new(app);
+            let builder = hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new());
+            let conn = builder.serve_connection_with_upgrades(io, service);
+            tokio::pin!(conn);
+
+            tokio::select! {
+                result = &mut conn => {
+                    if let Err(e) = result {
+                        tracing::debug!(?e, %peer_addr, "connection error");
+                    }
+                }
+                _ = cancel.cancelled() => {
+                    // Graceful shutdown: signal the connection and give it time to finish
+                    conn.as_mut().graceful_shutdown();
+                    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), conn).await;
+                }
+            }
+        });
+    }
 }
 
 // ── MCP stdio mode ─────────────────────────────────────────────────
@@ -1092,6 +1255,10 @@ fn spawn_server_daemon(
     if let Some(t) = token {
         cmd.arg("--token").arg(t);
     }
+
+    // Note: --base-prefix and --tls-* flags are NOT forwarded to the spawned
+    // daemon because auto-spawned servers are ephemeral local instances that
+    // only serve via Unix socket. TLS and prefix are for explicit server mode.
 
     // Detach from parent: redirect stdio, start new session
     cmd.stdin(std::process::Stdio::null())

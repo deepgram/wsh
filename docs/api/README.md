@@ -8,7 +8,7 @@ subcommand auto-spawns an ephemeral server daemon if one isn't already running,
 creates a session, and attaches to it as a thin terminal client. Running
 `wsh server` starts the daemon explicitly (persistent by default).
 
-**Base URL:** `http://localhost:8080` (default)
+**Base URL:** `http://localhost:8080` (default). When `--base-prefix` is set (e.g., `/wsh`), all API routes are nested under that prefix (e.g., `/wsh/sessions`). The `/health` endpoint always remains at the root for load balancer probes. When `--tls-cert` and `--tls-key` are configured, the server uses HTTPS/WSS.
 
 ## Endpoints at a Glance
 
@@ -493,7 +493,7 @@ wsh provides several subcommands for interacting with a running server:
 #### `wsh server`
 
 ```bash
-wsh server [--bind <addr>] [--token <token>] [--socket <path>]
+wsh server [--bind <addr>] [--token <token>] [--socket <path>] [--base-prefix <prefix>] [--tls-cert <path> --tls-key <path>]
 ```
 
 | Flag | Env Var | Default | Description |
@@ -502,6 +502,9 @@ wsh server [--bind <addr>] [--token <token>] [--socket <path>]
 | `--token` | `WSH_TOKEN` | (auto-generated if non-localhost) | Authentication token |
 | `--socket` | | (derived from `-L`) | Path to the Unix domain socket (overrides `-L`) |
 | `-L`, `--server-name` | `WSH_SERVER_NAME` | `default` | Server instance name (like tmux `-L`) |
+| `--base-prefix` | `WSH_BASE_PREFIX` | (none) | Base path prefix for all API routes (e.g., `/wsh`). Must start with `/` and not end with `/`. `/health` remains at root for load balancer probes |
+| `--tls-cert` | `WSH_TLS_CERT` | (none) | Path to TLS certificate file (PEM format). Requires `--tls-key` |
+| `--tls-key` | `WSH_TLS_KEY` | (none) | Path to TLS private key file (PEM format). Requires `--tls-cert` |
 
 The server starts both an HTTP/WS listener and a Unix domain socket listener.
 The HTTP/WS API serves session management, per-session endpoints, and the
@@ -1087,7 +1090,10 @@ multiple backend wsh servers. The hub proxies session operations to the appropri
 backend, aggregates session listings, and monitors backend health.
 
 Federation is configured via a TOML config file (see the README for config format)
-or managed at runtime via the `/servers` endpoints.
+or managed at runtime via the `/servers` endpoints. Backend addresses require an
+`http://` or `https://` scheme and may include a path prefix. An optional
+`[ip_access]` section in the config provides CIDR-based blocklist/allowlist
+filtering when backends are registered.
 
 ### The `server` Query Parameter
 
@@ -1122,7 +1128,7 @@ Returns all servers in the cluster, including the hub itself.
   },
   {
     "hostname": "backend-1",
-    "address": "10.0.1.10:8080",
+    "address": "http://10.0.1.10:8080",
     "health": "healthy",
     "role": "member"
   }
@@ -1143,24 +1149,27 @@ Content-Type: application/json
 
 ```json
 {
-  "address": "10.0.1.10:8080",
+  "address": "http://10.0.1.10:8080",
   "token": "optional-auth-token"
 }
 ```
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `address` | string | yes | Backend address in `host:port` format |
+| `address` | string | yes | Full URL with `http://` or `https://` scheme. May include a path prefix (e.g., `https://proxy.example.com/wsh-node-1`) |
 | `token` | string | no | Authentication token for the backend |
 
-The address must not be a localhost/loopback address (SSRF prevention), must not
-contain a scheme (`http://`), and must include a valid port.
+The address must include an `http://` or `https://` scheme, must not be a
+localhost/loopback address (SSRF prevention), and must have a valid host.
+If an `[ip_access]` section is configured in the federation config, the
+resolved IP is checked against the blocklist and allowlist before the
+backend is registered.
 
 **Response:** `201 Created`
 
 ```json
 {
-  "address": "10.0.1.10:8080",
+  "address": "http://10.0.1.10:8080",
   "health": "connecting"
 }
 ```
@@ -1188,7 +1197,7 @@ Returns detailed status for a single server.
 ```json
 {
   "hostname": "backend-1",
-  "address": "10.0.1.10:8080",
+  "address": "http://10.0.1.10:8080",
   "health": "healthy",
   "role": "member"
 }

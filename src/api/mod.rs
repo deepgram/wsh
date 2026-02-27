@@ -77,6 +77,8 @@ pub struct AppState {
     pub backends: crate::federation::registry::BackendRegistry,
     /// FederationManager for server add/remove operations (behind Mutex for mutation).
     pub federation: Arc<tokio::sync::Mutex<crate::federation::manager::FederationManager>>,
+    /// IP access control for federation SSRF mitigation (None = unconfigured).
+    pub ip_access: Option<Arc<crate::federation::ip_access::IpAccessControl>>,
     /// This server's hostname (for federation identity).
     pub hostname: String,
     /// Path to the federation config file (if any).
@@ -105,6 +107,10 @@ pub struct RouterConfig {
     pub bind: SocketAddr,
     pub cors_origins: Vec<String>,
     pub rate_limit: Option<u32>,
+    /// Optional base path prefix (e.g. "/wsh") for reverse-proxy deployment.
+    /// When set, all API routes are nested under this prefix.
+    /// `/health` is also kept at the root for load balancer probes.
+    pub base_prefix: Option<String>,
 }
 
 impl Default for RouterConfig {
@@ -114,6 +120,7 @@ impl Default for RouterConfig {
             bind: "127.0.0.1:8080".parse().unwrap(),
             cors_origins: vec![],
             rate_limit: None,
+            base_prefix: None,
         }
     }
 }
@@ -296,7 +303,7 @@ pub fn router(state: AppState, config: RouterConfig) -> Router {
         ));
 
     // Conditionally apply CORS if origins are configured.
-    if config.cors_origins.is_empty() {
+    let router = if config.cors_origins.is_empty() {
         router
     } else {
         let origins: Vec<HeaderValue> = config.cors_origins.iter()
@@ -309,6 +316,17 @@ pub fn router(state: AppState, config: RouterConfig) -> Router {
                                Method::PATCH, Method::DELETE, Method::OPTIONS])
                 .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
         )
+    };
+
+    // Optionally nest all routes under a base path prefix (for reverse-proxy deployment).
+    // /health is duplicated at root so load balancers can probe without the prefix.
+    match config.base_prefix {
+        Some(prefix) => {
+            Router::new()
+                .route("/health", get(health))
+                .nest(&prefix, router)
+        }
+        None => router,
     }
 }
 
@@ -373,6 +391,7 @@ mod tests {
             ticket_store: Arc::new(ticket::TicketStore::new()),
             backends: crate::federation::registry::BackendRegistry::new(),
             federation: std::sync::Arc::new(tokio::sync::Mutex::new(crate::federation::manager::FederationManager::new())),
+            ip_access: None,
             hostname: "test".to_string(),
             federation_config_path: None,
             local_token: None,
@@ -962,6 +981,7 @@ mod tests {
             ticket_store: Arc::new(ticket::TicketStore::new()),
             backends: crate::federation::registry::BackendRegistry::new(),
             federation: std::sync::Arc::new(tokio::sync::Mutex::new(crate::federation::manager::FederationManager::new())),
+            ip_access: None,
             hostname: "test".to_string(),
             federation_config_path: None,
             local_token: None,
@@ -1468,6 +1488,7 @@ mod tests {
                 ticket_store: Arc::new(ticket::TicketStore::new()),
                 backends: crate::federation::registry::BackendRegistry::new(),
                 federation: std::sync::Arc::new(tokio::sync::Mutex::new(crate::federation::manager::FederationManager::new())),
+                ip_access: None,
                 hostname: "test".to_string(),
                 federation_config_path: None,
                 local_token: None,
@@ -1533,6 +1554,7 @@ mod tests {
                 ticket_store: Arc::new(ticket::TicketStore::new()),
                 backends: crate::federation::registry::BackendRegistry::new(),
                 federation: std::sync::Arc::new(tokio::sync::Mutex::new(crate::federation::manager::FederationManager::new())),
+                ip_access: None,
                 hostname: "test".to_string(),
                 federation_config_path: None,
                 local_token: None,
@@ -1595,6 +1617,7 @@ mod tests {
                 ticket_store: Arc::new(ticket::TicketStore::new()),
                 backends: crate::federation::registry::BackendRegistry::new(),
                 federation: std::sync::Arc::new(tokio::sync::Mutex::new(crate::federation::manager::FederationManager::new())),
+                ip_access: None,
                 hostname: "test".to_string(),
                 federation_config_path: None,
                 local_token: None,
@@ -2534,5 +2557,72 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let tags = json["tags"].as_array().unwrap();
         assert!(tags.is_empty());
+    }
+
+    // ── Base prefix tests ──────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_base_prefix_routes_work() {
+        let (state, _input_rx, _name) = create_test_state();
+        let app = router(state, RouterConfig {
+            base_prefix: Some("/wsh".to_string()),
+            ..RouterConfig::default()
+        });
+
+        // Prefixed route should work
+        let response = app
+            .oneshot(Request::builder().uri("/wsh/health").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_base_prefix_root_health_still_works() {
+        let (state, _input_rx, _name) = create_test_state();
+        let app = router(state, RouterConfig {
+            base_prefix: Some("/wsh".to_string()),
+            ..RouterConfig::default()
+        });
+
+        // Root /health should still work for load balancers
+        let response = app
+            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_base_prefix_unprefixed_api_404() {
+        let (state, _input_rx, _name) = create_test_state();
+        let app = router(state, RouterConfig {
+            base_prefix: Some("/wsh".to_string()),
+            ..RouterConfig::default()
+        });
+
+        // Unprefixed API route should 404
+        let response = app
+            .oneshot(Request::builder().uri("/sessions").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_ne!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_base_prefix_session_routes_work() {
+        let (state, _input_rx, _name) = create_test_state();
+        let app = router(state, RouterConfig {
+            base_prefix: Some("/wsh".to_string()),
+            ..RouterConfig::default()
+        });
+
+        // The route should be found (not 404). The actual status may be 200 or
+        // 503 depending on the test parser state, but we just verify routing.
+        let response = app
+            .oneshot(Request::builder().uri("/wsh/sessions/test/screen").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_ne!(response.status(), StatusCode::NOT_FOUND, "prefixed session route should be found");
     }
 }

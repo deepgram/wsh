@@ -107,13 +107,18 @@ hostname = "orchestrator"
 # Default auth token for backends
 default_token = "shared-secret"
 
-# Backend servers
+# Backend servers (addresses require http:// or https:// scheme)
 [[servers]]
-address = "10.0.1.10:8080"
+address = "http://10.0.1.10:8080"
 
 [[servers]]
-address = "10.0.1.11:8080"
+address = "https://10.0.1.11:8443"
 token = "per-server-token"
+
+# Optional: IP access control for backend registration (SSRF mitigation)
+[ip_access]
+blocklist = ["169.254.0.0/16"]
+allowlist = ["10.0.0.0/8", "192.168.0.0/16"]
 ```
 
 **Or manage at runtime:**
@@ -122,10 +127,10 @@ token = "per-server-token"
 # Start the hub
 wsh server --bind 127.0.0.1:8080
 
-# Register backends via API
+# Register backends via API (addresses require http:// or https:// scheme)
 curl -X POST http://localhost:8080/servers \
   -H 'Content-Type: application/json' \
-  -d '{"address": "10.0.1.10:8080"}'
+  -d '{"address": "http://10.0.1.10:8080"}'
 
 # List all servers in the cluster
 curl http://localhost:8080/servers
@@ -172,14 +177,20 @@ This ships inside the `wsh` binary. No separate install, no configuration, no de
 # Bind to all interfaces (token auto-generated, printed to stderr)
 wsh server --bind 0.0.0.0:8080
 
+# With native TLS (HTTPS/WSS)
+wsh server --bind 0.0.0.0:8443 --tls-cert cert.pem --tls-key key.pem
+
+# Behind a reverse proxy with a base prefix
+wsh server --bind 127.0.0.1:8080 --base-prefix /wsh
+
 # Get the token (paste it into the browser when prompted)
 wsh token
 
 # Open from any device on the network
-# http://<your-ip>:8080
+# http://<your-ip>:8080  (or https:// with TLS)
 ```
 
-For access over the internet, put it behind an SSH tunnel, Tailscale, or a reverse proxy with TLS. `wsh` provides authentication; your network provides encryption.
+For access over the internet, either use native TLS (`--tls-cert` / `--tls-key`) or put `wsh` behind an SSH tunnel, Tailscale, or a reverse proxy with TLS termination.
 
 ## The Agent Loop
 
@@ -283,6 +294,9 @@ Once installed, the skills are available automatically. Claude Code will load th
 | `--socket` | | (derived from `-L`) | Path to the Unix domain socket (overrides `-L`) |
 | `-L`, `--server-name` | `WSH_SERVER_NAME` | `default` | Server instance name (like tmux `-L`) |
 | `--max-sessions` | | (no limit) | Maximum number of concurrent sessions |
+| `--base-prefix` | `WSH_BASE_PREFIX` | (none) | Base path prefix for all API routes (e.g., `/wsh`) |
+| `--tls-cert` | `WSH_TLS_CERT` | (none) | Path to TLS certificate file (PEM). Requires `--tls-key` |
+| `--tls-key` | `WSH_TLS_KEY` | (none) | Path to TLS private key file (PEM). Requires `--tls-cert` |
 
 #### `attach` Flags
 
@@ -467,7 +481,7 @@ curl -X POST http://localhost:8080/sessions/dev/detach
 wsh persist
 ```
 
-## Authentication
+## Authentication & TLS
 
 When binding to localhost (default), no authentication is required. When
 binding to a non-loopback address, bearer token auth is required:
@@ -489,6 +503,17 @@ Authenticate via header or query parameter:
 curl -H "Authorization: Bearer my-secret" http://host:8080/sessions/default/screen
 curl 'http://host:8080/sessions/default/screen?token=my-secret'
 ```
+
+### Native TLS
+
+Enable HTTPS/WSS with `--tls-cert` and `--tls-key`:
+
+```bash
+wsh server --bind 0.0.0.0:8443 --tls-cert cert.pem --tls-key key.pem
+```
+
+When binding to a non-loopback address without TLS, a warning is logged
+recommending either native TLS or a TLS-terminating reverse proxy.
 
 See [docs/api/authentication.md](docs/api/authentication.md) for details.
 

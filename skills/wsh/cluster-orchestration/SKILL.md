@@ -82,9 +82,12 @@ The hub always appears as "local" with health "healthy".
 
 ### Adding a Backend
 
-Register a new backend server with the hub:
+Register a new backend server with the hub. Backend addresses
+require a scheme (`http://` or `https://`) and may include a path
+prefix for reverse-proxy deployments:
 
-    add server at address 10.0.1.10:8080
+    add server at address http://10.0.1.10:8080
+    add server at address https://proxy.example.com/wsh-node-1
 
 The hub immediately begins connecting to the backend. It starts
 in "connecting" state and transitions to "healthy" once the
@@ -92,7 +95,7 @@ connection is established and the backend's hostname is resolved.
 
 If the backend requires authentication, provide a token:
 
-    add server at address 10.0.1.10:8080 with token "secret"
+    add server at address http://10.0.1.10:8080 with token "secret"
 
 ### Checking a Specific Server
 
@@ -358,6 +361,14 @@ remove a backend.
 Backends may require authentication tokens. Ensure tokens are
 configured correctly when adding backends. Without proper
 authentication, the hub won't be able to connect.
+
+### IP Access Control
+
+When the hub has an `[ip_access]` section in its federation config,
+backend addresses are checked against the blocklist and allowlist
+at registration time. Backends whose resolved IPs fall outside the
+allowed ranges will be rejected. There is no hardcoded blocklist --
+the operator owns the threat model.
 
 ### Hostname Uniqueness
 

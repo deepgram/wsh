@@ -1,6 +1,5 @@
 use parking_lot::RwLock;
 use serde::Serialize;
-use std::net::IpAddr;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -19,12 +18,41 @@ pub enum BackendRole {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct BackendEntry {
+    /// Full base URL including scheme and optional path prefix.
+    /// Examples: `http://10.0.1.10:8080`, `https://proxy.example.com/wsh-node-1`
     pub address: String,
     #[serde(skip_serializing)]
     pub token: Option<String>,
     pub hostname: Option<String>,
     pub health: BackendHealth,
     pub role: BackendRole,
+}
+
+impl BackendEntry {
+    /// Build an HTTP(S) URL for the given API path.
+    ///
+    /// Joins the base address with the path, handling trailing slash normalization.
+    /// Example: `https://proxy.example.com/wsh` + `/sessions` = `https://proxy.example.com/wsh/sessions`
+    pub fn url_for(&self, path: &str) -> String {
+        let base = self.address.trim_end_matches('/');
+        format!("{}{}", base, path)
+    }
+
+    /// Build a WebSocket URL for the given API path.
+    ///
+    /// Converts `http://` → `ws://` and `https://` → `wss://`.
+    pub fn ws_url_for(&self, path: &str) -> String {
+        let base = self.address.trim_end_matches('/');
+        let ws_base = if base.starts_with("https://") {
+            format!("wss://{}", &base["https://".len()..])
+        } else if base.starts_with("http://") {
+            format!("ws://{}", &base["http://".len()..])
+        } else {
+            // Shouldn't happen after validation, but be defensive
+            format!("ws://{}", base)
+        };
+        format!("{}{}", ws_base, path)
+    }
 }
 
 #[derive(Debug)]
@@ -99,48 +127,86 @@ pub fn validate_hostname(hostname: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Validate a backend address in `host:port` format.
+/// Validate a backend address as a full URL with explicit scheme.
 ///
-/// - Must NOT contain a scheme (e.g. `http://`, `file://`).
-/// - Must be in `host:port` format with a valid u16 port.
+/// - Must have `http://` or `https://` scheme.
+/// - Must have a non-empty host.
+/// - Must have a valid port (unless implied by scheme: 80/443).
+/// - May include a path prefix (e.g. `/wsh-node-1`).
 /// - Must NOT be a localhost/loopback address (SSRF prevention).
 /// - Must NOT be `0.0.0.0`.
+///
+/// If a schemeless `host:port` is provided, the error message suggests the fix.
 pub fn validate_backend_address(address: &str) -> Result<(), String> {
-    // Reject schemes.
-    if address.contains("://") {
-        return Err("address must not contain a scheme (e.g. 'http://')".into());
+    // Detect schemeless host:port and give a helpful error.
+    if !address.contains("://") {
+        return Err(format!(
+            "backend address must include a scheme (http:// or https://). \
+             Did you mean 'http://{}'?",
+            address,
+        ));
     }
 
-    // Split host:port. Handle IPv6 bracket notation like [::1]:8080.
-    let (host, port_str) = if address.starts_with('[') {
-        // IPv6 bracket notation: [host]:port
-        let bracket_end = address
+    // Must be http:// or https://
+    let (scheme, rest) = if let Some(rest) = address.strip_prefix("https://") {
+        ("https", rest)
+    } else if let Some(rest) = address.strip_prefix("http://") {
+        ("http", rest)
+    } else {
+        return Err("backend address must use http:// or https:// scheme".into());
+    };
+
+    if rest.is_empty() {
+        return Err("backend address has empty authority".into());
+    }
+
+    // Split off path component (if any). The authority is everything before the first '/'.
+    let (authority, _path) = match rest.find('/') {
+        Some(pos) => (&rest[..pos], &rest[pos..]),
+        None => (rest, ""),
+    };
+
+    if authority.is_empty() {
+        return Err("backend address has empty authority".into());
+    }
+
+    // Parse host:port from authority. Handle IPv6 bracket notation.
+    let (host, port_str) = if authority.starts_with('[') {
+        let bracket_end = authority
             .find(']')
             .ok_or_else(|| "invalid IPv6 bracket notation".to_string())?;
-        let host = &address[1..bracket_end];
-        let rest = &address[bracket_end + 1..];
-        if !rest.starts_with(':') {
-            return Err("address must be in host:port format".into());
+        let host = &authority[1..bracket_end];
+        let rest = &authority[bracket_end + 1..];
+        if rest.is_empty() {
+            // No port specified — use scheme default
+            (host, None)
+        } else if rest.starts_with(':') {
+            (host, Some(&rest[1..]))
+        } else {
+            return Err("invalid characters after IPv6 address".into());
         }
-        (host, &rest[1..])
+    } else if let Some(colon_pos) = authority.rfind(':') {
+        let host = &authority[..colon_pos];
+        let port = &authority[colon_pos + 1..];
+        if port.is_empty() {
+            (host, None)
+        } else {
+            (host, Some(port))
+        }
     } else {
-        // Regular host:port
-        let colon_pos = address
-            .rfind(':')
-            .ok_or_else(|| "address must be in host:port format (missing port)".to_string())?;
-        let host = &address[..colon_pos];
-        let port_str = &address[colon_pos + 1..];
-        (host, port_str)
+        (authority, None)
     };
 
     if host.is_empty() {
-        return Err("address has empty host".into());
+        return Err("backend address has empty host".into());
     }
 
-    // Validate port.
-    let _port: u16 = port_str
-        .parse()
-        .map_err(|_| format!("invalid port: '{}'", port_str))?;
+    // Validate port if explicitly provided.
+    if let Some(port_str) = port_str {
+        let _port: u16 = port_str
+            .parse()
+            .map_err(|_| format!("invalid port: '{}'", port_str))?;
+    }
 
     // SSRF prevention: reject localhost/loopback.
     let lower_host = host.to_lowercase();
@@ -148,8 +214,7 @@ pub fn validate_backend_address(address: &str) -> Result<(), String> {
         return Err("localhost addresses are not allowed (SSRF prevention)".into());
     }
 
-    // Check if it's an IP address and reject loopback/unspecified.
-    if let Ok(ip) = host.parse::<IpAddr>() {
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
         if ip.is_loopback() {
             return Err("loopback addresses are not allowed (SSRF prevention)".into());
         }
@@ -158,6 +223,7 @@ pub fn validate_backend_address(address: &str) -> Result<(), String> {
         }
     }
 
+    let _ = scheme; // used for validation above
     Ok(())
 }
 
@@ -333,7 +399,7 @@ mod tests {
     fn add_and_list_backend() {
         let reg = BackendRegistry::new();
         reg.add(BackendEntry {
-            address: "10.0.1.10:8080".into(),
+            address: "http://10.0.1.10:8080".into(),
             token: Some("tok".into()),
             hostname: None,
             health: BackendHealth::Connecting,
@@ -342,21 +408,21 @@ mod tests {
         .unwrap();
         let list = reg.list();
         assert_eq!(list.len(), 1);
-        assert_eq!(list[0].address, "10.0.1.10:8080");
+        assert_eq!(list[0].address, "http://10.0.1.10:8080");
     }
 
     #[test]
     fn remove_backend_by_address() {
         let reg = BackendRegistry::new();
         reg.add(BackendEntry {
-            address: "10.0.1.10:8080".into(),
+            address: "http://10.0.1.10:8080".into(),
             token: Some("tok".into()),
             hostname: None,
             health: BackendHealth::Connecting,
             role: BackendRole::Member,
         })
         .unwrap();
-        assert!(reg.remove_by_address("10.0.1.10:8080"));
+        assert!(reg.remove_by_address("http://10.0.1.10:8080"));
         assert!(reg.list().is_empty());
     }
 
@@ -364,7 +430,7 @@ mod tests {
     fn remove_backend_by_hostname() {
         let reg = BackendRegistry::new();
         reg.add(BackendEntry {
-            address: "10.0.1.10:8080".into(),
+            address: "http://10.0.1.10:8080".into(),
             token: Some("tok".into()),
             hostname: Some("prod-1".into()),
             health: BackendHealth::Healthy,
@@ -379,7 +445,7 @@ mod tests {
     fn duplicate_address_rejected() {
         let reg = BackendRegistry::new();
         reg.add(BackendEntry {
-            address: "10.0.1.10:8080".into(),
+            address: "http://10.0.1.10:8080".into(),
             token: None,
             hostname: None,
             health: BackendHealth::Connecting,
@@ -388,7 +454,7 @@ mod tests {
         .unwrap();
         assert!(reg
             .add(BackendEntry {
-                address: "10.0.1.10:8080".into(),
+                address: "http://10.0.1.10:8080".into(),
                 token: None,
                 hostname: None,
                 health: BackendHealth::Connecting,
@@ -401,7 +467,7 @@ mod tests {
     fn hostname_collision_rejected() {
         let reg = BackendRegistry::new();
         reg.add(BackendEntry {
-            address: "10.0.1.10:8080".into(),
+            address: "http://10.0.1.10:8080".into(),
             token: None,
             hostname: Some("same-host".into()),
             health: BackendHealth::Healthy,
@@ -410,7 +476,7 @@ mod tests {
         .unwrap();
         assert!(reg
             .add(BackendEntry {
-                address: "10.0.1.11:8080".into(),
+                address: "http://10.0.1.11:8080".into(),
                 token: None,
                 hostname: Some("same-host".into()),
                 health: BackendHealth::Healthy,
@@ -423,14 +489,14 @@ mod tests {
     fn set_hostname_updates_entry() {
         let reg = BackendRegistry::new();
         reg.add(BackendEntry {
-            address: "10.0.1.10:8080".into(),
+            address: "http://10.0.1.10:8080".into(),
             token: None,
             hostname: None,
             health: BackendHealth::Connecting,
             role: BackendRole::Member,
         })
         .unwrap();
-        reg.set_hostname("10.0.1.10:8080", "prod-1").unwrap();
+        reg.set_hostname("http://10.0.1.10:8080", "prod-1").unwrap();
         let list = reg.list();
         assert_eq!(list[0].hostname.as_deref(), Some("prod-1"));
     }
@@ -439,14 +505,14 @@ mod tests {
     fn set_health_updates_entry() {
         let reg = BackendRegistry::new();
         reg.add(BackendEntry {
-            address: "10.0.1.10:8080".into(),
+            address: "http://10.0.1.10:8080".into(),
             token: None,
             hostname: None,
             health: BackendHealth::Connecting,
             role: BackendRole::Member,
         })
         .unwrap();
-        reg.set_health("10.0.1.10:8080", BackendHealth::Unavailable);
+        reg.set_health("http://10.0.1.10:8080", BackendHealth::Unavailable);
         let list = reg.list();
         assert_eq!(list[0].health, BackendHealth::Unavailable);
     }
@@ -455,7 +521,7 @@ mod tests {
     fn get_by_hostname() {
         let reg = BackendRegistry::new();
         reg.add(BackendEntry {
-            address: "10.0.1.10:8080".into(),
+            address: "http://10.0.1.10:8080".into(),
             token: None,
             hostname: Some("prod-1".into()),
             health: BackendHealth::Healthy,
@@ -463,14 +529,14 @@ mod tests {
         })
         .unwrap();
         let entry = reg.get_by_hostname("prod-1").unwrap();
-        assert_eq!(entry.address, "10.0.1.10:8080");
+        assert_eq!(entry.address, "http://10.0.1.10:8080");
     }
 
     #[test]
     fn healthy_backends_only() {
         let reg = BackendRegistry::new();
         reg.add(BackendEntry {
-            address: "10.0.1.10:8080".into(),
+            address: "http://10.0.1.10:8080".into(),
             token: None,
             hostname: Some("healthy".into()),
             health: BackendHealth::Healthy,
@@ -478,7 +544,7 @@ mod tests {
         })
         .unwrap();
         reg.add(BackendEntry {
-            address: "10.0.1.11:8080".into(),
+            address: "http://10.0.1.11:8080".into(),
             token: None,
             hostname: Some("down".into()),
             health: BackendHealth::Unavailable,
@@ -579,78 +645,133 @@ mod tests {
     // ── Address validation tests ─────────────────────────────────
 
     #[test]
-    fn address_valid_ip_port() {
-        assert!(validate_backend_address("10.0.1.10:8080").is_ok());
+    fn address_valid_http_ip_port() {
+        assert!(validate_backend_address("http://10.0.1.10:8080").is_ok());
     }
 
     #[test]
-    fn address_valid_hostname_port() {
-        assert!(validate_backend_address("example.com:443").is_ok());
+    fn address_valid_https_hostname_port() {
+        assert!(validate_backend_address("https://example.com:443").is_ok());
+    }
+
+    #[test]
+    fn address_valid_https_no_port() {
+        assert!(validate_backend_address("https://example.com").is_ok());
+    }
+
+    #[test]
+    fn address_valid_with_path_prefix() {
+        assert!(validate_backend_address("https://proxy.example.com/wsh-node-1").is_ok());
     }
 
     #[test]
     fn address_valid_ipv6_bracket() {
-        assert!(validate_backend_address("[2001:db8::1]:8080").is_ok());
+        assert!(validate_backend_address("http://[2001:db8::1]:8080").is_ok());
     }
 
     #[test]
-    fn address_scheme_rejected() {
-        assert!(validate_backend_address("http://example.com:8080").is_err());
-        assert!(validate_backend_address("https://example.com:443").is_err());
+    fn address_schemeless_rejected_with_suggestion() {
+        let err = validate_backend_address("10.0.1.10:8080").unwrap_err();
+        assert!(err.contains("http://10.0.1.10:8080"), "should suggest fix: {}", err);
+    }
+
+    #[test]
+    fn address_bad_scheme_rejected() {
         assert!(validate_backend_address("file:///etc/passwd").is_err());
+        assert!(validate_backend_address("ftp://example.com").is_err());
     }
 
     #[test]
-    fn address_missing_port_rejected() {
-        assert!(validate_backend_address("example.com").is_err());
-    }
-
-    #[test]
-    fn address_empty_host_rejected() {
-        assert!(validate_backend_address(":8080").is_err());
+    fn address_empty_authority_rejected() {
+        assert!(validate_backend_address("http://").is_err());
     }
 
     #[test]
     fn address_invalid_port_rejected() {
-        assert!(validate_backend_address("example.com:99999").is_err());
-        assert!(validate_backend_address("example.com:abc").is_err());
-        assert!(validate_backend_address("example.com:").is_err());
+        assert!(validate_backend_address("http://example.com:99999").is_err());
+        assert!(validate_backend_address("http://example.com:abc").is_err());
     }
 
     #[test]
     fn address_localhost_rejected() {
-        assert!(validate_backend_address("localhost:8080").is_err());
-        assert!(validate_backend_address("LOCALHOST:8080").is_err());
+        assert!(validate_backend_address("http://localhost:8080").is_err());
+        assert!(validate_backend_address("http://LOCALHOST:8080").is_err());
     }
 
     #[test]
     fn address_loopback_ipv4_rejected() {
-        assert!(validate_backend_address("127.0.0.1:8080").is_err());
-        assert!(validate_backend_address("127.0.0.2:8080").is_err());
-        assert!(validate_backend_address("127.255.255.255:8080").is_err());
+        assert!(validate_backend_address("http://127.0.0.1:8080").is_err());
+        assert!(validate_backend_address("http://127.0.0.2:8080").is_err());
     }
 
     #[test]
     fn address_loopback_ipv6_rejected() {
-        assert!(validate_backend_address("[::1]:8080").is_err());
+        assert!(validate_backend_address("http://[::1]:8080").is_err());
     }
 
     #[test]
     fn address_unspecified_rejected() {
-        assert!(validate_backend_address("0.0.0.0:8080").is_err());
+        assert!(validate_backend_address("http://0.0.0.0:8080").is_err());
     }
 
     #[test]
     fn address_unspecified_ipv6_rejected() {
-        assert!(validate_backend_address("[::]:8080").is_err());
+        assert!(validate_backend_address("http://[::]:8080").is_err());
     }
 
     #[test]
     fn address_private_ip_accepted() {
-        // Private IPs are allowed -- only loopback is blocked.
-        assert!(validate_backend_address("10.0.0.1:8080").is_ok());
-        assert!(validate_backend_address("192.168.1.1:8080").is_ok());
-        assert!(validate_backend_address("172.16.0.1:8080").is_ok());
+        assert!(validate_backend_address("http://10.0.0.1:8080").is_ok());
+        assert!(validate_backend_address("http://192.168.1.1:8080").is_ok());
+        assert!(validate_backend_address("http://172.16.0.1:8080").is_ok());
+    }
+
+    // ── url_for / ws_url_for tests ───────────────────────────────
+
+    #[test]
+    fn url_for_simple() {
+        let entry = BackendEntry {
+            address: "http://10.0.1.10:8080".into(),
+            token: None, hostname: None,
+            health: BackendHealth::Healthy, role: BackendRole::Member,
+        };
+        assert_eq!(entry.url_for("/sessions"), "http://10.0.1.10:8080/sessions");
+    }
+
+    #[test]
+    fn url_for_with_path_prefix() {
+        let entry = BackendEntry {
+            address: "https://proxy.example.com/wsh-node-1".into(),
+            token: None, hostname: None,
+            health: BackendHealth::Healthy, role: BackendRole::Member,
+        };
+        assert_eq!(
+            entry.url_for("/sessions"),
+            "https://proxy.example.com/wsh-node-1/sessions"
+        );
+    }
+
+    #[test]
+    fn ws_url_for_http() {
+        let entry = BackendEntry {
+            address: "http://10.0.1.10:8080".into(),
+            token: None, hostname: None,
+            health: BackendHealth::Healthy, role: BackendRole::Member,
+        };
+        assert_eq!(entry.ws_url_for("/ws/json"), "ws://10.0.1.10:8080/ws/json");
+    }
+
+    #[test]
+    fn ws_url_for_https() {
+        let entry = BackendEntry {
+            address: "https://proxy.example.com/wsh".into(),
+            token: None, hostname: None,
+            health: BackendHealth::Healthy, role: BackendRole::Member,
+        };
+        assert_eq!(
+            entry.ws_url_for("/ws/json"),
+            "wss://proxy.example.com/wsh/ws/json"
+        );
     }
 
     // ── Registry add with validation ─────────────────────────────
@@ -659,7 +780,7 @@ mod tests {
     fn registry_add_rejects_localhost_address() {
         let reg = BackendRegistry::new();
         let result = reg.add(BackendEntry {
-            address: "127.0.0.1:8080".into(),
+            address: "http://127.0.0.1:8080".into(),
             token: None,
             hostname: None,
             health: BackendHealth::Connecting,
@@ -673,7 +794,7 @@ mod tests {
     fn registry_add_rejects_invalid_hostname() {
         let reg = BackendRegistry::new();
         let result = reg.add(BackendEntry {
-            address: "10.0.1.10:8080".into(),
+            address: "http://10.0.1.10:8080".into(),
             token: None,
             hostname: Some("-invalid".into()),
             health: BackendHealth::Connecting,
@@ -684,10 +805,10 @@ mod tests {
     }
 
     #[test]
-    fn registry_add_rejects_scheme_in_address() {
+    fn registry_add_rejects_schemeless_address() {
         let reg = BackendRegistry::new();
         let result = reg.add(BackendEntry {
-            address: "http://10.0.1.10:8080".into(),
+            address: "10.0.1.10:8080".into(),
             token: None,
             hostname: None,
             health: BackendHealth::Connecting,

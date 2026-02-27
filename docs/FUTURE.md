@@ -207,6 +207,38 @@ Each of these is a substantial design effort. They should be tackled incremental
 
 ---
 
+## 3. Role-Based Access Control (RBAC)
+
+### Current State
+
+`wsh` authenticates with a single bearer token. Anyone with the token has full access to all operations: creating sessions, sending input, reading screen contents, managing federation backends, and shutting down the server. There is no distinction between a read-only monitoring agent and a full-control orchestrator.
+
+### The Finding
+
+A security audit identified that the flat authorization model is a risk for multi-tenant or team deployments. Specific gaps:
+
+- **No per-session permissions.** An agent with access to one session can read and write to all sessions on the server.
+- **No read-only mode.** A monitoring dashboard has the same permissions as an orchestrator that creates and destroys sessions.
+- **No operation scoping.** Federation management (adding/removing backends) uses the same token as session I/O.
+
+For single-user local development (the primary use case today), this is acceptable. For shared servers, multi-agent orchestration, or any deployment where different clients should have different privileges, it is a material gap.
+
+### Future Direction
+
+The authorization model should evolve to support scoped tokens with role-based permissions. The design should be:
+
+- **Token scopes.** Each token carries a set of allowed operations. Scopes could include: `sessions:read`, `sessions:write`, `sessions:create`, `sessions:delete`, `federation:read`, `federation:write`, `server:admin`.
+- **Session ACLs.** Individual sessions can be restricted to specific tokens or scopes. An agent that creates a session could receive a session-scoped token that only works for that session.
+- **Role presets.** Common combinations packaged as named roles: `admin` (full access), `operator` (session create/read/write, no federation), `observer` (read-only), `session-scoped` (single session read/write).
+
+### Design Constraint for Current Implementation
+
+The auth middleware in `src/api/auth.rs` is structured as an axum middleware layer that extracts and validates the token. This structure should be preserved -- future RBAC work extends the middleware to also extract scopes/roles from the token and inject them into the request extensions. Handlers then check for required scopes before proceeding.
+
+The key property to maintain: **authentication and authorization are separate concerns in the middleware pipeline.** Authentication verifies identity (valid token). Authorization verifies permission (sufficient scope). The current middleware handles authentication. Authorization checks will be added as a second layer or as per-handler guards.
+
+---
+
 ## Design Constraints for v1
 
 Both future directions impose the same constraint on v1: **do not bake in assumptions that prevent extension.**

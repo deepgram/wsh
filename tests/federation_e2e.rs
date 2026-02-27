@@ -186,14 +186,14 @@ async fn federation_e2e_server_management() {
     let resp = client
         .post(format!("{}/servers", base))
         .json(&serde_json::json!({
-            "address": "10.99.99.99:9999"
+            "address": "http://10.99.99.99:9999"
         }))
         .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), 201);
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["address"], "10.99.99.99:9999");
+    assert_eq!(body["address"], "http://10.99.99.99:9999");
     assert_eq!(body["health"], "connecting");
 
     // GET /servers should now have 2 entries.
@@ -210,7 +210,7 @@ async fn federation_e2e_server_management() {
     let resp = client
         .post(format!("{}/servers", base))
         .json(&serde_json::json!({
-            "address": "127.0.0.1:9999"
+            "address": "http://127.0.0.1:9999"
         }))
         .send()
         .await
@@ -221,7 +221,7 @@ async fn federation_e2e_server_management() {
     let resp = client
         .post(format!("{}/servers", base))
         .json(&serde_json::json!({
-            "address": "10.99.99.99:9999"
+            "address": "http://10.99.99.99:9999"
         }))
         .send()
         .await
@@ -395,7 +395,7 @@ async fn federation_e2e_cross_server_proxy() {
     // Register the real backend, bypassing SSRF validation for localhost.
     backends
         .add_unchecked(BackendEntry {
-            address: backend_addr.clone(),
+            address: format!("http://{}", backend_addr),
             token: None,
             hostname: Some("fed-e2e-backend-4".into()),
             health: BackendHealth::Healthy,
@@ -412,6 +412,7 @@ async fn federation_e2e_cross_server_proxy() {
         ticket_store: Arc::new(wsh::api::ticket::TicketStore::new()),
         backends: backends.clone(),
         federation: Arc::new(tokio::sync::Mutex::new(federation_manager)),
+        ip_access: None,
         hostname: "fed-e2e-hub-4".to_string(),
         federation_config_path: None,
         local_token: None,
