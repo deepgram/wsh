@@ -315,6 +315,146 @@ impl Client {
         }
     }
 
+    /// List all servers (local + federated backends) via the Unix socket.
+    pub async fn list_servers(&mut self) -> io::Result<ListServersResponseMsg> {
+        let msg = ListServersMsg {};
+        let frame = Frame::control(FrameType::ListServers, &msg)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        frame.write_to(&mut self.stream).await?;
+
+        let resp_frame = Frame::read_from(&mut self.stream).await?;
+        match resp_frame.frame_type {
+            FrameType::ListServersResponse => {
+                resp_frame
+                    .parse_json()
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+            }
+            FrameType::Error => {
+                let err: ErrorMsg = resp_frame
+                    .parse_json()
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                Err(io::Error::other(format!("{}: {}", err.code, err.message)))
+            }
+            other => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unexpected response frame type: {:?}", other),
+            )),
+        }
+    }
+
+    /// Add a remote backend server to the federation.
+    pub async fn add_server(
+        &mut self,
+        address: &str,
+        token: Option<String>,
+    ) -> io::Result<AddServerResponseMsg> {
+        let msg = AddServerMsg {
+            address: address.to_string(),
+            token,
+        };
+        let frame = Frame::control(FrameType::AddServer, &msg)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        frame.write_to(&mut self.stream).await?;
+
+        let resp_frame = Frame::read_from(&mut self.stream).await?;
+        match resp_frame.frame_type {
+            FrameType::AddServerResponse => {
+                resp_frame
+                    .parse_json()
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+            }
+            FrameType::Error => {
+                let err: ErrorMsg = resp_frame
+                    .parse_json()
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                Err(io::Error::other(format!("{}: {}", err.code, err.message)))
+            }
+            other => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unexpected response frame type: {:?}", other),
+            )),
+        }
+    }
+
+    /// Remove a remote backend server from the federation by hostname.
+    pub async fn remove_server(&mut self, hostname: &str) -> io::Result<()> {
+        let msg = RemoveServerMsg {
+            hostname: hostname.to_string(),
+        };
+        let frame = Frame::control(FrameType::RemoveServer, &msg)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        frame.write_to(&mut self.stream).await?;
+
+        let resp_frame = Frame::read_from(&mut self.stream).await?;
+        match resp_frame.frame_type {
+            FrameType::RemoveServerResponse => Ok(()),
+            FrameType::Error => {
+                let err: ErrorMsg = resp_frame
+                    .parse_json()
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                Err(io::Error::other(format!("{}: {}", err.code, err.message)))
+            }
+            other => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unexpected response frame type: {:?}", other),
+            )),
+        }
+    }
+
+    /// Reload the federation config file, adding/removing backends as needed.
+    pub async fn reload_config(&mut self) -> io::Result<ReloadConfigResponseMsg> {
+        let msg = ReloadConfigMsg {};
+        let frame = Frame::control(FrameType::ReloadConfig, &msg)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        frame.write_to(&mut self.stream).await?;
+
+        let resp_frame = Frame::read_from(&mut self.stream).await?;
+        match resp_frame.frame_type {
+            FrameType::ReloadConfigResponse => {
+                resp_frame
+                    .parse_json()
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+            }
+            FrameType::Error => {
+                let err: ErrorMsg = resp_frame
+                    .parse_json()
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                Err(io::Error::other(format!("{}: {}", err.code, err.message)))
+            }
+            other => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unexpected response frame type: {:?}", other),
+            )),
+        }
+    }
+
+    /// Get server info (hostname and version).
+    pub async fn server_info(&mut self) -> io::Result<ServerInfoResponseMsg> {
+        let msg = ServerInfoMsg {};
+        let frame = Frame::control(FrameType::ServerInfo, &msg)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        frame.write_to(&mut self.stream).await?;
+
+        let resp_frame = Frame::read_from(&mut self.stream).await?;
+        match resp_frame.frame_type {
+            FrameType::ServerInfoResponse => {
+                resp_frame
+                    .parse_json()
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+            }
+            FrameType::Error => {
+                let err: ErrorMsg = resp_frame
+                    .parse_json()
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                Err(io::Error::other(format!("{}: {}", err.code, err.message)))
+            }
+            other => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unexpected response frame type: {:?}", other),
+            )),
+        }
+    }
+
     /// Enter the streaming I/O proxy loop.
     ///
     /// Consumes the client, splits the underlying stream, and runs a

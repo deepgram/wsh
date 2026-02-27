@@ -185,6 +185,13 @@ enum Commands {
     /// Stop the running wsh server
     Stop {},
 
+    /// Manage federated backend servers
+    Servers {
+        /// Action to perform
+        #[command(subcommand)]
+        action: ServersAction,
+    },
+
     /// Start an MCP server over stdio (for AI hosts like Claude Desktop)
     Mcp {
         /// Address to bind the HTTP/WebSocket API server (for auto-spawn)
@@ -195,6 +202,34 @@ enum Commands {
         #[arg(long, env = "WSH_TOKEN")]
         token: Option<String>,
     },
+}
+
+#[derive(Subcommand, Debug)]
+enum ServersAction {
+    /// List all servers (local + federated backends)
+    List,
+
+    /// Add a remote backend server
+    Add {
+        /// Address of the backend (e.g., "10.0.1.10:8080")
+        address: String,
+
+        /// Authentication token for the backend
+        #[arg(long)]
+        token: Option<String>,
+    },
+
+    /// Remove a remote backend server by hostname
+    Remove {
+        /// Hostname of the backend to remove
+        hostname: String,
+    },
+
+    /// Show server info (hostname and version)
+    Info,
+
+    /// Reload federation config from file
+    Reload,
 }
 
 #[derive(Error, Debug)]
@@ -299,6 +334,9 @@ async fn main() -> Result<(), WshError> {
         }
         Some(Commands::Stop {}) => {
             run_stop(socket, server_name).await
+        }
+        Some(Commands::Servers { action }) => {
+            run_servers(action, socket, server_name).await
         }
         Some(Commands::Mcp { bind, token }) => {
             run_mcp(bind, socket, token, server_name).await
@@ -1401,6 +1439,105 @@ async fn run_tag(
         Err(e) => {
             eprintln!("wsh tag: {}", e);
             std::process::exit(1);
+        }
+    }
+
+    Ok(())
+}
+
+async fn run_servers(
+    action: ServersAction,
+    socket: Option<PathBuf>,
+    server_name: String,
+) -> Result<(), WshError> {
+    let socket_path = resolve_socket_path(socket, &server_name);
+    let mut c = match client::Client::connect(&socket_path).await {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!(
+                "wsh servers: failed to connect to server at {}: {}",
+                socket_path.display(),
+                e
+            );
+            std::process::exit(1);
+        }
+    };
+
+    match action {
+        ServersAction::List => {
+            let resp = match c.list_servers().await {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("wsh servers list: {}", e);
+                    std::process::exit(1);
+                }
+            };
+            if resp.servers.is_empty() {
+                println!("No servers.");
+            } else {
+                println!(
+                    "{:<20} {:<25} {:<12} {:<10} {}",
+                    "HOSTNAME", "ADDRESS", "HEALTH", "ROLE", "SESSIONS"
+                );
+                for s in &resp.servers {
+                    let hostname = s.hostname.as_deref().unwrap_or("-");
+                    let sessions_str = match s.sessions {
+                        Some(n) => n.to_string(),
+                        None => "-".to_string(),
+                    };
+                    println!(
+                        "{:<20} {:<25} {:<12} {:<10} {}",
+                        hostname, s.address, s.health, s.role, sessions_str
+                    );
+                }
+            }
+        }
+        ServersAction::Add { address, token } => {
+            match c.add_server(&address, token).await {
+                Ok(resp) => {
+                    println!(
+                        "Server added: {} (health: {})",
+                        resp.address, resp.health
+                    );
+                }
+                Err(e) => {
+                    eprintln!("wsh servers add: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        ServersAction::Remove { hostname } => {
+            if let Err(e) = c.remove_server(&hostname).await {
+                eprintln!("wsh servers remove: {}", e);
+                std::process::exit(1);
+            }
+            println!("Server '{}' removed.", hostname);
+        }
+        ServersAction::Info => {
+            match c.server_info().await {
+                Ok(info) => {
+                    println!("Hostname: {}", info.hostname);
+                    println!("Version:  {}", info.version);
+                }
+                Err(e) => {
+                    eprintln!("wsh servers info: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        ServersAction::Reload => {
+            match c.reload_config().await {
+                Ok(resp) => {
+                    println!(
+                        "Config reloaded: {} added, {} removed.",
+                        resp.added, resp.removed
+                    );
+                }
+                Err(e) => {
+                    eprintln!("wsh servers reload: {}", e);
+                    std::process::exit(1);
+                }
+            }
         }
     }
 
