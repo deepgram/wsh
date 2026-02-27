@@ -34,6 +34,11 @@ pub struct CreateSessionParams {
     #[serde(default)]
     #[schemars(description = "Tags to assign to the session at creation time.")]
     pub tags: Vec<String>,
+
+    /// Target a specific federated server by hostname. Omit for local.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Target a specific federated server by hostname. Omit to target the local server.")]
+    pub server: Option<String>,
 }
 
 /// Parameters for the `wsh_list_sessions` tool.
@@ -47,6 +52,11 @@ pub struct ListSessionsParams {
     #[serde(default)]
     #[schemars(description = "Filter sessions by tags (union/OR semantics). Only used when session is not specified.")]
     pub tag: Vec<String>,
+
+    /// Target a specific federated server by hostname. Omit for local.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Target a specific federated server by hostname. Omit to target the local server.")]
+    pub server: Option<String>,
 }
 
 /// Action to perform on a session.
@@ -84,6 +94,11 @@ pub struct ManageSessionParams {
     #[serde(default)]
     #[schemars(description = "Tags to add or remove. Required when action is 'add_tags' or 'remove_tags'.")]
     pub tags: Vec<String>,
+
+    /// Target a specific federated server by hostname. Omit for local.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Target a specific federated server by hostname. Omit to target the local server.")]
+    pub server: Option<String>,
 }
 
 // ── Terminal I/O parameter types ─────────────────────────────────
@@ -117,6 +132,11 @@ pub struct SendInputParams {
     #[serde(default = "default_encoding")]
     #[schemars(description = "Input encoding: 'utf8' (default) for plain text, 'base64' for binary data.")]
     pub encoding: Encoding,
+
+    /// Target a specific federated server by hostname. Omit for local.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Target a specific federated server by hostname. Omit to target the local server.")]
+    pub server: Option<String>,
 }
 
 /// Screen content format for query results.
@@ -151,6 +171,11 @@ pub struct GetScreenParams {
     #[serde(default)]
     #[schemars(description = "Output format: 'styled' (default) includes color/attribute spans, 'plain' returns raw text.")]
     pub format: ScreenFormat,
+
+    /// Target a specific federated server by hostname. Omit for local.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Target a specific federated server by hostname. Omit to target the local server.")]
+    pub server: Option<String>,
 }
 
 fn default_limit() -> usize {
@@ -178,6 +203,11 @@ pub struct GetScrollbackParams {
     #[serde(default)]
     #[schemars(description = "Output format: 'styled' (default) includes color/attribute spans, 'plain' returns raw text.")]
     pub format: ScreenFormat,
+
+    /// Target a specific federated server by hostname. Omit for local.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Target a specific federated server by hostname. Omit to target the local server.")]
+    pub server: Option<String>,
 }
 
 fn default_timeout_ms() -> u64 {
@@ -206,6 +236,11 @@ pub struct AwaitIdleParams {
     #[serde(default = "default_max_wait_ms")]
     #[schemars(description = "Maximum wall-clock time to wait in milliseconds. Defaults to 30000.")]
     pub max_wait_ms: u64,
+
+    /// Target a specific federated server by hostname. Omit for local.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Target a specific federated server by hostname. Omit to target the local server.")]
+    pub server: Option<String>,
 }
 
 /// Parameters for the `wsh_run_command` tool.
@@ -233,6 +268,11 @@ pub struct RunCommandParams {
     #[serde(default)]
     #[schemars(description = "Output format: 'styled' (default) includes color/attribute spans, 'plain' returns raw text.")]
     pub format: ScreenFormat,
+
+    /// Target a specific federated server by hostname. Omit for local.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Target a specific federated server by hostname. Omit to target the local server.")]
+    pub server: Option<String>,
 }
 
 // ── Visual feedback parameter types ─────────────────────────────
@@ -285,6 +325,11 @@ pub struct OverlayParams {
     #[serde(default)]
     #[schemars(description = "If true, list all overlays for the current screen mode. All other parameters are ignored.")]
     pub list: bool,
+
+    /// Target a specific federated server by hostname. Omit for local.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Target a specific federated server by hostname. Omit to target the local server.")]
+    pub server: Option<String>,
 }
 
 /// Parameters for the `wsh_remove_overlay` tool.
@@ -297,6 +342,11 @@ pub struct RemoveOverlayParams {
     /// Overlay ID to remove. If omitted, all overlays are cleared.
     #[schemars(description = "Overlay ID to remove. If omitted, all overlays are cleared.")]
     pub id: Option<String>,
+
+    /// Target a specific federated server by hostname. Omit for local.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Target a specific federated server by hostname. Omit to target the local server.")]
+    pub server: Option<String>,
 }
 
 /// Parameters for the `wsh_panel` tool (create, update, or list panels).
@@ -339,6 +389,11 @@ pub struct PanelParams {
     #[serde(default)]
     #[schemars(description = "If true, list all panels for the current screen mode. All other parameters are ignored.")]
     pub list: bool,
+
+    /// Target a specific federated server by hostname. Omit for local.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Target a specific federated server by hostname. Omit to target the local server.")]
+    pub server: Option<String>,
 }
 
 /// Parameters for the `wsh_remove_panel` tool.
@@ -351,6 +406,11 @@ pub struct RemovePanelParams {
     /// Panel ID to remove. If omitted, all panels are cleared.
     #[schemars(description = "Panel ID to remove. If omitted, all panels are cleared.")]
     pub id: Option<String>,
+
+    /// Target a specific federated server by hostname. Omit for local.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Target a specific federated server by hostname. Omit to target the local server.")]
+    pub server: Option<String>,
 }
 
 // ── Input & screen mode parameter types ─────────────────────────
@@ -386,6 +446,11 @@ pub struct InputModeParams {
     #[serde(default)]
     #[schemars(description = "If true, remove focus from any currently focused element.")]
     pub unfocus: bool,
+
+    /// Target a specific federated server by hostname. Omit for local.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Target a specific federated server by hostname. Omit to target the local server.")]
+    pub server: Option<String>,
 }
 
 /// Action to perform on the screen mode.
@@ -409,6 +474,45 @@ pub struct ScreenModeParams {
     #[schemars(description = "Action to change the screen mode: 'enter_alt' or 'exit_alt'. Omit to query without changing.")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub action: Option<ScreenModeAction>,
+
+    /// Target a specific federated server by hostname. Omit for local.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Target a specific federated server by hostname. Omit to target the local server.")]
+    pub server: Option<String>,
+}
+
+// ── Federation server management parameter types ────────────────
+
+/// Parameters for the `wsh_list_servers` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ListServersParams {}
+
+/// Parameters for the `wsh_add_server` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct AddServerParams {
+    /// The address of the backend server (e.g. "10.0.1.10:8080").
+    #[schemars(description = "The address of the backend server to add (host:port).")]
+    pub address: String,
+
+    /// Optional authentication token for the backend. If omitted, the default token is used.
+    #[schemars(description = "Optional authentication token for the backend. If omitted, the default or local token is used.")]
+    pub token: Option<String>,
+}
+
+/// Parameters for the `wsh_remove_server` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RemoveServerParams {
+    /// The hostname of the backend server to remove.
+    #[schemars(description = "The hostname of the backend server to remove.")]
+    pub hostname: String,
+}
+
+/// Parameters for the `wsh_server_status` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ServerStatusParams {
+    /// The hostname of the backend server to query.
+    #[schemars(description = "The hostname of the backend server to get status for.")]
+    pub hostname: String,
 }
 
 #[cfg(test)]
@@ -1163,6 +1267,150 @@ mod tests {
     fn screen_mode_params_missing_session() {
         let json = serde_json::json!({"action": "enter_alt"});
         let result = serde_json::from_value::<ScreenModeParams>(json);
+        assert!(result.is_err());
+    }
+
+    // ── Server field on session-scoped params ───────────────────────
+
+    #[test]
+    fn server_field_defaults_to_none() {
+        let json = serde_json::json!({});
+        let params: CreateSessionParams = serde_json::from_value(json).unwrap();
+        assert!(params.server.is_none());
+
+        let json = serde_json::json!({"session": "s"});
+        let params: GetScreenParams = serde_json::from_value(json).unwrap();
+        assert!(params.server.is_none());
+
+        let json = serde_json::json!({"session": "s"});
+        let params: AwaitIdleParams = serde_json::from_value(json).unwrap();
+        assert!(params.server.is_none());
+    }
+
+    #[test]
+    fn server_field_accepts_value() {
+        let json = serde_json::json!({"server": "backend-1"});
+        let params: CreateSessionParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.server.as_deref(), Some("backend-1"));
+
+        let json = serde_json::json!({"session": "s", "server": "prod-2"});
+        let params: GetScreenParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.server.as_deref(), Some("prod-2"));
+
+        let json = serde_json::json!({"session": "s", "input": "x", "server": "host"});
+        let params: SendInputParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.server.as_deref(), Some("host"));
+    }
+
+    #[test]
+    fn server_field_on_all_param_types() {
+        // Verify that every session-scoped param type accepts the server field.
+        let json = serde_json::json!({"server": "h"});
+        let p: ListSessionsParams = serde_json::from_value(json).unwrap();
+        assert_eq!(p.server.as_deref(), Some("h"));
+
+        let json = serde_json::json!({"session": "s", "action": "kill", "server": "h"});
+        let p: ManageSessionParams = serde_json::from_value(json).unwrap();
+        assert_eq!(p.server.as_deref(), Some("h"));
+
+        let json = serde_json::json!({"session": "s", "server": "h"});
+        let p: GetScrollbackParams = serde_json::from_value(json).unwrap();
+        assert_eq!(p.server.as_deref(), Some("h"));
+
+        let json = serde_json::json!({"session": "s", "input": "x\n", "server": "h"});
+        let p: RunCommandParams = serde_json::from_value(json).unwrap();
+        assert_eq!(p.server.as_deref(), Some("h"));
+
+        let json = serde_json::json!({"session": "s", "server": "h"});
+        let p: OverlayParams = serde_json::from_value(json).unwrap();
+        assert_eq!(p.server.as_deref(), Some("h"));
+
+        let json = serde_json::json!({"session": "s", "server": "h"});
+        let p: RemoveOverlayParams = serde_json::from_value(json).unwrap();
+        assert_eq!(p.server.as_deref(), Some("h"));
+
+        let json = serde_json::json!({"session": "s", "server": "h"});
+        let p: PanelParams = serde_json::from_value(json).unwrap();
+        assert_eq!(p.server.as_deref(), Some("h"));
+
+        let json = serde_json::json!({"session": "s", "server": "h"});
+        let p: RemovePanelParams = serde_json::from_value(json).unwrap();
+        assert_eq!(p.server.as_deref(), Some("h"));
+
+        let json = serde_json::json!({"session": "s", "server": "h"});
+        let p: InputModeParams = serde_json::from_value(json).unwrap();
+        assert_eq!(p.server.as_deref(), Some("h"));
+
+        let json = serde_json::json!({"session": "s", "server": "h"});
+        let p: ScreenModeParams = serde_json::from_value(json).unwrap();
+        assert_eq!(p.server.as_deref(), Some("h"));
+    }
+
+    // ── ListServersParams ───────────────────────────────────────────
+
+    #[test]
+    fn list_servers_params_empty() {
+        let json = serde_json::json!({});
+        let _params: ListServersParams = serde_json::from_value(json).unwrap();
+    }
+
+    // ── AddServerParams ─────────────────────────────────────────────
+
+    #[test]
+    fn add_server_params_address_only() {
+        let json = serde_json::json!({"address": "10.0.1.10:8080"});
+        let params: AddServerParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.address, "10.0.1.10:8080");
+        assert!(params.token.is_none());
+    }
+
+    #[test]
+    fn add_server_params_with_token() {
+        let json = serde_json::json!({
+            "address": "10.0.1.10:8080",
+            "token": "secret-tok"
+        });
+        let params: AddServerParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.address, "10.0.1.10:8080");
+        assert_eq!(params.token.as_deref(), Some("secret-tok"));
+    }
+
+    #[test]
+    fn add_server_params_missing_address() {
+        let json = serde_json::json!({"token": "tok"});
+        let result = serde_json::from_value::<AddServerParams>(json);
+        assert!(result.is_err());
+    }
+
+    // ── RemoveServerParams ──────────────────────────────────────────
+
+    #[test]
+    fn remove_server_params_valid() {
+        let json = serde_json::json!({"hostname": "prod-1"});
+        let params: RemoveServerParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.hostname, "prod-1");
+    }
+
+    #[test]
+    fn remove_server_params_missing_hostname() {
+        let json = serde_json::json!({});
+        let result = serde_json::from_value::<RemoveServerParams>(json);
+        assert!(result.is_err());
+    }
+
+    // ── ServerStatusParams ──────────────────────────────────────────
+
+    #[test]
+    fn server_status_params_valid() {
+        let json = serde_json::json!({"hostname": "backend-1"});
+        let params: ServerStatusParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.hostname, "backend-1");
+    }
+
+    #[test]
+    fn server_status_params_missing_hostname() {
+        let json = serde_json::json!({});
+        let result = serde_json::from_value::<ServerStatusParams>(json);
         assert!(result.is_err());
     }
 }
