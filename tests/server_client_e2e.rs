@@ -61,6 +61,7 @@ async fn test_create_session_via_client() {
         rows: 24,
         cols: 80,
         tags: vec![],
+        server: None,
     };
     let resp = client.create_session(msg).await.unwrap();
 
@@ -94,6 +95,7 @@ async fn test_create_two_sessions_isolation() {
             rows: 24,
             cols: 80,
             tags: vec![],
+            server: None,
         })
         .await
         .unwrap();
@@ -109,6 +111,7 @@ async fn test_create_two_sessions_isolation() {
             rows: 30,
             cols: 120,
             tags: vec![],
+            server: None,
         })
         .await
         .unwrap();
@@ -146,6 +149,7 @@ async fn test_attach_to_session() {
             rows: 24,
             cols: 80,
             tags: vec![],
+            server: None,
         })
         .await
         .unwrap();
@@ -186,6 +190,7 @@ async fn test_detach_and_reattach() {
         rows: 24,
         cols: 80,
         tags: vec![],
+        server: None,
     };
     Frame::control(FrameType::CreateSession, &create_msg)
         .unwrap()
@@ -249,6 +254,7 @@ async fn test_multiple_clients_same_session() {
             rows: 24,
             cols: 80,
             tags: vec![],
+            server: None,
         },
     )
     .unwrap()
@@ -325,6 +331,7 @@ async fn test_session_input_output_round_trip() {
             rows: 24,
             cols: 80,
             tags: vec![],
+            server: None,
         },
     )
     .unwrap()
@@ -387,6 +394,7 @@ async fn test_client_resize() {
             rows: 24,
             cols: 80,
             tags: vec![],
+            server: None,
         },
     )
     .unwrap()
@@ -474,6 +482,7 @@ async fn test_session_registry_after_client_disconnect() {
             rows: 24,
             cols: 80,
             tags: vec![],
+            server: None,
         })
         .await
         .unwrap();
@@ -536,6 +545,7 @@ async fn test_list_sessions_with_entries() {
         rows: 24,
         cols: 80,
         tags: vec![],
+        server: None,
     })
     .await
     .unwrap();
@@ -549,6 +559,7 @@ async fn test_list_sessions_with_entries() {
         rows: 24,
         cols: 80,
         tags: vec![],
+        server: None,
     })
     .await
     .unwrap();
@@ -582,6 +593,7 @@ async fn test_kill_session_via_client() {
             rows: 24,
             cols: 80,
             tags: vec![],
+            server: None,
         })
         .await
         .unwrap();
@@ -643,6 +655,7 @@ async fn test_ephemeral_server_watches_sessions() {
             rows: 24,
             cols: 80,
             tags: vec![],
+            server: None,
         })
         .await
         .unwrap();

@@ -985,6 +985,7 @@ mod tests {
             rows: 24,
             cols: 80,
             tags: vec![],
+            server: None,
         };
         let frame = Frame::control(FrameType::CreateSession, &msg).unwrap();
         frame.write_to(&mut stream).await.unwrap();
@@ -1086,6 +1087,7 @@ mod tests {
             rows: 24,
             cols: 80,
             tags: vec![],
+            server: None,
         };
         let frame = Frame::control(FrameType::CreateSession, &msg).unwrap();
         frame.write_to(&mut stream).await.unwrap();
@@ -1130,6 +1132,7 @@ mod tests {
             rows: 24,
             cols: 80,
             tags: vec![],
+            server: None,
         };
         Frame::control(FrameType::CreateSession, &msg)
             .unwrap()
@@ -1166,6 +1169,7 @@ mod tests {
             rows: 24,
             cols: 80,
             tags: vec![],
+            server: None,
         };
         Frame::control(FrameType::CreateSession, &msg)
             .unwrap()
@@ -1264,7 +1268,7 @@ mod tests {
 
         let mut stream = UnixStream::connect(&path).await.unwrap();
 
-        let msg = ListSessionsMsg {};
+        let msg = ListSessionsMsg { server: None };
         Frame::control(FrameType::ListSessions, &msg)
             .unwrap()
             .write_to(&mut stream)
@@ -1307,7 +1311,7 @@ mod tests {
         let (path, _dir) = start_test_server(sessions).await;
 
         let mut stream = UnixStream::connect(&path).await.unwrap();
-        Frame::control(FrameType::ListSessions, &ListSessionsMsg {})
+        Frame::control(FrameType::ListSessions, &ListSessionsMsg { server: None })
             .unwrap()
             .write_to(&mut stream)
             .await
@@ -1341,7 +1345,7 @@ mod tests {
         let (path, _dir) = start_test_server(sessions.clone()).await;
 
         let mut stream = UnixStream::connect(&path).await.unwrap();
-        let msg = KillSessionMsg { name: "kill-me".to_string() };
+        let msg = KillSessionMsg { name: "kill-me".to_string(), server: None };
         Frame::control(FrameType::KillSession, &msg)
             .unwrap()
             .write_to(&mut stream)
@@ -1365,7 +1369,7 @@ mod tests {
         let (path, _dir) = start_test_server(sessions).await;
 
         let mut stream = UnixStream::connect(&path).await.unwrap();
-        let msg = KillSessionMsg { name: "nonexistent".to_string() };
+        let msg = KillSessionMsg { name: "nonexistent".to_string(), server: None };
         Frame::control(FrameType::KillSession, &msg)
             .unwrap()
             .write_to(&mut stream)
@@ -1444,6 +1448,7 @@ mod tests {
             rows: 24,
             cols: 80,
             tags: vec![],
+            server: None,
         };
         Frame::control(FrameType::CreateSession, &msg)
             .unwrap()
@@ -1572,6 +1577,7 @@ mod tests {
             rows: 24,
             cols: 80,
             tags: vec![],
+            server: None,
         };
         Frame::control(FrameType::CreateSession, &msg)
             .unwrap()
@@ -1726,6 +1732,7 @@ mod tests {
             session: "tag-test".to_string(),
             add: vec!["build".to_string(), "ci".to_string()],
             remove: vec![],
+            server: None,
         };
         Frame::control(FrameType::ManageTags, &msg)
             .unwrap()
@@ -1744,6 +1751,7 @@ mod tests {
             session: "tag-test".to_string(),
             add: vec![],
             remove: vec!["build".to_string()],
+            server: None,
         };
         Frame::control(FrameType::ManageTags, &msg2)
             .unwrap()
@@ -1769,6 +1777,7 @@ mod tests {
             session: "nonexistent".to_string(),
             add: vec!["tag".to_string()],
             remove: vec![],
+            server: None,
         };
         Frame::control(FrameType::ManageTags, &msg)
             .unwrap()
@@ -1806,6 +1815,7 @@ mod tests {
             session: "tag-query".to_string(),
             add: vec![],
             remove: vec![],
+            server: None,
         };
         Frame::control(FrameType::ManageTags, &msg)
             .unwrap()
@@ -1836,6 +1846,7 @@ mod tests {
             rows: 24,
             cols: 80,
             tags: vec!["build".to_string(), "ci".to_string()],
+            server: None,
         };
         Frame::control(FrameType::CreateSession, &msg)
             .unwrap()
@@ -1877,7 +1888,7 @@ mod tests {
         let (path, _dir) = start_test_server(sessions).await;
 
         let mut stream = UnixStream::connect(&path).await.unwrap();
-        Frame::control(FrameType::ListSessions, &ListSessionsMsg {})
+        Frame::control(FrameType::ListSessions, &ListSessionsMsg { server: None })
             .unwrap()
             .write_to(&mut stream)
             .await

@@ -149,7 +149,7 @@ impl Client {
 
     /// List sessions via the server's Unix socket.
     pub async fn list_sessions(&mut self) -> io::Result<Vec<SessionInfoMsg>> {
-        let msg = ListSessionsMsg {};
+        let msg = ListSessionsMsg { server: None };
         let frame = Frame::control(FrameType::ListSessions, &msg)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         frame.write_to(&mut self.stream).await?;
@@ -177,7 +177,7 @@ impl Client {
 
     /// Kill (destroy) a session via the server's Unix socket.
     pub async fn kill_session(&mut self, name: &str) -> io::Result<()> {
-        let msg = KillSessionMsg { name: name.to_string() };
+        let msg = KillSessionMsg { name: name.to_string(), server: None };
         let frame = Frame::control(FrameType::KillSession, &msg)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         frame.write_to(&mut self.stream).await?;
@@ -203,7 +203,7 @@ impl Client {
     /// Unlike `kill_session`, this keeps the session alive — it only disconnects
     /// any streaming clients currently attached.
     pub async fn detach_session(&mut self, name: &str) -> io::Result<()> {
-        let msg = DetachSessionMsg { name: name.to_string() };
+        let msg = DetachSessionMsg { name: name.to_string(), server: None };
         let frame = Frame::control(FrameType::DetachSession, &msg)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         frame.write_to(&mut self.stream).await?;
@@ -265,6 +265,7 @@ impl Client {
             session: session.to_string(),
             add,
             remove,
+            server: None,
         };
         let frame = Frame::control(FrameType::ManageTags, &msg)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
@@ -646,6 +647,7 @@ mod tests {
             rows: 24,
             cols: 80,
             tags: vec![],
+            server: None,
         };
         let resp = client.create_session(msg).await.unwrap();
         assert_eq!(resp.name, "client-test");
@@ -806,6 +808,7 @@ mod tests {
             rows: 24,
             cols: 80,
             tags: vec![],
+            server: None,
         };
         let _resp = client.create_session(msg).await.unwrap();
 

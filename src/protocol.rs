@@ -49,6 +49,18 @@ pub enum FrameType {
     // Keepalive frames (empty payload)
     Ping = 0x14,
     Pong = 0x15,
+
+    // Federation / server management frames (JSON payload)
+    ListServers = 0x20,
+    ListServersResponse = 0x21,
+    AddServer = 0x22,
+    AddServerResponse = 0x23,
+    RemoveServer = 0x24,
+    RemoveServerResponse = 0x25,
+    ReloadConfig = 0x26,
+    ReloadConfigResponse = 0x27,
+    ServerInfo = 0x28,
+    ServerInfoResponse = 0x29,
 }
 
 impl FrameType {
@@ -79,6 +91,16 @@ impl FrameType {
             0x19 => Some(Self::ShutdownServerResponse),
             0x14 => Some(Self::Ping),
             0x15 => Some(Self::Pong),
+            0x20 => Some(Self::ListServers),
+            0x21 => Some(Self::ListServersResponse),
+            0x22 => Some(Self::AddServer),
+            0x23 => Some(Self::AddServerResponse),
+            0x24 => Some(Self::RemoveServer),
+            0x25 => Some(Self::RemoveServerResponse),
+            0x26 => Some(Self::ReloadConfig),
+            0x27 => Some(Self::ReloadConfigResponse),
+            0x28 => Some(Self::ServerInfo),
+            0x29 => Some(Self::ServerInfoResponse),
             _ => None,
         }
     }
@@ -239,6 +261,9 @@ pub struct CreateSessionMsg {
     pub cols: u16,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Target server for federation routing (None = local).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<String>,
 }
 
 /// Server → Client: response after session creation.
@@ -309,7 +334,11 @@ pub struct ErrorMsg {
 
 /// Client → Server: request to list all sessions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ListSessionsMsg {}
+pub struct ListSessionsMsg {
+    /// Target server for federation routing (None = aggregate all).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<String>,
+}
 
 /// Server → Client: response with the list of sessions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -338,6 +367,9 @@ pub struct SessionInfoMsg {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KillSessionMsg {
     pub name: String,
+    /// Target server for federation routing (None = local).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<String>,
 }
 
 /// Server → Client: confirmation that a session was killed.
@@ -350,6 +382,9 @@ pub struct KillSessionResponseMsg {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DetachSessionMsg {
     pub name: String,
+    /// Target server for federation routing (None = local).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<String>,
 }
 
 /// Server → Client: confirmation that a session was detached.
@@ -376,6 +411,9 @@ pub struct ManageTagsMsg {
     pub add: Vec<String>,
     #[serde(default)]
     pub remove: Vec<String>,
+    /// Target server for federation routing (None = local).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<String>,
 }
 
 /// Server → Client: response with the current tags after management.
@@ -391,6 +429,75 @@ pub struct ShutdownServerMsg {}
 /// Server → Client: acknowledgment before shutdown.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShutdownServerResponseMsg {}
+
+// ── Federation / server management messages ────────────────────────
+
+/// Client → Server: request to list all servers in the federation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListServersMsg {}
+
+/// Server → Client: response with the list of servers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListServersResponseMsg {
+    pub servers: Vec<ServerInfoEntry>,
+}
+
+/// Info about a single server in the federation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerInfoEntry {
+    pub hostname: Option<String>,
+    pub address: String,
+    pub health: String,
+    pub role: String,
+    #[serde(default)]
+    pub sessions: Option<usize>,
+}
+
+/// Client → Server: request to add a backend server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddServerMsg {
+    pub address: String,
+    pub token: Option<String>,
+}
+
+/// Server → Client: response after adding a backend server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddServerResponseMsg {
+    pub address: String,
+    pub health: String,
+}
+
+/// Client → Server: request to remove a backend server by hostname.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoveServerMsg {
+    pub hostname: String,
+}
+
+/// Server → Client: confirmation that a backend server was removed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoveServerResponseMsg {}
+
+/// Client → Server: request to reload federation config from file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReloadConfigMsg {}
+
+/// Server → Client: response after reloading federation config.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReloadConfigResponseMsg {
+    pub added: usize,
+    pub removed: usize,
+}
+
+/// Client → Server: request for server identity info.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerInfoMsg {}
+
+/// Server → Client: response with server identity info.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerInfoResponseMsg {
+    pub hostname: String,
+    pub version: String,
+}
 
 /// Server → Client: full overlay state sync.
 ///
@@ -468,6 +575,16 @@ mod tests {
             FrameType::ShutdownServerResponse,
             FrameType::Ping,
             FrameType::Pong,
+            FrameType::ListServers,
+            FrameType::ListServersResponse,
+            FrameType::AddServer,
+            FrameType::AddServerResponse,
+            FrameType::RemoveServer,
+            FrameType::RemoveServerResponse,
+            FrameType::ReloadConfig,
+            FrameType::ReloadConfigResponse,
+            FrameType::ServerInfo,
+            FrameType::ServerInfoResponse,
         ];
         for ft in types {
             let byte = ft as u8;
@@ -576,6 +693,7 @@ mod tests {
             rows: 24,
             cols: 80,
             tags: vec![],
+            server: None,
         };
         let frame = Frame::control(FrameType::CreateSession, &msg).unwrap();
         assert_eq!(frame.frame_type, FrameType::CreateSession);
@@ -724,11 +842,11 @@ mod tests {
 
     #[test]
     fn control_frame_list_sessions() {
-        let msg = ListSessionsMsg {};
+        let msg = ListSessionsMsg { server: None };
         let frame = Frame::control(FrameType::ListSessions, &msg).unwrap();
         assert_eq!(frame.frame_type, FrameType::ListSessions);
         let decoded: ListSessionsMsg = frame.parse_json().unwrap();
-        let _ = decoded; // empty struct, just verify deserialization
+        assert!(decoded.server.is_none());
     }
 
     #[test]
@@ -782,7 +900,7 @@ mod tests {
 
     #[test]
     fn control_frame_kill_session() {
-        let msg = KillSessionMsg { name: "my-session".to_string() };
+        let msg = KillSessionMsg { name: "my-session".to_string(), server: None };
         let frame = Frame::control(FrameType::KillSession, &msg).unwrap();
         let decoded: KillSessionMsg = frame.parse_json().unwrap();
         assert_eq!(decoded.name, "my-session");
@@ -798,7 +916,7 @@ mod tests {
 
     #[test]
     fn control_frame_detach_session() {
-        let msg = DetachSessionMsg { name: "my-session".to_string() };
+        let msg = DetachSessionMsg { name: "my-session".to_string(), server: None };
         let frame = Frame::control(FrameType::DetachSession, &msg).unwrap();
         let decoded: DetachSessionMsg = frame.parse_json().unwrap();
         assert_eq!(decoded.name, "my-session");
@@ -845,6 +963,7 @@ mod tests {
             session: "my-session".to_string(),
             add: vec!["build".to_string(), "ci".to_string()],
             remove: vec!["old-tag".to_string()],
+            server: None,
         };
         let frame = Frame::control(FrameType::ManageTags, &msg).unwrap();
         assert_eq!(frame.frame_type, FrameType::ManageTags);
@@ -866,11 +985,214 @@ mod tests {
 
     #[test]
     fn control_frame_manage_tags_defaults() {
-        // Verify serde defaults work for add/remove
+        // Verify serde defaults work for add/remove and server
         let json = serde_json::json!({"session": "s1"});
         let msg: ManageTagsMsg = serde_json::from_value(json).unwrap();
         assert_eq!(msg.session, "s1");
         assert!(msg.add.is_empty());
         assert!(msg.remove.is_empty());
+        assert!(msg.server.is_none());
+    }
+
+    // ── Federation / server management frame tests ─────────────────
+
+    #[test]
+    fn control_frame_list_servers() {
+        let msg = ListServersMsg {};
+        let frame = Frame::control(FrameType::ListServers, &msg).unwrap();
+        assert_eq!(frame.frame_type, FrameType::ListServers);
+        let _decoded: ListServersMsg = frame.parse_json().unwrap();
+    }
+
+    #[test]
+    fn control_frame_list_servers_response() {
+        let msg = ListServersResponseMsg {
+            servers: vec![
+                ServerInfoEntry {
+                    hostname: Some("prod-1".to_string()),
+                    address: "10.0.1.10:8080".to_string(),
+                    health: "healthy".to_string(),
+                    role: "member".to_string(),
+                    sessions: Some(3),
+                },
+                ServerInfoEntry {
+                    hostname: None,
+                    address: "10.0.1.11:8080".to_string(),
+                    health: "connecting".to_string(),
+                    role: "member".to_string(),
+                    sessions: None,
+                },
+            ],
+        };
+        let frame = Frame::control(FrameType::ListServersResponse, &msg).unwrap();
+        let decoded: ListServersResponseMsg = frame.parse_json().unwrap();
+        assert_eq!(decoded.servers.len(), 2);
+        assert_eq!(decoded.servers[0].hostname, Some("prod-1".to_string()));
+        assert_eq!(decoded.servers[0].address, "10.0.1.10:8080");
+        assert_eq!(decoded.servers[0].health, "healthy");
+        assert_eq!(decoded.servers[0].sessions, Some(3));
+        assert_eq!(decoded.servers[1].hostname, None);
+        assert_eq!(decoded.servers[1].sessions, None);
+    }
+
+    #[test]
+    fn control_frame_list_servers_response_empty() {
+        let msg = ListServersResponseMsg { servers: vec![] };
+        let frame = Frame::control(FrameType::ListServersResponse, &msg).unwrap();
+        let decoded: ListServersResponseMsg = frame.parse_json().unwrap();
+        assert!(decoded.servers.is_empty());
+    }
+
+    #[test]
+    fn control_frame_add_server() {
+        let msg = AddServerMsg {
+            address: "10.0.1.10:8080".to_string(),
+            token: Some("secret".to_string()),
+        };
+        let frame = Frame::control(FrameType::AddServer, &msg).unwrap();
+        let decoded: AddServerMsg = frame.parse_json().unwrap();
+        assert_eq!(decoded.address, "10.0.1.10:8080");
+        assert_eq!(decoded.token, Some("secret".to_string()));
+    }
+
+    #[test]
+    fn control_frame_add_server_no_token() {
+        let msg = AddServerMsg {
+            address: "10.0.1.10:8080".to_string(),
+            token: None,
+        };
+        let frame = Frame::control(FrameType::AddServer, &msg).unwrap();
+        let decoded: AddServerMsg = frame.parse_json().unwrap();
+        assert_eq!(decoded.address, "10.0.1.10:8080");
+        assert_eq!(decoded.token, None);
+    }
+
+    #[test]
+    fn control_frame_add_server_response() {
+        let msg = AddServerResponseMsg {
+            address: "10.0.1.10:8080".to_string(),
+            health: "connecting".to_string(),
+        };
+        let frame = Frame::control(FrameType::AddServerResponse, &msg).unwrap();
+        let decoded: AddServerResponseMsg = frame.parse_json().unwrap();
+        assert_eq!(decoded.address, "10.0.1.10:8080");
+        assert_eq!(decoded.health, "connecting");
+    }
+
+    #[test]
+    fn control_frame_remove_server() {
+        let msg = RemoveServerMsg {
+            hostname: "prod-1".to_string(),
+        };
+        let frame = Frame::control(FrameType::RemoveServer, &msg).unwrap();
+        let decoded: RemoveServerMsg = frame.parse_json().unwrap();
+        assert_eq!(decoded.hostname, "prod-1");
+    }
+
+    #[test]
+    fn control_frame_remove_server_response() {
+        let msg = RemoveServerResponseMsg {};
+        let frame = Frame::control(FrameType::RemoveServerResponse, &msg).unwrap();
+        let _decoded: RemoveServerResponseMsg = frame.parse_json().unwrap();
+    }
+
+    #[test]
+    fn control_frame_reload_config() {
+        let msg = ReloadConfigMsg {};
+        let frame = Frame::control(FrameType::ReloadConfig, &msg).unwrap();
+        let _decoded: ReloadConfigMsg = frame.parse_json().unwrap();
+    }
+
+    #[test]
+    fn control_frame_reload_config_response() {
+        let msg = ReloadConfigResponseMsg {
+            added: 2,
+            removed: 1,
+        };
+        let frame = Frame::control(FrameType::ReloadConfigResponse, &msg).unwrap();
+        let decoded: ReloadConfigResponseMsg = frame.parse_json().unwrap();
+        assert_eq!(decoded.added, 2);
+        assert_eq!(decoded.removed, 1);
+    }
+
+    #[test]
+    fn control_frame_server_info() {
+        let msg = ServerInfoMsg {};
+        let frame = Frame::control(FrameType::ServerInfo, &msg).unwrap();
+        let _decoded: ServerInfoMsg = frame.parse_json().unwrap();
+    }
+
+    #[test]
+    fn control_frame_server_info_response() {
+        let msg = ServerInfoResponseMsg {
+            hostname: "my-host".to_string(),
+            version: "0.1.0".to_string(),
+        };
+        let frame = Frame::control(FrameType::ServerInfoResponse, &msg).unwrap();
+        let decoded: ServerInfoResponseMsg = frame.parse_json().unwrap();
+        assert_eq!(decoded.hostname, "my-host");
+        assert_eq!(decoded.version, "0.1.0");
+    }
+
+    #[test]
+    fn create_session_msg_server_field_default() {
+        // Verify serde default for the server field
+        let json = serde_json::json!({"rows": 24, "cols": 80});
+        let msg: CreateSessionMsg = serde_json::from_value(json).unwrap();
+        assert!(msg.server.is_none());
+    }
+
+    #[test]
+    fn create_session_msg_server_field_set() {
+        let json = serde_json::json!({"rows": 24, "cols": 80, "server": "prod-1"});
+        let msg: CreateSessionMsg = serde_json::from_value(json).unwrap();
+        assert_eq!(msg.server.as_deref(), Some("prod-1"));
+    }
+
+    #[test]
+    fn kill_session_msg_server_field_default() {
+        let json = serde_json::json!({"name": "s1"});
+        let msg: KillSessionMsg = serde_json::from_value(json).unwrap();
+        assert!(msg.server.is_none());
+    }
+
+    #[test]
+    fn detach_session_msg_server_field_default() {
+        let json = serde_json::json!({"name": "s1"});
+        let msg: DetachSessionMsg = serde_json::from_value(json).unwrap();
+        assert!(msg.server.is_none());
+    }
+
+    #[test]
+    fn list_sessions_msg_server_field_default() {
+        let json = serde_json::json!({});
+        let msg: ListSessionsMsg = serde_json::from_value(json).unwrap();
+        assert!(msg.server.is_none());
+    }
+
+    #[test]
+    fn list_sessions_msg_server_field_set() {
+        let json = serde_json::json!({"server": "prod-2"});
+        let msg: ListSessionsMsg = serde_json::from_value(json).unwrap();
+        assert_eq!(msg.server.as_deref(), Some("prod-2"));
+    }
+
+    #[tokio::test]
+    async fn federation_frame_async_round_trip() {
+        let msg = AddServerMsg {
+            address: "10.0.1.10:8080".to_string(),
+            token: Some("tok".to_string()),
+        };
+        let frame = Frame::control(FrameType::AddServer, &msg).unwrap();
+
+        let mut buf = Vec::new();
+        frame.write_to(&mut buf).await.unwrap();
+
+        let mut cursor = io::Cursor::new(buf);
+        let decoded = Frame::read_from(&mut cursor).await.unwrap();
+        assert_eq!(decoded.frame_type, FrameType::AddServer);
+        let decoded_msg: AddServerMsg = decoded.parse_json().unwrap();
+        assert_eq!(decoded_msg.address, "10.0.1.10:8080");
+        assert_eq!(decoded_msg.token, Some("tok".to_string()));
     }
 }

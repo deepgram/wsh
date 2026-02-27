@@ -1149,6 +1149,7 @@ async fn run_default(cli: Cli) -> Result<(), WshError> {
         rows,
         cols,
         tags: cli.tags.clone(),
+        server: None,
     };
 
     let resp = c.create_session(msg).await.map_err(|e| {
