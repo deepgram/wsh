@@ -439,6 +439,13 @@ async fn run_server(
 
     let socket_token = token.clone();
     let socket_hostname = state.hostname.clone();
+    let socket_fed_state = server::FederationState {
+        federation: state.federation.clone(),
+        backends: state.backends.clone(),
+        config_path: state.federation_config_path.clone(),
+        local_token: state.local_token.clone(),
+        default_backend_token: state.default_backend_token.clone(),
+    };
     let app = api::router(state, api::RouterConfig { token, bind, cors_origins, rate_limit });
 
     // Cancellation token for HTTP server shutdown (supports multiple listeners)
@@ -508,7 +515,7 @@ async fn run_server(
     let shutdown_request = tokio_util::sync::CancellationToken::new();
     let shutdown_request_clone = shutdown_request.clone();
     let socket_handle = tokio::spawn(async move {
-        if let Err(e) = server::serve(socket_sessions, &socket_path, socket_cancel_clone, socket_token, shutdown_request_clone, socket_hostname).await {
+        if let Err(e) = server::serve(socket_sessions, &socket_path, socket_cancel_clone, socket_token, shutdown_request_clone, socket_hostname, socket_fed_state).await {
             tracing::error!(?e, "Unix socket server error");
         }
     });

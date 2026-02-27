@@ -9,11 +9,14 @@ use bytes::Bytes;
 use std::fs::File;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::UnixListener;
 use tracing;
 
+use crate::federation::manager::FederationManager;
+use crate::federation::registry::{BackendEntry, BackendHealth, BackendRegistry};
 use crate::panel::layout::compute_layout;
 use crate::protocol::*;
 use crate::pty::SpawnCommand;
@@ -54,6 +57,30 @@ pub fn acquire_instance_lock(lock_path: &Path) -> io::Result<File> {
 ///
 /// Runs until the `cancel` token is cancelled, then stops accepting new
 /// connections but lets in-flight handlers finish (they exit when sessions drain).
+/// Additional federation state passed into the socket server.
+///
+/// Grouped to avoid bloating function signatures further.
+#[derive(Clone)]
+pub struct FederationState {
+    pub federation: Arc<tokio::sync::Mutex<FederationManager>>,
+    pub backends: BackendRegistry,
+    pub config_path: Option<PathBuf>,
+    pub local_token: Option<String>,
+    pub default_backend_token: Option<String>,
+}
+
+impl Default for FederationState {
+    fn default() -> Self {
+        Self {
+            federation: Arc::new(tokio::sync::Mutex::new(FederationManager::new())),
+            backends: BackendRegistry::new(),
+            config_path: None,
+            local_token: None,
+            default_backend_token: None,
+        }
+    }
+}
+
 pub async fn serve(
     sessions: SessionRegistry,
     socket_path: &Path,
@@ -61,6 +88,7 @@ pub async fn serve(
     token: Option<String>,
     shutdown_request: tokio_util::sync::CancellationToken,
     hostname: String,
+    federation_state: FederationState,
 ) -> io::Result<()> {
     // Remove stale socket file if it exists. When used with
     // acquire_instance_lock(), the caller has already proven exclusive
@@ -98,8 +126,9 @@ pub async fn serve(
                         let token = token.clone();
                         let shutdown_request = shutdown_request.clone();
                         let hostname = hostname.clone();
+                        let fed_state = federation_state.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = handle_client(stream, sessions, token, shutdown_request, hostname).await {
+                            if let Err(e) = handle_client(stream, sessions, token, shutdown_request, hostname, fed_state).await {
                                 tracing::debug!(?e, "client connection ended");
                             }
                         });
@@ -162,6 +191,101 @@ fn whoami() -> String {
         .unwrap_or_else(|_| "unknown".to_string())
 }
 
+/// Resolve a target server name to a remote backend, or None if it's local.
+///
+/// Returns `Ok(None)` if the server is local (None, or matches hostname).
+/// Returns `Ok(Some(backend))` if the server names a healthy remote backend.
+/// Returns `Err(ErrorMsg)` if the backend is unknown or unhealthy.
+fn resolve_remote_target(
+    server: Option<&str>,
+    hostname: &str,
+    fed_state: &FederationState,
+) -> Result<Option<BackendEntry>, ErrorMsg> {
+    match server {
+        None => Ok(None),
+        Some(s) if s == hostname => Ok(None),
+        Some(s) => {
+            let backend = fed_state.backends.get_by_hostname(s).ok_or_else(|| ErrorMsg {
+                code: "server_not_found".to_string(),
+                message: format!("no backend with hostname: {}", s),
+            })?;
+            if backend.health != BackendHealth::Healthy {
+                return Err(ErrorMsg {
+                    code: "server_unavailable".to_string(),
+                    message: format!("backend {} is {:?}", s, backend.health),
+                });
+            }
+            Ok(Some(backend))
+        }
+    }
+}
+
+/// Timeouts for proxy HTTP requests from the socket server.
+const PROXY_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const PROXY_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Make a GET request to a remote backend and return the response body.
+async fn proxy_get(backend: &BackendEntry, path: &str) -> Result<serde_json::Value, String> {
+    let url = format!("http://{}{}", backend.address, path);
+    let client = reqwest::Client::builder()
+        .connect_timeout(PROXY_CONNECT_TIMEOUT)
+        .timeout(PROXY_REQUEST_TIMEOUT)
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut req = client.get(&url);
+    if let Some(ref token) = backend.token {
+        req = req.bearer_auth(token);
+    }
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+    resp.json().await.map_err(|e| e.to_string())
+}
+
+/// Make a POST request with JSON body to a remote backend and return the response body.
+async fn proxy_post(
+    backend: &BackendEntry,
+    path: &str,
+    body: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let url = format!("http://{}{}", backend.address, path);
+    let client = reqwest::Client::builder()
+        .connect_timeout(PROXY_CONNECT_TIMEOUT)
+        .timeout(PROXY_REQUEST_TIMEOUT)
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut req = client.post(&url).json(&body);
+    if let Some(ref token) = backend.token {
+        req = req.bearer_auth(token);
+    }
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+    resp.json().await.map_err(|e| e.to_string())
+}
+
+/// Make a DELETE request to a remote backend and return the response body.
+async fn proxy_delete(backend: &BackendEntry, path: &str) -> Result<serde_json::Value, String> {
+    let url = format!("http://{}{}", backend.address, path);
+    let client = reqwest::Client::builder()
+        .connect_timeout(PROXY_CONNECT_TIMEOUT)
+        .timeout(PROXY_REQUEST_TIMEOUT)
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut req = client.delete(&url);
+    if let Some(ref token) = backend.token {
+        req = req.bearer_auth(token);
+    }
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+    resp.json().await.map_err(|e| e.to_string())
+}
+
+/// Send an error frame to the stream.
+async fn send_error_frame<S: AsyncWrite + Unpin>(
+    stream: &mut S,
+    err: ErrorMsg,
+) -> io::Result<()> {
+    let frame = Frame::control(FrameType::Error, &err).map_err(io::Error::other)?;
+    frame.write_to(stream).await?;
+    Err(io::Error::new(io::ErrorKind::Other, err.message))
+}
+
 /// Handle a single client connection.
 async fn handle_client<S: AsyncRead + AsyncWrite + Unpin>(
     mut stream: S,
@@ -169,6 +293,7 @@ async fn handle_client<S: AsyncRead + AsyncWrite + Unpin>(
     token: Option<String>,
     shutdown_request: tokio_util::sync::CancellationToken,
     hostname: String,
+    federation_state: FederationState,
 ) -> io::Result<()> {
     // Read initial control frame (with timeout to reject idle connections)
     let frame = tokio::time::timeout(
@@ -184,7 +309,13 @@ async fn handle_client<S: AsyncRead + AsyncWrite + Unpin>(
             let msg: CreateSessionMsg = frame.parse_json().map_err(|e| {
                 io::Error::new(io::ErrorKind::InvalidData, e)
             })?;
-            handle_create_session(&mut stream, sessions, msg, &hostname).await
+            match resolve_remote_target(msg.server.as_deref(), &hostname, &federation_state) {
+                Ok(None) => handle_create_session(&mut stream, sessions, msg, &hostname).await,
+                Ok(Some(backend)) => {
+                    proxy_create_session(&mut stream, &backend, &msg).await
+                }
+                Err(err) => send_error_frame(&mut stream, err).await,
+            }
         }
         FrameType::AttachSession => {
             let msg: AttachSessionMsg = frame.parse_json().map_err(|e| {
@@ -193,19 +324,43 @@ async fn handle_client<S: AsyncRead + AsyncWrite + Unpin>(
             handle_attach_session(&mut stream, sessions, msg).await
         }
         FrameType::ListSessions => {
-            handle_list_sessions(&mut stream, sessions, &hostname).await
+            let msg: ListSessionsMsg = frame.parse_json().map_err(|e| {
+                io::Error::new(io::ErrorKind::InvalidData, e)
+            })?;
+            match resolve_remote_target(msg.server.as_deref(), &hostname, &federation_state) {
+                Ok(None) => {
+                    // No specific server: aggregate from local + all healthy backends
+                    handle_list_sessions_aggregated(&mut stream, sessions, &hostname, &federation_state).await
+                }
+                Ok(Some(backend)) => {
+                    proxy_list_sessions(&mut stream, &backend).await
+                }
+                Err(err) => send_error_frame(&mut stream, err).await,
+            }
         }
         FrameType::KillSession => {
             let msg: KillSessionMsg = frame.parse_json().map_err(|e| {
                 io::Error::new(io::ErrorKind::InvalidData, e)
             })?;
-            handle_kill_session(&mut stream, sessions, msg).await
+            match resolve_remote_target(msg.server.as_deref(), &hostname, &federation_state) {
+                Ok(None) => handle_kill_session(&mut stream, sessions, msg).await,
+                Ok(Some(backend)) => {
+                    proxy_kill_session(&mut stream, &backend, &msg.name).await
+                }
+                Err(err) => send_error_frame(&mut stream, err).await,
+            }
         }
         FrameType::DetachSession => {
             let msg: DetachSessionMsg = frame.parse_json().map_err(|e| {
                 io::Error::new(io::ErrorKind::InvalidData, e)
             })?;
-            handle_detach_session(&mut stream, sessions, msg).await
+            match resolve_remote_target(msg.server.as_deref(), &hostname, &federation_state) {
+                Ok(None) => handle_detach_session(&mut stream, sessions, msg).await,
+                Ok(Some(backend)) => {
+                    proxy_detach_session(&mut stream, &backend, &msg.name).await
+                }
+                Err(err) => send_error_frame(&mut stream, err).await,
+            }
         }
         FrameType::GetToken => {
             handle_get_token(&mut stream, token).await
@@ -214,16 +369,45 @@ async fn handle_client<S: AsyncRead + AsyncWrite + Unpin>(
             let msg: ManageTagsMsg = frame.parse_json().map_err(|e| {
                 io::Error::new(io::ErrorKind::InvalidData, e)
             })?;
-            handle_manage_tags(&mut stream, sessions, msg).await
+            match resolve_remote_target(msg.server.as_deref(), &hostname, &federation_state) {
+                Ok(None) => handle_manage_tags(&mut stream, sessions, msg).await,
+                Ok(Some(backend)) => {
+                    proxy_manage_tags(&mut stream, &backend, &msg).await
+                }
+                Err(err) => send_error_frame(&mut stream, err).await,
+            }
         }
         FrameType::ShutdownServer => {
             handle_shutdown_server(&mut stream, shutdown_request).await
+        }
+        FrameType::ListServers => {
+            handle_list_servers(&mut stream, sessions, &hostname, &federation_state).await
+        }
+        FrameType::AddServer => {
+            let msg: AddServerMsg = frame.parse_json().map_err(|e| {
+                io::Error::new(io::ErrorKind::InvalidData, e)
+            })?;
+            handle_add_server(&mut stream, msg, &federation_state).await
+        }
+        FrameType::RemoveServer => {
+            let msg: RemoveServerMsg = frame.parse_json().map_err(|e| {
+                io::Error::new(io::ErrorKind::InvalidData, e)
+            })?;
+            handle_remove_server(&mut stream, msg, &federation_state).await
+        }
+        FrameType::ReloadConfig => {
+            handle_reload_config(&mut stream, &federation_state).await
+        }
+        FrameType::ServerInfo => {
+            handle_server_info(&mut stream, &hostname).await
         }
         other => {
             let err = ErrorMsg {
                 code: "invalid_initial_frame".to_string(),
                 message: format!(
-                    "expected CreateSession, AttachSession, ListSessions, KillSession, DetachSession, GetToken, ManageTags, or ShutdownServer, got {:?}",
+                    "expected CreateSession, AttachSession, ListSessions, KillSession, \
+                     DetachSession, GetToken, ManageTags, ShutdownServer, ListServers, \
+                     AddServer, RemoveServer, ReloadConfig, or ServerInfo, got {:?}",
                     other
                 ),
             };
@@ -428,41 +612,6 @@ async fn handle_attach_session<S: AsyncRead + AsyncWrite + Unpin>(
     run_streaming(stream, &session).await
 }
 
-/// Handle a ListSessions request: return all session names and disconnect.
-async fn handle_list_sessions<S: AsyncRead + AsyncWrite + Unpin>(
-    stream: &mut S,
-    sessions: SessionRegistry,
-    hostname: &str,
-) -> io::Result<()> {
-    let names = sessions.list();
-    let resp = ListSessionsResponseMsg {
-        sessions: names
-            .into_iter()
-            .filter_map(|name| {
-                let session = sessions.get(&name)?;
-                let (rows, cols) = session.terminal_size.get();
-                let mut tags: Vec<String> = session.tags.read().iter().cloned().collect();
-                tags.sort();
-                Some(SessionInfoMsg {
-                    name,
-                    server: hostname.to_string(),
-                    pid: session.pid,
-                    command: session.command.clone(),
-                    rows,
-                    cols,
-                    clients: session.clients(),
-                    tags,
-                    last_activity_ms: session.activity.last_activity_ms(),
-                })
-            })
-            .collect(),
-    };
-    let resp_frame = Frame::control(FrameType::ListSessionsResponse, &resp)
-        .map_err(io::Error::other)?;
-    resp_frame.write_to(stream).await?;
-    Ok(())
-}
-
 /// Handle a KillSession request: remove the session or return an error.
 async fn handle_kill_session<S: AsyncRead + AsyncWrite + Unpin>(
     stream: &mut S,
@@ -615,6 +764,422 @@ async fn handle_shutdown_server<S: AsyncRead + AsyncWrite + Unpin>(
     tracing::info!("shutdown requested via socket, signaling server");
     shutdown_request.cancel();
     Ok(())
+}
+
+/// Handle a ListServers request: return all backends + self.
+async fn handle_list_servers<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: &mut S,
+    sessions: SessionRegistry,
+    hostname: &str,
+    fed_state: &FederationState,
+) -> io::Result<()> {
+    let mut servers = Vec::new();
+
+    // Add local server entry
+    servers.push(ServerInfoEntry {
+        hostname: Some(hostname.to_string()),
+        address: "local".to_string(),
+        health: "healthy".to_string(),
+        role: "member".to_string(),
+        sessions: Some(sessions.len()),
+    });
+
+    // Add all registered backends
+    for entry in fed_state.backends.list() {
+        servers.push(ServerInfoEntry {
+            hostname: entry.hostname,
+            address: entry.address,
+            health: format!("{:?}", entry.health).to_lowercase(),
+            role: format!("{:?}", entry.role).to_lowercase(),
+            sessions: None,
+        });
+    }
+
+    let resp = ListServersResponseMsg { servers };
+    let resp_frame = Frame::control(FrameType::ListServersResponse, &resp)
+        .map_err(io::Error::other)?;
+    resp_frame.write_to(stream).await?;
+    Ok(())
+}
+
+/// Handle an AddServer request: register a new backend.
+async fn handle_add_server<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: &mut S,
+    msg: AddServerMsg,
+    fed_state: &FederationState,
+) -> io::Result<()> {
+    let mut manager = fed_state.federation.lock().await;
+    match manager.add_backend(&msg.address, msg.token.as_deref()) {
+        Ok(()) => {
+            let resp = AddServerResponseMsg {
+                address: msg.address,
+                health: "connecting".to_string(),
+            };
+            let resp_frame = Frame::control(FrameType::AddServerResponse, &resp)
+                .map_err(io::Error::other)?;
+            resp_frame.write_to(stream).await?;
+            tracing::info!(address = %resp.address, "backend added via socket");
+            Ok(())
+        }
+        Err(e) => {
+            let err = ErrorMsg {
+                code: "add_server_failed".to_string(),
+                message: e.to_string(),
+            };
+            let err_frame = Frame::control(FrameType::Error, &err)
+                .map_err(io::Error::other)?;
+            err_frame.write_to(stream).await?;
+            Err(io::Error::new(io::ErrorKind::AlreadyExists, e.to_string()))
+        }
+    }
+}
+
+/// Handle a RemoveServer request: unregister a backend by hostname.
+async fn handle_remove_server<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: &mut S,
+    msg: RemoveServerMsg,
+    fed_state: &FederationState,
+) -> io::Result<()> {
+    let mut manager = fed_state.federation.lock().await;
+    if manager.remove_backend_by_hostname(&msg.hostname) {
+        let resp = RemoveServerResponseMsg {};
+        let resp_frame = Frame::control(FrameType::RemoveServerResponse, &resp)
+            .map_err(io::Error::other)?;
+        resp_frame.write_to(stream).await?;
+        tracing::info!(hostname = %msg.hostname, "backend removed via socket");
+        Ok(())
+    } else {
+        let err = ErrorMsg {
+            code: "server_not_found".to_string(),
+            message: format!("no backend with hostname: {}", msg.hostname),
+        };
+        let err_frame = Frame::control(FrameType::Error, &err)
+            .map_err(io::Error::other)?;
+        err_frame.write_to(stream).await?;
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("backend not found: {}", msg.hostname),
+        ))
+    }
+}
+
+/// Handle a ReloadConfig request: diff config file with current backends.
+async fn handle_reload_config<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: &mut S,
+    fed_state: &FederationState,
+) -> io::Result<()> {
+    let config_path = match &fed_state.config_path {
+        Some(p) => p.clone(),
+        None => {
+            let err = ErrorMsg {
+                code: "no_config".to_string(),
+                message: "no federation config file configured".to_string(),
+            };
+            let err_frame = Frame::control(FrameType::Error, &err)
+                .map_err(io::Error::other)?;
+            err_frame.write_to(stream).await?;
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "no config file path",
+            ));
+        }
+    };
+
+    let new_config = match crate::config::FederationConfig::load(&config_path) {
+        Ok(Some(c)) => c,
+        Ok(None) => {
+            let err = ErrorMsg {
+                code: "config_not_found".to_string(),
+                message: format!("config file not found: {}", config_path.display()),
+            };
+            let err_frame = Frame::control(FrameType::Error, &err)
+                .map_err(io::Error::other)?;
+            err_frame.write_to(stream).await?;
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "config file not found",
+            ));
+        }
+        Err(e) => {
+            let err = ErrorMsg {
+                code: "config_error".to_string(),
+                message: e.to_string(),
+            };
+            let err_frame = Frame::control(FrameType::Error, &err)
+                .map_err(io::Error::other)?;
+            err_frame.write_to(stream).await?;
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                e.to_string(),
+            ));
+        }
+    };
+
+    let mut manager = fed_state.federation.lock().await;
+    let current_backends = manager.registry().list();
+    let current_addresses: std::collections::HashSet<String> =
+        current_backends.iter().map(|b| b.address.clone()).collect();
+    let new_addresses: std::collections::HashSet<String> =
+        new_config.servers.iter().map(|s| s.address.clone()).collect();
+
+    // Add new backends
+    let mut added = 0usize;
+    for server_config in &new_config.servers {
+        if !current_addresses.contains(&server_config.address) {
+            if manager
+                .add_backend(&server_config.address, server_config.token.as_deref())
+                .is_ok()
+            {
+                added += 1;
+            }
+        }
+    }
+
+    // Remove backends no longer in config
+    let mut removed = 0usize;
+    for backend in &current_backends {
+        if !new_addresses.contains(&backend.address) {
+            if manager.remove_backend_by_address(&backend.address) {
+                removed += 1;
+            }
+        }
+    }
+
+    let resp = ReloadConfigResponseMsg { added, removed };
+    let resp_frame = Frame::control(FrameType::ReloadConfigResponse, &resp)
+        .map_err(io::Error::other)?;
+    resp_frame.write_to(stream).await?;
+    tracing::info!(added, removed, "federation config reloaded via socket");
+    Ok(())
+}
+
+/// Handle a ServerInfo request: return local hostname and version.
+async fn handle_server_info<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: &mut S,
+    hostname: &str,
+) -> io::Result<()> {
+    let resp = ServerInfoResponseMsg {
+        hostname: hostname.to_string(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+    };
+    let resp_frame = Frame::control(FrameType::ServerInfoResponse, &resp)
+        .map_err(io::Error::other)?;
+    resp_frame.write_to(stream).await?;
+    Ok(())
+}
+
+/// Aggregated ListSessions: local sessions + sessions from all healthy backends.
+async fn handle_list_sessions_aggregated<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: &mut S,
+    sessions: SessionRegistry,
+    hostname: &str,
+    fed_state: &FederationState,
+) -> io::Result<()> {
+    // Collect local sessions
+    let names = sessions.list();
+    let mut all_sessions: Vec<SessionInfoMsg> = names
+        .into_iter()
+        .filter_map(|name| {
+            let session = sessions.get(&name)?;
+            let (rows, cols) = session.terminal_size.get();
+            let mut tags: Vec<String> = session.tags.read().iter().cloned().collect();
+            tags.sort();
+            Some(SessionInfoMsg {
+                name,
+                server: hostname.to_string(),
+                pid: session.pid,
+                command: session.command.clone(),
+                rows,
+                cols,
+                clients: session.clients(),
+                tags,
+                last_activity_ms: session.activity.last_activity_ms(),
+            })
+        })
+        .collect();
+
+    // Fetch sessions from all healthy backends in parallel
+    let healthy_backends = fed_state.backends.healthy();
+    let mut join_set = tokio::task::JoinSet::new();
+    for backend in healthy_backends {
+        join_set.spawn(async move {
+            let result = proxy_get(&backend, "/sessions").await;
+            (backend.hostname.clone(), result)
+        });
+    }
+    while let Some(result) = join_set.join_next().await {
+        if let Ok((_hostname, Ok(body))) = result {
+            // Parse the backend's sessions response
+            if let Some(sessions_arr) = body.as_array() {
+                for session_val in sessions_arr {
+                    if let Ok(info) = serde_json::from_value::<SessionInfoMsg>(session_val.clone()) {
+                        all_sessions.push(info);
+                    }
+                }
+            }
+        }
+    }
+
+    let resp = ListSessionsResponseMsg { sessions: all_sessions };
+    let resp_frame = Frame::control(FrameType::ListSessionsResponse, &resp)
+        .map_err(io::Error::other)?;
+    resp_frame.write_to(stream).await?;
+    Ok(())
+}
+
+/// Proxy a CreateSession request to a remote backend.
+async fn proxy_create_session<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: &mut S,
+    backend: &BackendEntry,
+    msg: &CreateSessionMsg,
+) -> io::Result<()> {
+    let body = serde_json::json!({
+        "name": msg.name,
+        "command": msg.command,
+        "rows": msg.rows,
+        "cols": msg.cols,
+        "tags": msg.tags,
+    });
+    match proxy_post(backend, "/sessions", body).await {
+        Ok(resp_body) => {
+            // Forward the backend's response as a CreateSessionResponse
+            let name = resp_body["name"].as_str().unwrap_or("").to_string();
+            let server = resp_body["server"].as_str().unwrap_or("").to_string();
+            let pid = resp_body["pid"].as_u64().map(|p| p as u32);
+            let rows = resp_body["rows"].as_u64().unwrap_or(24) as u16;
+            let cols = resp_body["cols"].as_u64().unwrap_or(80) as u16;
+            let resp = CreateSessionResponseMsg { name, server, pid, rows, cols };
+            let resp_frame = Frame::control(FrameType::CreateSessionResponse, &resp)
+                .map_err(io::Error::other)?;
+            resp_frame.write_to(stream).await?;
+            Ok(())
+        }
+        Err(e) => {
+            let err = ErrorMsg {
+                code: "proxy_error".to_string(),
+                message: format!("failed to proxy create session: {}", e),
+            };
+            send_error_frame(stream, err).await
+        }
+    }
+}
+
+/// Proxy a ListSessions request to a specific remote backend.
+async fn proxy_list_sessions<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: &mut S,
+    backend: &BackendEntry,
+) -> io::Result<()> {
+    match proxy_get(backend, "/sessions").await {
+        Ok(body) => {
+            let mut sessions = Vec::new();
+            if let Some(arr) = body.as_array() {
+                for val in arr {
+                    if let Ok(info) = serde_json::from_value::<SessionInfoMsg>(val.clone()) {
+                        sessions.push(info);
+                    }
+                }
+            }
+            let resp = ListSessionsResponseMsg { sessions };
+            let resp_frame = Frame::control(FrameType::ListSessionsResponse, &resp)
+                .map_err(io::Error::other)?;
+            resp_frame.write_to(stream).await?;
+            Ok(())
+        }
+        Err(e) => {
+            let err = ErrorMsg {
+                code: "proxy_error".to_string(),
+                message: format!("failed to proxy list sessions: {}", e),
+            };
+            send_error_frame(stream, err).await
+        }
+    }
+}
+
+/// Proxy a KillSession request to a remote backend.
+async fn proxy_kill_session<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: &mut S,
+    backend: &BackendEntry,
+    name: &str,
+) -> io::Result<()> {
+    let path = format!("/sessions/{}", name);
+    match proxy_delete(backend, &path).await {
+        Ok(_) => {
+            let resp = KillSessionResponseMsg { name: name.to_string() };
+            let resp_frame = Frame::control(FrameType::KillSessionResponse, &resp)
+                .map_err(io::Error::other)?;
+            resp_frame.write_to(stream).await?;
+            Ok(())
+        }
+        Err(e) => {
+            let err = ErrorMsg {
+                code: "proxy_error".to_string(),
+                message: format!("failed to proxy kill session: {}", e),
+            };
+            send_error_frame(stream, err).await
+        }
+    }
+}
+
+/// Proxy a DetachSession request to a remote backend.
+async fn proxy_detach_session<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: &mut S,
+    backend: &BackendEntry,
+    name: &str,
+) -> io::Result<()> {
+    let path = format!("/sessions/{}/detach", name);
+    match proxy_post(backend, &path, serde_json::json!({})).await {
+        Ok(_) => {
+            let resp = DetachSessionResponseMsg { name: name.to_string() };
+            let resp_frame = Frame::control(FrameType::DetachSessionResponse, &resp)
+                .map_err(io::Error::other)?;
+            resp_frame.write_to(stream).await?;
+            Ok(())
+        }
+        Err(e) => {
+            let err = ErrorMsg {
+                code: "proxy_error".to_string(),
+                message: format!("failed to proxy detach session: {}", e),
+            };
+            send_error_frame(stream, err).await
+        }
+    }
+}
+
+/// Proxy a ManageTags request to a remote backend.
+async fn proxy_manage_tags<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: &mut S,
+    backend: &BackendEntry,
+    msg: &ManageTagsMsg,
+) -> io::Result<()> {
+    let path = format!("/sessions/{}/tags", msg.session);
+    let body = serde_json::json!({
+        "add": msg.add,
+        "remove": msg.remove,
+    });
+    match proxy_post(backend, &path, body).await {
+        Ok(resp_body) => {
+            let tags: Vec<String> = resp_body["tags"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let resp = ManageTagsResponseMsg { tags };
+            let resp_frame = Frame::control(FrameType::ManageTagsResponse, &resp)
+                .map_err(io::Error::other)?;
+            resp_frame.write_to(stream).await?;
+            Ok(())
+        }
+        Err(e) => {
+            let err = ErrorMsg {
+                code: "proxy_error".to_string(),
+                message: format!("failed to proxy manage tags: {}", e),
+            };
+            send_error_frame(stream, err).await
+        }
+    }
 }
 
 /// Send initial overlay and panel state to a newly connected client.
@@ -955,7 +1520,7 @@ mod tests {
         let cancel = tokio_util::sync::CancellationToken::new();
         let shutdown_request = tokio_util::sync::CancellationToken::new();
         tokio::spawn(async move {
-            serve(sessions, &socket_path, cancel, token, shutdown_request, "test".to_string()).await.unwrap();
+            serve(sessions, &socket_path, cancel, token, shutdown_request, "test".to_string(), FederationState::default()).await.unwrap();
         });
 
         // Wait for socket to appear

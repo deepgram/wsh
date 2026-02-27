@@ -28,7 +28,7 @@ async fn start_test_server() -> (PathBuf, SessionRegistry) {
     tokio::spawn(async move {
         let cancel = tokio_util::sync::CancellationToken::new();
         let shutdown_request = tokio_util::sync::CancellationToken::new();
-        wsh::server::serve(sessions_clone, &socket_path, cancel, None, shutdown_request, "test".to_string())
+        wsh::server::serve(sessions_clone, &socket_path, cancel, None, shutdown_request, "test".to_string(), wsh::server::FederationState::default())
             .await
             .unwrap();
     });
