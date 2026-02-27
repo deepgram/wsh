@@ -2,6 +2,7 @@ pub mod auth;
 pub mod error;
 mod handlers;
 pub mod origin;
+mod proxy;
 pub mod ticket;
 mod web;
 pub mod ws_methods;

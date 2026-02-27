@@ -1,7 +1,7 @@
 use axum::{
     extract::{
         ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade},
-        Path, State,
+        Path, Query as AxumQuery, State,
     },
     http::StatusCode,
     response::IntoResponse,
@@ -27,6 +27,51 @@ use crate::session::{RegistryError, Session};
 
 use super::error::ApiError;
 use super::{get_session, AppState};
+
+// ── Federation: ?server= query parameter support ──────────────────
+
+/// Query parameter for routing requests to a specific backend server.
+///
+/// When `?server=X` is present and X names a registered remote backend,
+/// the handler proxies the request to that backend. When omitted or
+/// matching the local hostname, the request is handled locally.
+#[derive(Deserialize, Default)]
+pub(super) struct ServerQuery {
+    pub server: Option<String>,
+}
+
+/// Resolved target for a session operation.
+pub(super) enum SessionTarget {
+    /// Handle the request on this server.
+    Local,
+    /// Proxy the request to a remote backend.
+    Remote(crate::federation::registry::BackendEntry),
+}
+
+/// Resolve whether a request targets local or remote.
+///
+/// - Omitted `?server=` ALWAYS means local (security: prevents TOCTOU).
+/// - `?server=` matching local hostname = local.
+/// - `?server=` naming a registered backend = remote (must be healthy).
+pub(super) fn resolve_server_target(
+    state: &AppState,
+    server_param: Option<&str>,
+) -> Result<SessionTarget, ApiError> {
+    match server_param {
+        None => Ok(SessionTarget::Local),
+        Some(server) if server == state.hostname => Ok(SessionTarget::Local),
+        Some(server) => {
+            let backend = state
+                .backends
+                .get_by_hostname(server)
+                .ok_or_else(|| ApiError::ServerNotFound(server.into()))?;
+            if backend.health != crate::federation::registry::BackendHealth::Healthy {
+                return Err(ApiError::ServerUnavailable(server.into()));
+            }
+            Ok(SessionTarget::Remote(backend))
+        }
+    }
+}
 
 /// WebSocket send timeout. If a send takes longer than this, the client is
 /// considered dead and the connection is closed. Kept short (5s) to minimize
@@ -84,21 +129,35 @@ pub(super) async fn ws_ticket(
 pub(super) async fn input(
     State(state): State<AppState>,
     Path(name): Path<String>,
+    AxumQuery(query): AxumQuery<ServerQuery>,
     body: Bytes,
 ) -> Result<StatusCode, ApiError> {
-    let session = get_session(&state.sessions, &name)?;
-    tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        session.input_tx.send(body),
-    )
-    .await
-    .map_err(|_| ApiError::InputSendFailed)?
-    .map_err(|e| {
-        tracing::error!("Failed to send input to PTY: {}", e);
-        ApiError::InputSendFailed
-    })?;
-    session.activity.touch();
-    Ok(StatusCode::NO_CONTENT)
+    match resolve_server_target(&state, query.server.as_deref())? {
+        SessionTarget::Local => {
+            let session = get_session(&state.sessions, &name)?;
+            tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                session.input_tx.send(body),
+            )
+            .await
+            .map_err(|_| ApiError::InputSendFailed)?
+            .map_err(|e| {
+                tracing::error!("Failed to send input to PTY: {}", e);
+                ApiError::InputSendFailed
+            })?;
+            session.activity.touch();
+            Ok(StatusCode::NO_CONTENT)
+        }
+        SessionTarget::Remote(backend) => {
+            let status = super::proxy::proxy_post_bytes(
+                &backend,
+                &format!("/sessions/{}/input", name),
+                body,
+            )
+            .await?;
+            Ok(status)
+        }
+    }
 }
 
 pub(super) async fn ws_raw(
@@ -2256,6 +2315,8 @@ pub(super) async fn idle_any(
 pub(super) struct ScreenQuery {
     #[serde(default)]
     format: Format,
+    /// Target a specific server in the federation.
+    server: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -2270,6 +2331,14 @@ pub(super) async fn screen(
     Path(name): Path<String>,
     axum::extract::Query(params): axum::extract::Query<ScreenQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
+    if let SessionTarget::Remote(backend) = resolve_server_target(&state, params.server.as_deref())? {
+        let mut path = format!("/sessions/{}/screen", name);
+        if matches!(params.format, Format::Plain) {
+            path.push_str("?format=plain");
+        }
+        let (status, body) = super::proxy::proxy_get(&backend, &path).await?;
+        return Ok((status, Json(body)).into_response());
+    }
     let session = get_session(&state.sessions, &name)?;
     let response = tokio::time::timeout(
         PARSER_QUERY_TIMEOUT,
@@ -2283,7 +2352,8 @@ pub(super) async fn screen(
     Ok(Json(EnrichedScreen {
         screen: response,
         last_activity_ms,
-    }))
+    })
+    .into_response())
 }
 
 #[derive(Deserialize)]
@@ -2294,6 +2364,8 @@ pub(super) struct ScrollbackQuery {
     offset: usize,
     #[serde(default = "default_limit")]
     limit: usize,
+    /// Target a specific server in the federation.
+    server: Option<String>,
 }
 
 fn default_limit() -> usize {
@@ -2305,6 +2377,17 @@ pub(super) async fn scrollback(
     Path(name): Path<String>,
     axum::extract::Query(params): axum::extract::Query<ScrollbackQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
+    if let SessionTarget::Remote(backend) = resolve_server_target(&state, params.server.as_deref())? {
+        let mut path = format!(
+            "/sessions/{}/scrollback?offset={}&limit={}",
+            name, params.offset, params.limit
+        );
+        if matches!(params.format, Format::Plain) {
+            path.push_str("&format=plain");
+        }
+        let (status, body) = super::proxy::proxy_get(&backend, &path).await?;
+        return Ok((status, Json(body)).into_response());
+    }
     let session = get_session(&state.sessions, &name)?;
     let limit = params.limit.min(10_000);
     let response = tokio::time::timeout(
@@ -2319,7 +2402,7 @@ pub(super) async fn scrollback(
     .map_err(|_| ApiError::ParserTimeout)?
     .map_err(|_| ApiError::ParserUnavailable)?;
 
-    Ok(Json(response))
+    Ok(Json(response).into_response())
 }
 
 
@@ -2801,7 +2884,7 @@ pub(super) async fn docs_index() -> impl IntoResponse {
 
 // ── Session management types ─────────────────────────────────────
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub(super) struct CreateSessionRequest {
     pub name: Option<String>,
     pub command: Option<String>,
@@ -2811,6 +2894,9 @@ pub(super) struct CreateSessionRequest {
     pub env: Option<std::collections::HashMap<String, String>>,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Target a specific server in the federation for session creation.
+    #[serde(default)]
+    pub server: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -2843,7 +2929,7 @@ fn build_session_info(session: &crate::session::Session, hostname: &str) -> Sess
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub(super) struct UpdateSessionRequest {
     /// New name for the session (optional, for rename)
     pub name: Option<String>,
@@ -2860,6 +2946,8 @@ pub(super) struct ListSessionsQuery {
     /// Comma-separated list of tags (e.g. `?tag=build,test`).
     #[serde(default)]
     pub tag: Option<String>,
+    /// Target a specific server, or omit to aggregate from all servers.
+    pub server: Option<String>,
 }
 
 // ── Session management handlers ──────────────────────────────────
@@ -2867,7 +2955,37 @@ pub(super) struct ListSessionsQuery {
 pub(super) async fn session_list(
     State(state): State<AppState>,
     axum::extract::Query(params): axum::extract::Query<ListSessionsQuery>,
-) -> Json<Vec<SessionInfo>> {
+) -> Result<impl IntoResponse, ApiError> {
+    // If ?server= names a specific remote backend, proxy to just that server.
+    // Note: We inline the server-target resolution here instead of using
+    // resolve_server_target() because session_list has special "aggregate all"
+    // semantics when ?server= is absent.
+    if let Some(ref server) = params.server {
+        if server != &state.hostname {
+            let backend = state
+                .backends
+                .get_by_hostname(server)
+                .ok_or_else(|| ApiError::ServerNotFound(server.clone()))?;
+            if backend.health != crate::federation::registry::BackendHealth::Healthy {
+                return Err(ApiError::ServerUnavailable(server.clone()));
+            }
+            let mut path = "/sessions".to_string();
+            if let Some(ref tag) = params.tag {
+                path.push_str(&format!("?tag={}", tag));
+            }
+            let (_, body) = super::proxy::proxy_get(&backend, &path).await?;
+            let sessions = body.as_array().cloned().unwrap_or_default();
+            return Ok(Json(sessions).into_response());
+        }
+    }
+
+    // Build the remote proxy path once (preserving tag filter for forwarding).
+    let remote_path = match params.tag {
+        Some(ref tag) => format!("/sessions?tag={}", tag),
+        None => "/sessions".to_string(),
+    };
+
+    // Collect local sessions.
     let tags: Vec<String> = params
         .tag
         .map(|t| t.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
@@ -2877,20 +2995,59 @@ pub(super) async fn session_list(
     } else {
         state.sessions.sessions_by_tags(&tags)
     };
-    let infos = names
+    let mut all_sessions: Vec<serde_json::Value> = names
         .into_iter()
         .filter_map(|name| {
             let session = state.sessions.get(&name)?;
-            Some(build_session_info(&session, &state.hostname))
+            serde_json::to_value(build_session_info(&session, &state.hostname)).ok()
         })
         .collect();
-    Json(infos)
+
+    // If no specific server filter, aggregate from all healthy backends.
+    // TODO: Query backends concurrently with join_all for better latency.
+    if params.server.is_none() {
+        for backend in state.backends.healthy() {
+            if let Ok((_, body)) = super::proxy::proxy_get(&backend, &remote_path).await {
+                if let Some(arr) = body.as_array() {
+                    all_sessions.extend(arr.iter().cloned());
+                }
+            }
+            // Silently skip backends that fail to respond.
+        }
+    }
+
+    Ok(Json(all_sessions).into_response())
 }
 
 pub(super) async fn session_create(
     State(state): State<AppState>,
     Json(req): Json<CreateSessionRequest>,
-) -> Result<(StatusCode, Json<SessionInfo>), ApiError> {
+) -> Result<impl IntoResponse, ApiError> {
+    // If server field names a remote backend, proxy the creation request.
+    // Note: We inline the server-target resolution here instead of using
+    // resolve_server_target() because the server field comes from the request
+    // body rather than a query parameter.
+    if let Some(ref server) = req.server {
+        if server != &state.hostname {
+            let backend = state
+                .backends
+                .get_by_hostname(server)
+                .ok_or_else(|| ApiError::ServerNotFound(server.clone()))?;
+            if backend.health != crate::federation::registry::BackendHealth::Healthy {
+                return Err(ApiError::ServerUnavailable(server.clone()));
+            }
+            // Strip the `server` field before forwarding to prevent proxy loops.
+            let mut body = serde_json::to_value(&req)
+                .map_err(|e| ApiError::InternalError(e.to_string()))?;
+            if let Some(obj) = body.as_object_mut() {
+                obj.remove("server");
+            }
+            let (status, resp_body) =
+                super::proxy::proxy_post(&backend, "/sessions", body).await?;
+            return Ok((status, Json(resp_body)).into_response());
+        }
+    }
+
     let req_name = req.name;
     let req_tags = req.tags;
     let command = match req.command {
@@ -2961,22 +3118,44 @@ pub(super) async fn session_create(
     Ok((
         StatusCode::CREATED,
         Json(build_session_info(&session, &state.hostname)),
-    ))
+    )
+        .into_response())
 }
 
 pub(super) async fn session_get(
     State(state): State<AppState>,
     Path(name): Path<String>,
-) -> Result<Json<SessionInfo>, ApiError> {
+    AxumQuery(query): AxumQuery<ServerQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    if let SessionTarget::Remote(backend) = resolve_server_target(&state, query.server.as_deref())? {
+        let (status, body) = super::proxy::proxy_get(
+            &backend,
+            &format!("/sessions/{}", name),
+        )
+        .await?;
+        return Ok((status, Json(body)).into_response());
+    }
     let session = get_session(&state.sessions, &name)?;
-    Ok(Json(build_session_info(&session, &state.hostname)))
+    Ok(Json(build_session_info(&session, &state.hostname)).into_response())
 }
 
 pub(super) async fn session_update(
     State(state): State<AppState>,
     Path(name): Path<String>,
+    AxumQuery(query): AxumQuery<ServerQuery>,
     Json(req): Json<UpdateSessionRequest>,
-) -> Result<Json<SessionInfo>, ApiError> {
+) -> Result<impl IntoResponse, ApiError> {
+    if let SessionTarget::Remote(backend) = resolve_server_target(&state, query.server.as_deref())? {
+        let body = serde_json::to_value(&req)
+            .map_err(|e| ApiError::InternalError(e.to_string()))?;
+        let (status, resp_body) = super::proxy::proxy_patch(
+            &backend,
+            &format!("/sessions/{}", name),
+            body,
+        )
+        .await?;
+        return Ok((status, Json(resp_body)).into_response());
+    }
     // Handle rename if requested
     let current_name = if let Some(new_name) = req.name {
         state.sessions.rename(&name, &new_name).map_err(|e| match e {
@@ -3009,13 +3188,22 @@ pub(super) async fn session_update(
     }
 
     let session = get_session(&state.sessions, &current_name)?;
-    Ok(Json(build_session_info(&session, &state.hostname)))
+    Ok(Json(build_session_info(&session, &state.hostname)).into_response())
 }
 
 pub(super) async fn session_kill(
     State(state): State<AppState>,
     Path(name): Path<String>,
+    AxumQuery(query): AxumQuery<ServerQuery>,
 ) -> Result<StatusCode, ApiError> {
+    if let SessionTarget::Remote(backend) = resolve_server_target(&state, query.server.as_deref())? {
+        let status = super::proxy::proxy_delete(
+            &backend,
+            &format!("/sessions/{}", name),
+        )
+        .await?;
+        return Ok(status);
+    }
     let session = state
         .sessions
         .remove(&name)
@@ -3027,7 +3215,17 @@ pub(super) async fn session_kill(
 pub(super) async fn session_detach(
     State(state): State<AppState>,
     Path(name): Path<String>,
+    AxumQuery(query): AxumQuery<ServerQuery>,
 ) -> Result<StatusCode, ApiError> {
+    if let SessionTarget::Remote(backend) = resolve_server_target(&state, query.server.as_deref())? {
+        let (status, _body) = super::proxy::proxy_post(
+            &backend,
+            &format!("/sessions/{}/detach", name),
+            serde_json::Value::Object(Default::default()),
+        )
+        .await?;
+        return Ok(status);
+    }
     let session = state
         .sessions
         .get(&name)
