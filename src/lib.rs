@@ -1,6 +1,7 @@
 pub mod activity;
 pub mod config;
 pub mod api;
+pub mod federation;
 pub mod broker;
 pub mod client;
 pub mod input;
