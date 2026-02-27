@@ -1,10 +1,10 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "preact/hooks";
 import { sessions, focusedSession, sessionInfoMap, sidebarCollapsed, setTheme, type Theme } from "../state/sessions";
-import { groups, selectedGroups, setViewModeForGroup } from "../state/groups";
+import { groups, selectedGroups, setViewModeForGroup, setGroupBy } from "../state/groups";
 import type { WshClient } from "../api/ws";
 
 interface PaletteItem {
-  type: "session" | "group" | "action";
+  type: "session" | "group" | "action" | "server";
   label: string;
   description?: string;
   shortcut?: string;
@@ -78,6 +78,26 @@ export function CommandPalette({ client, onClose }: CommandPaletteProps) {
         label: g.label,
         description: `${g.sessions.length} sessions`,
         action: () => { selectedGroups.value = [g.tag]; onClose(); },
+      });
+    }
+
+    // Servers — derive unique server list from session info
+    const serverCounts = new Map<string, number>();
+    for (const info of sessionInfoMap.value.values()) {
+      if (info.server) {
+        serverCounts.set(info.server, (serverCounts.get(info.server) || 0) + 1);
+      }
+    }
+    for (const [server, count] of Array.from(serverCounts.entries()).sort()) {
+      result.push({
+        type: "server",
+        label: `Go to server: ${server}`,
+        description: `${count} session${count !== 1 ? "s" : ""}`,
+        action: () => {
+          setGroupBy("server");
+          selectedGroups.value = [`server:${server}`];
+          onClose();
+        },
       });
     }
 
@@ -159,8 +179,8 @@ export function CommandPalette({ client, onClose }: CommandPaletteProps) {
       .filter((x) => x.score > 0)
       .sort((a, b) => {
         // Sort by type priority then score
-        const typePriority = { session: 0, group: 1, action: 2 };
-        const tp = typePriority[a.item.type] - typePriority[b.item.type];
+        const typePriority: Record<string, number> = { session: 0, group: 1, server: 2, action: 3 };
+        const tp = (typePriority[a.item.type] ?? 9) - (typePriority[b.item.type] ?? 9);
         if (tp !== 0) return tp;
         return b.score - a.score;
       })
@@ -226,7 +246,7 @@ export function CommandPalette({ client, onClose }: CommandPaletteProps) {
               aria-selected={i === selectedIndex}
             >
               <span class={`palette-type-badge palette-type-${item.type}`}>
-                {item.type === "session" ? "S" : item.type === "group" ? "G" : "A"}
+                {item.type === "session" ? "S" : item.type === "group" ? "G" : item.type === "server" ? "H" : "A"}
               </span>
               <div class="palette-item-text">
                 <span class="palette-item-label">{item.label}</span>

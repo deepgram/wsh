@@ -2124,6 +2124,11 @@ html, body, #app {
   color: #fbbf24;
 }
 
+.palette-type-server {
+  background: rgba(168, 85, 247, 0.15);
+  color: #a855f7;
+}
+
 .palette-item-text {
   display: flex;
   flex-direction: column;
