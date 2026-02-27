@@ -585,16 +585,18 @@ async fn run_server(
     let listener = tokio::net::TcpListener::bind(bind)
         .await
         .map_err(WshError::Io)?;
+    let actual_addr = listener.local_addr().map_err(WshError::Io)?;
     let scheme = if tls_acceptor.is_some() { "HTTPS/WSS" } else { "HTTP/WS" };
-    tracing::info!(addr = %bind, scheme, "server listening");
+    tracing::info!(addr = %actual_addr, scheme, "server listening");
 
     // When binding to IPv4 loopback, also listen on IPv6 loopback.
     // Browsers (especially Firefox) may resolve "localhost" to ::1 and
     // wait ~30-60s for a TCP timeout before falling back to 127.0.0.1.
+    // Use the actual IPv4 port (important when --bind uses port 0).
     let ipv6_listener = if bind.ip() == std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST) {
         let v6_addr = std::net::SocketAddr::new(
             std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST),
-            bind.port(),
+            actual_addr.port(),
         );
         match tokio::net::TcpListener::bind(v6_addr).await {
             Ok(l) => {

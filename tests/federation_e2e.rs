@@ -11,80 +11,73 @@
 //! The cross-server proxy test uses an in-process hub because the SSRF
 //! validation correctly blocks registering localhost backends via the HTTP API.
 //! In production, backends run on non-loopback addresses.
-//!
-//! Run with: `cargo test --test federation_e2e -- --ignored`
 
-use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(100);
-/// Parse the listening address from a wsh server's stderr output.
-/// The server prints a line like: `Listening on 127.0.0.1:XXXXX`
-fn parse_listen_address(child: &mut Child) -> String {
-    let stderr = child.stderr.take().expect("child should have stderr");
-    let reader = BufReader::new(stderr);
 
-    let deadline = std::time::Instant::now() + STARTUP_TIMEOUT;
-    for line in reader.lines() {
-        if std::time::Instant::now() > deadline {
-            break;
-        }
-        let line = line.expect("should read stderr line");
-        eprintln!("[server stderr] {}", line);
-        // Look for the listening address in the output.
-        // Format varies but typically includes the bind address.
-        if let Some(addr) = extract_address(&line) {
-            return addr;
-        }
-    }
-    panic!("failed to parse listen address from server output within timeout");
+/// Find an available port by briefly binding a TCP listener, then releasing it.
+fn find_available_port() -> u16 {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.local_addr().unwrap().port()
 }
 
-/// Try to extract a socket address from a log line.
-fn extract_address(line: &str) -> Option<String> {
-    // The server logs something like: `Listening on 127.0.0.1:12345`
-    // or the tracing output contains the address.
-    if line.contains("Listening on") || line.contains("listening on") {
-        // Find a pattern like 127.0.0.1:NNNNN
-        for word in line.split_whitespace() {
-            let word = word.trim_end_matches(|c: char| !c.is_ascii_digit());
-            if word.contains(':') {
-                let parts: Vec<&str> = word.split(':').collect();
-                if parts.len() == 2 {
-                    if parts[1].parse::<u16>().is_ok() {
-                        return Some(word.to_string());
-                    }
-                }
-            }
-        }
-    }
-    None
+/// A spawned wsh server process with its associated temp directory.
+///
+/// The temp directory holds the Unix socket and is kept alive for the
+/// lifetime of the server. Dropping this struct kills the server process.
+struct ServerProcess {
+    child: Child,
+    port: u16,
+    _socket_dir: tempfile::TempDir,
 }
 
-/// Spawns a wsh server with the given instance name.
-fn spawn_server(instance_name: &str) -> Child {
+impl ServerProcess {
+    fn addr(&self) -> String {
+        format!("127.0.0.1:{}", self.port)
+    }
+
+    fn base_url(&self) -> String {
+        format!("http://{}", self.addr())
+    }
+}
+
+impl Drop for ServerProcess {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Spawns a wsh server with the given instance name on a specific port.
+fn spawn_server(instance_name: &str, port: u16) -> ServerProcess {
     let socket_dir = tempfile::TempDir::new().unwrap();
     let socket_path = socket_dir.path().join("test.sock");
-    // Keep the TempDir alive for the duration of the server process.
-    let _socket_dir = socket_dir;
 
-    Command::new(env!("CARGO_BIN_EXE_wsh"))
+    // Note: we intentionally omit --ephemeral so the server stays alive for the
+    // entire test. ServerProcess::Drop kills the process when the test finishes.
+    let child = Command::new(env!("CARGO_BIN_EXE_wsh"))
         .arg("server")
         .arg("--bind")
-        .arg("127.0.0.1:0")
+        .arg(format!("127.0.0.1:{}", port))
         .arg("--socket")
         .arg(&socket_path)
         .arg("--server-name")
         .arg(instance_name)
-        .arg("--ephemeral")
         .arg("--hostname")
         .arg(instance_name)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
-        .expect("failed to spawn wsh server")
+        .expect("failed to spawn wsh server");
+
+    ServerProcess {
+        child,
+        port,
+        _socket_dir: socket_dir,
+    }
 }
 
 /// Wait for a server to be healthy by polling GET /health.
@@ -106,66 +99,42 @@ async fn wait_for_ready(addr: &str) -> Result<(), String> {
 
 // ── Test 1: Two independent servers start and are healthy ───────────
 
-#[ignore]
 #[tokio::test]
 async fn federation_e2e_both_servers_start() {
-    // Spawn hub and backend servers.
-    let mut hub = spawn_server("fed-e2e-hub-1");
-    let mut backend = spawn_server("fed-e2e-backend-1");
+    let hub = spawn_server("fed-e2e-hub-1", find_available_port());
+    let backend = spawn_server("fed-e2e-backend-1", find_available_port());
 
-    // Parse addresses from stderr output (blocking, so run in threads).
-    let hub_addr = tokio::task::spawn_blocking(move || parse_listen_address(&mut hub))
-        .await
-        .unwrap();
-    let backend_addr = tokio::task::spawn_blocking(move || parse_listen_address(&mut backend))
-        .await
-        .unwrap();
-
-    eprintln!("hub listening on {}", hub_addr);
-    eprintln!("backend listening on {}", backend_addr);
-
-    // Both should become healthy.
-    wait_for_ready(&hub_addr).await.expect("hub should be ready");
-    wait_for_ready(&backend_addr)
+    wait_for_ready(&hub.addr()).await.expect("hub should be ready");
+    wait_for_ready(&backend.addr())
         .await
         .expect("backend should be ready");
 
-    // Verify both return healthy.
     let client = reqwest::Client::new();
 
     let resp = client
-        .get(format!("http://{}/health", hub_addr))
+        .get(format!("{}/health", hub.base_url()))
         .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
 
     let resp = client
-        .get(format!("http://{}/health", backend_addr))
+        .get(format!("{}/health", backend.base_url()))
         .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
-
-    // Note: We can't clean up the spawned children here since we moved them
-    // into spawn_blocking. The processes will be killed when the test ends
-    // since they're ephemeral and we haven't created any sessions.
 }
 
 // ── Test 2: Federation management endpoints ─────────────────────────
 
-#[ignore]
 #[tokio::test]
 async fn federation_e2e_server_management() {
-    let mut hub = spawn_server("fed-e2e-hub-2");
-    let hub_addr = tokio::task::spawn_blocking(move || parse_listen_address(&mut hub))
-        .await
-        .unwrap();
-
-    wait_for_ready(&hub_addr).await.expect("hub should be ready");
+    let hub = spawn_server("fed-e2e-hub-2", find_available_port());
+    wait_for_ready(&hub.addr()).await.expect("hub should be ready");
 
     let client = reqwest::Client::new();
-    let base = format!("http://{}", hub_addr);
+    let base = hub.base_url();
 
     // GET /servers should include self.
     let resp = client
@@ -260,18 +229,13 @@ async fn federation_e2e_server_management() {
 
 // ── Test 3: Session operations on local server ──────────────────────
 
-#[ignore]
 #[tokio::test]
 async fn federation_e2e_local_sessions() {
-    let mut hub = spawn_server("fed-e2e-hub-3");
-    let hub_addr = tokio::task::spawn_blocking(move || parse_listen_address(&mut hub))
-        .await
-        .unwrap();
-
-    wait_for_ready(&hub_addr).await.expect("hub should be ready");
+    let hub = spawn_server("fed-e2e-hub-3", find_available_port());
+    wait_for_ready(&hub.addr()).await.expect("hub should be ready");
 
     let client = reqwest::Client::new();
-    let base = format!("http://{}", hub_addr);
+    let base = hub.base_url();
 
     // Create a session locally (no ?server= parameter).
     let resp = client
@@ -287,12 +251,13 @@ async fn federation_e2e_local_sessions() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["name"], "local-test");
 
-    // Create session targeting self by hostname.
+    // Create session targeting self by hostname (server goes in body for POST).
     let resp = client
-        .post(format!("{}/sessions?server=fed-e2e-hub-3", base))
+        .post(format!("{}/sessions", base))
         .json(&serde_json::json!({
             "name": "self-targeted",
-            "tags": ["e2e"]
+            "tags": ["e2e"],
+            "server": "fed-e2e-hub-3"
         }))
         .send()
         .await
@@ -323,11 +288,12 @@ async fn federation_e2e_local_sessions() {
     let sessions = body.as_array().unwrap();
     assert_eq!(sessions.len(), 2);
 
-    // Target unknown server should return 404.
+    // Target unknown server should return 404 (server goes in body for POST).
     let resp = client
-        .post(format!("{}/sessions?server=nonexistent", base))
+        .post(format!("{}/sessions", base))
         .json(&serde_json::json!({
-            "name": "remote-test"
+            "name": "remote-test",
+            "server": "nonexistent"
         }))
         .send()
         .await
@@ -367,7 +333,6 @@ async fn federation_e2e_local_sessions() {
 // correctly blocks localhost in production). A real backend wsh server
 // is spawned as a child process.
 
-#[ignore]
 #[tokio::test]
 async fn federation_e2e_cross_server_proxy() {
     use std::sync::{atomic::AtomicUsize, Arc};
@@ -379,10 +344,8 @@ async fn federation_e2e_cross_server_proxy() {
     use wsh::shutdown::ShutdownCoordinator;
 
     // 1. Spawn a real backend server.
-    let mut backend = spawn_server("fed-e2e-backend-4");
-    let backend_addr = tokio::task::spawn_blocking(move || parse_listen_address(&mut backend))
-        .await
-        .unwrap();
+    let backend = spawn_server("fed-e2e-backend-4", find_available_port());
+    let backend_addr = backend.addr();
 
     wait_for_ready(&backend_addr)
         .await
@@ -442,15 +405,13 @@ async fn federation_e2e_cross_server_proxy() {
     let servers = body.as_array().unwrap();
     assert_eq!(servers.len(), 2, "should have hub + backend");
 
-    // 4. Create a session on the backend through the hub.
+    // 4. Create a session on the backend through the hub (server goes in body for POST).
     let resp = client
-        .post(format!(
-            "{}/sessions?server=fed-e2e-backend-4",
-            hub_base
-        ))
+        .post(format!("{}/sessions", hub_base))
         .json(&serde_json::json!({
             "name": "remote-session",
-            "tags": ["proxy-test"]
+            "tags": ["proxy-test"],
+            "server": "fed-e2e-backend-4"
         }))
         .send()
         .await
@@ -555,21 +516,18 @@ async fn federation_e2e_cross_server_proxy() {
 
 // ── Test 5: Server identity (hostname) ──────────────────────────────
 
-#[ignore]
 #[tokio::test]
 async fn federation_e2e_server_hostname() {
-    let mut server = spawn_server("fed-e2e-custom-host");
-    let addr = tokio::task::spawn_blocking(move || parse_listen_address(&mut server))
+    let server = spawn_server("fed-e2e-custom-host", find_available_port());
+    wait_for_ready(&server.addr())
         .await
-        .unwrap();
-
-    wait_for_ready(&addr).await.expect("server should be ready");
+        .expect("server should be ready");
 
     let client = reqwest::Client::new();
 
     // GET /server/info should return the custom hostname.
     let resp = client
-        .get(format!("http://{}/server/info", addr))
+        .get(format!("{}/server/info", server.base_url()))
         .send()
         .await
         .unwrap();
@@ -582,7 +540,7 @@ async fn federation_e2e_server_hostname() {
 
     // GET /servers should use the custom hostname.
     let resp = client
-        .get(format!("http://{}/servers", addr))
+        .get(format!("{}/servers", server.base_url()))
         .send()
         .await
         .unwrap();
