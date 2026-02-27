@@ -319,6 +319,7 @@ function handleLifecycleEvent(client: WshClient, raw: any): void {
         cols: raw.params?.cols ?? 80,
         clients: raw.params?.clients ?? 0,
         tags: raw.params?.tags ?? [],
+        server: raw.params?.server,
       });
       sessionInfoMap.value = createdMap;
       // Always set up screen state and subscription if not already subscribed

@@ -95,4 +95,13 @@ export interface SessionInfo {
   cols: number;
   clients: number;
   tags: string[];
+  server?: string;
+}
+
+export interface ServerInfo {
+  hostname: string;
+  address: string;
+  health: "healthy" | "connecting" | "unhealthy" | string;
+  role: string;
+  sessions?: number;
 }
