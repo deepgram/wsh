@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "preact/hooks";
 import type { WshClient } from "../api/ws";
 import { sessionStatuses, type SessionStatus } from "../state/groups";
-import { focusedSession } from "../state/sessions";
+import { focusedSession, sessionInfoMap } from "../state/sessions";
 import { startSessionDrag, endDrag } from "../hooks/useDragDrop";
 import { MiniTermContent } from "./MiniViewPreview";
 import { TagEditor } from "./TagEditor";
@@ -18,6 +18,8 @@ function statusLabel(status: SessionStatus | undefined): string {
 export function ThumbnailCell({ session, client }: ThumbnailCellProps) {
   const status = sessionStatuses.value.get(session);
   const dotClass = status === "idle" ? "status-dot-green" : "status-dot-amber";
+  const info = sessionInfoMap.value.get(session);
+  const serverName = info?.server;
   const [hovered, setHovered] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(session);
@@ -76,6 +78,11 @@ export function ThumbnailCell({ session, client }: ThumbnailCellProps) {
       <div class="thumb-preview">
         <MiniTermContent session={session} />
       </div>
+
+      {/* Server badge — top-left, shown for remote sessions */}
+      {serverName && (
+        <span class="server-badge" title={`Server: ${serverName}`}>{serverName}</span>
+      )}
 
       {/* Status dot — always visible in lower-right */}
       {!hovered && (
