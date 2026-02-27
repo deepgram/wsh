@@ -3355,11 +3355,21 @@ pub(super) async fn add_server(
         .ok_or_else(|| ApiError::InvalidRequest("missing 'address' field".into()))?;
     let token = body["token"].as_str();
 
+    // Validate address format and SSRF safety before acquiring the lock.
+    crate::federation::registry::validate_backend_address(address)
+        .map_err(|detail| ApiError::InvalidRequest(detail))?;
+
     let mut manager = state.federation.lock().await;
     manager.add_backend(address, token)
         .map_err(|e| match e {
             crate::federation::registry::RegistryError::DuplicateAddress(addr) => {
                 ApiError::ServerAlreadyRegistered(addr)
+            }
+            crate::federation::registry::RegistryError::InvalidAddress(detail) => {
+                ApiError::InvalidRequest(detail)
+            }
+            crate::federation::registry::RegistryError::InvalidHostname(detail) => {
+                ApiError::InvalidRequest(detail)
             }
             other => ApiError::InternalError(other.to_string()),
         })?;

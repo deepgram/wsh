@@ -77,12 +77,16 @@ impl FederationManager {
         &self.registry
     }
 
-    /// Add a backend at runtime. Spawns a connection immediately.
+    /// Add a backend at runtime. Validates the address, then spawns a connection.
     pub fn add_backend(
         &mut self,
         address: &str,
         token: Option<&str>,
     ) -> Result<(), crate::federation::registry::RegistryError> {
+        // Validate address upfront (registry.add() also validates, but fail fast here).
+        crate::federation::registry::validate_backend_address(address)
+            .map_err(crate::federation::registry::RegistryError::InvalidAddress)?;
+
         let resolved_token = resolve_backend_token(
             token,
             self.default_token.as_deref(),
@@ -180,17 +184,24 @@ mod tests {
     #[tokio::test]
     async fn manager_add_and_remove() {
         let mut manager = FederationManager::new();
-        manager.add_backend("127.0.0.1:9999", Some("tok")).unwrap();
+        manager.add_backend("10.0.99.1:9999", Some("tok")).unwrap();
         assert_eq!(manager.registry().list().len(), 1);
-        assert!(manager.remove_backend_by_address("127.0.0.1:9999"));
+        assert!(manager.remove_backend_by_address("10.0.99.1:9999"));
         assert!(manager.registry().list().is_empty());
     }
 
     #[tokio::test]
     async fn manager_rejects_duplicate() {
         let mut manager = FederationManager::new();
-        manager.add_backend("127.0.0.1:9999", None).unwrap();
-        assert!(manager.add_backend("127.0.0.1:9999", None).is_err());
+        manager.add_backend("10.0.99.1:9999", None).unwrap();
+        assert!(manager.add_backend("10.0.99.1:9999", None).is_err());
         manager.shutdown_all().await;
+    }
+
+    #[tokio::test]
+    async fn manager_rejects_localhost_address() {
+        let mut manager = FederationManager::new();
+        let result = manager.add_backend("127.0.0.1:9999", None);
+        assert!(result.is_err());
     }
 }

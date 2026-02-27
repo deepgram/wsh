@@ -204,7 +204,7 @@ mod tests {
 
         let registry = BackendRegistry::new();
         registry
-            .add(BackendEntry {
+            .add_unchecked(BackendEntry {
                 address: addr.to_string(),
                 token: None,
                 hostname: None,
@@ -250,7 +250,7 @@ mod tests {
 
         let registry = BackendRegistry::new();
         registry
-            .add(BackendEntry {
+            .add_unchecked(BackendEntry {
                 address: addr.to_string(),
                 token: None,
                 hostname: None,
@@ -302,7 +302,7 @@ mod tests {
 
         let registry = BackendRegistry::new();
         registry
-            .add(BackendEntry {
+            .add_unchecked(BackendEntry {
                 address: addr.to_string(),
                 token: None,
                 hostname: None,
