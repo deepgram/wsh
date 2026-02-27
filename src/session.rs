@@ -455,7 +455,18 @@ impl Session {
                 let mut writer = pty_writer;
                 let mut rx = input_rx;
                 while let Some(data) = rx.blocking_recv() {
-                    if writer.write_all(&data).is_err() {
+                    // Translate LF (0x0a) → CR (0x0d) to match real keyboard
+                    // behavior. Physical terminals send CR for Enter; the PTY
+                    // line discipline converts CR→LF in cooked mode. TUIs in
+                    // raw mode expect CR directly. This is safe for all modes:
+                    // in cooked mode, ICRNL converts the CR back to LF.
+                    let mut buf = data.to_vec();
+                    for b in &mut buf {
+                        if *b == b'\n' {
+                            *b = b'\r';
+                        }
+                    }
+                    if writer.write_all(&buf).is_err() {
                         break;
                     }
                     let _ = writer.flush();
