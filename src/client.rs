@@ -149,7 +149,15 @@ impl Client {
 
     /// List sessions via the server's Unix socket.
     pub async fn list_sessions(&mut self) -> io::Result<Vec<SessionInfoMsg>> {
-        let msg = ListSessionsMsg { server: None };
+        self.list_sessions_on(None).await
+    }
+
+    /// List sessions, optionally targeting a specific federated server.
+    pub async fn list_sessions_on(
+        &mut self,
+        server: Option<String>,
+    ) -> io::Result<Vec<SessionInfoMsg>> {
+        let msg = ListSessionsMsg { server };
         let frame = Frame::control(FrameType::ListSessions, &msg)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         frame.write_to(&mut self.stream).await?;
@@ -177,7 +185,16 @@ impl Client {
 
     /// Kill (destroy) a session via the server's Unix socket.
     pub async fn kill_session(&mut self, name: &str) -> io::Result<()> {
-        let msg = KillSessionMsg { name: name.to_string(), server: None };
+        self.kill_session_on(name, None).await
+    }
+
+    /// Kill (destroy) a session, optionally targeting a specific federated server.
+    pub async fn kill_session_on(
+        &mut self,
+        name: &str,
+        server: Option<String>,
+    ) -> io::Result<()> {
+        let msg = KillSessionMsg { name: name.to_string(), server };
         let frame = Frame::control(FrameType::KillSession, &msg)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         frame.write_to(&mut self.stream).await?;
@@ -203,7 +220,16 @@ impl Client {
     /// Unlike `kill_session`, this keeps the session alive — it only disconnects
     /// any streaming clients currently attached.
     pub async fn detach_session(&mut self, name: &str) -> io::Result<()> {
-        let msg = DetachSessionMsg { name: name.to_string(), server: None };
+        self.detach_session_on(name, None).await
+    }
+
+    /// Detach all attached clients, optionally targeting a specific federated server.
+    pub async fn detach_session_on(
+        &mut self,
+        name: &str,
+        server: Option<String>,
+    ) -> io::Result<()> {
+        let msg = DetachSessionMsg { name: name.to_string(), server };
         let frame = Frame::control(FrameType::DetachSession, &msg)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         frame.write_to(&mut self.stream).await?;
@@ -261,11 +287,22 @@ impl Client {
         add: Vec<String>,
         remove: Vec<String>,
     ) -> io::Result<Vec<String>> {
+        self.manage_tags_on(session, add, remove, None).await
+    }
+
+    /// Manage tags on a session, optionally targeting a specific federated server.
+    pub async fn manage_tags_on(
+        &mut self,
+        session: &str,
+        add: Vec<String>,
+        remove: Vec<String>,
+        server: Option<String>,
+    ) -> io::Result<Vec<String>> {
         let msg = ManageTagsMsg {
             session: session.to_string(),
             add,
             remove,
-            server: None,
+            server,
         };
         let frame = Frame::control(FrameType::ManageTags, &msg)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;

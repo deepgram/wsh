@@ -53,10 +53,6 @@ pub fn acquire_instance_lock(lock_path: &Path) -> io::Result<File> {
     Ok(file)
 }
 
-/// Start the Unix socket server, listening for CLI client connections.
-///
-/// Runs until the `cancel` token is cancelled, then stops accepting new
-/// connections but lets in-flight handlers finish (they exit when sessions drain).
 /// Additional federation state passed into the socket server.
 ///
 /// Grouped to avoid bloating function signatures further.
@@ -81,6 +77,10 @@ impl Default for FederationState {
     }
 }
 
+/// Start the Unix socket server, listening for CLI client connections.
+///
+/// Runs until the `cancel` token is cancelled, then stops accepting new
+/// connections but lets in-flight handlers finish (they exit when sessions drain).
 pub async fn serve(
     sessions: SessionRegistry,
     socket_path: &Path,
@@ -237,6 +237,7 @@ async fn proxy_get(backend: &BackendEntry, path: &str) -> Result<serde_json::Val
         req = req.bearer_auth(token);
     }
     let resp = req.send().await.map_err(|e| e.to_string())?;
+    let resp = resp.error_for_status().map_err(|e| e.to_string())?;
     resp.json().await.map_err(|e| e.to_string())
 }
 
@@ -257,6 +258,7 @@ async fn proxy_post(
         req = req.bearer_auth(token);
     }
     let resp = req.send().await.map_err(|e| e.to_string())?;
+    let resp = resp.error_for_status().map_err(|e| e.to_string())?;
     resp.json().await.map_err(|e| e.to_string())
 }
 
@@ -273,6 +275,7 @@ async fn proxy_delete(backend: &BackendEntry, path: &str) -> Result<serde_json::
         req = req.bearer_auth(token);
     }
     let resp = req.send().await.map_err(|e| e.to_string())?;
+    let resp = resp.error_for_status().map_err(|e| e.to_string())?;
     resp.json().await.map_err(|e| e.to_string())
 }
 

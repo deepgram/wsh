@@ -133,18 +133,30 @@ enum Commands {
     },
 
     /// List active sessions on the server
-    List {},
+    List {
+        /// Target a specific federated server by hostname
+        #[arg(short, long)]
+        server: Option<String>,
+    },
 
     /// Kill (destroy) a session on the server
     Kill {
         /// Session name to kill
         name: String,
+
+        /// Target a specific federated server by hostname
+        #[arg(short, long)]
+        server: Option<String>,
     },
 
     /// Detach all clients from a session (session stays alive)
     Detach {
         /// Session name to detach
         name: String,
+
+        /// Target a specific federated server by hostname
+        #[arg(short, long)]
+        server: Option<String>,
     },
 
     /// Query or set server persistence mode.
@@ -180,6 +192,10 @@ enum Commands {
         /// Tags to remove
         #[arg(long = "remove")]
         remove: Vec<String>,
+
+        /// Target a specific federated server by hostname
+        #[arg(short, long)]
+        server: Option<String>,
     },
 
     /// Stop the running wsh server
@@ -314,14 +330,14 @@ async fn main() -> Result<(), WshError> {
         Some(Commands::Attach { name, scrollback, alt_screen }) => {
             run_attach(name, scrollback, socket, alt_screen, server_name).await
         }
-        Some(Commands::List {}) => {
-            run_list(socket, server_name).await
+        Some(Commands::List { server }) => {
+            run_list(socket, server_name, server).await
         }
-        Some(Commands::Kill { name }) => {
-            run_kill(name, socket, server_name).await
+        Some(Commands::Kill { name, server }) => {
+            run_kill(name, socket, server_name, server).await
         }
-        Some(Commands::Detach { name }) => {
-            run_detach(name, socket, server_name).await
+        Some(Commands::Detach { name, server }) => {
+            run_detach(name, socket, server_name, server).await
         }
         Some(Commands::Token {}) => {
             run_token(socket, server_name).await
@@ -329,8 +345,8 @@ async fn main() -> Result<(), WshError> {
         Some(Commands::Persist { value, bind, token }) => {
             run_persist(value, bind, token).await
         }
-        Some(Commands::Tag { name, add, remove }) => {
-            run_tag(name, add, remove, socket, server_name).await
+        Some(Commands::Tag { name, add, remove, server }) => {
+            run_tag(name, add, remove, server, socket, server_name).await
         }
         Some(Commands::Stop {}) => {
             run_stop(socket, server_name).await
@@ -1316,7 +1332,7 @@ async fn run_attach(
     Ok(())
 }
 
-async fn run_list(socket: Option<PathBuf>, server_name: String) -> Result<(), WshError> {
+async fn run_list(socket: Option<PathBuf>, server_name: String, server: Option<String>) -> Result<(), WshError> {
     let socket_path = resolve_socket_path(socket, &server_name);
     let mut c = match client::Client::connect(&socket_path).await {
         Ok(c) => c,
@@ -1330,7 +1346,7 @@ async fn run_list(socket: Option<PathBuf>, server_name: String) -> Result<(), Ws
         }
     };
 
-    let sessions = match c.list_sessions().await {
+    let sessions = match c.list_sessions_on(server).await {
         Ok(s) => s,
         Err(e) => {
             eprintln!("wsh list: {}", e);
@@ -1362,7 +1378,7 @@ async fn run_list(socket: Option<PathBuf>, server_name: String) -> Result<(), Ws
     Ok(())
 }
 
-async fn run_kill(name: String, socket: Option<PathBuf>, server_name: String) -> Result<(), WshError> {
+async fn run_kill(name: String, socket: Option<PathBuf>, server_name: String, server: Option<String>) -> Result<(), WshError> {
     let socket_path = resolve_socket_path(socket, &server_name);
     let mut c = match client::Client::connect(&socket_path).await {
         Ok(c) => c,
@@ -1376,7 +1392,7 @@ async fn run_kill(name: String, socket: Option<PathBuf>, server_name: String) ->
         }
     };
 
-    if let Err(e) = c.kill_session(&name).await {
+    if let Err(e) = c.kill_session_on(&name, server).await {
         eprintln!("wsh kill: {}", e);
         std::process::exit(1);
     }
@@ -1385,7 +1401,7 @@ async fn run_kill(name: String, socket: Option<PathBuf>, server_name: String) ->
     Ok(())
 }
 
-async fn run_detach(name: String, socket: Option<PathBuf>, server_name: String) -> Result<(), WshError> {
+async fn run_detach(name: String, socket: Option<PathBuf>, server_name: String, server: Option<String>) -> Result<(), WshError> {
     let socket_path = resolve_socket_path(socket, &server_name);
     let mut c = match client::Client::connect(&socket_path).await {
         Ok(c) => c,
@@ -1399,7 +1415,7 @@ async fn run_detach(name: String, socket: Option<PathBuf>, server_name: String) 
         }
     };
 
-    if let Err(e) = c.detach_session(&name).await {
+    if let Err(e) = c.detach_session_on(&name, server).await {
         eprintln!("wsh detach: {}", e);
         std::process::exit(1);
     }
@@ -1412,6 +1428,7 @@ async fn run_tag(
     name: String,
     add: Vec<String>,
     remove: Vec<String>,
+    server: Option<String>,
     socket: Option<PathBuf>,
     server_name: String,
 ) -> Result<(), WshError> {
@@ -1428,7 +1445,7 @@ async fn run_tag(
         }
     };
 
-    match c.manage_tags(&name, add, remove).await {
+    match c.manage_tags_on(&name, add, remove, server).await {
         Ok(tags) => {
             if tags.is_empty() {
                 println!("Session '{}': no tags", name);
