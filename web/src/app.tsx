@@ -26,6 +26,7 @@ import { LayoutShell } from "./components/LayoutShell";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { CommandPalette } from "./components/CommandPalette";
 import { ShortcutSheet } from "./components/ShortcutSheet";
+import { ServerList } from "./components/ServerList";
 
 // Track unsubscribe functions for per-session subscriptions
 const unsubscribes = new Map<string, () => void>();
@@ -128,6 +129,7 @@ export function App() {
   // Command palette state
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutSheetOpen, setShortcutSheetOpen] = useState(false);
+  const [serverListOpen, setServerListOpen] = useState(false);
 
   // Global keyboard shortcuts: Ctrl+Shift+X
   useEffect(() => {
@@ -225,10 +227,17 @@ export function App() {
     <ErrorBoundary>
       <LayoutShell client={client} />
       {paletteOpen && (
-        <CommandPalette client={client} onClose={() => setPaletteOpen(false)} />
+        <CommandPalette
+          client={client}
+          onClose={() => setPaletteOpen(false)}
+          onShowServers={() => { setPaletteOpen(false); setServerListOpen(true); }}
+        />
       )}
       {shortcutSheetOpen && (
         <ShortcutSheet onClose={() => setShortcutSheetOpen(false)} />
+      )}
+      {serverListOpen && (
+        <ServerList client={client} onClose={() => setServerListOpen(false)} />
       )}
     </ErrorBoundary>
   );

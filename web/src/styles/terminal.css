@@ -2300,6 +2300,159 @@ html, body, #app {
 }
 
 /* ======================================================================
+   Server List Panel
+   ====================================================================== */
+
+.server-list-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 200;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 15vh;
+}
+
+.server-list-panel {
+  width: min(440px, 90vw);
+  background: var(--chrome, #1a1a1a);
+  border: 1px solid var(--border, #333);
+  border-radius: 8px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+.server-list-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border, #333);
+}
+
+.server-list-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg, #ccc);
+  flex: 1;
+}
+
+.server-list-refresh,
+.server-list-close {
+  background: none;
+  border: none;
+  color: var(--fg, #ccc);
+  opacity: 0.5;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 4px;
+  transition: opacity 0.15s;
+}
+
+.server-list-refresh:hover,
+.server-list-close:hover {
+  opacity: 1;
+}
+
+.server-list-body {
+  padding: 8px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.server-list-loading,
+.server-list-empty {
+  padding: 16px;
+  text-align: center;
+  color: var(--fg, #ccc);
+  opacity: 0.4;
+  font-size: 13px;
+}
+
+.server-list-error {
+  padding: 8px 12px;
+  font-size: 13px;
+  color: #e74c3c;
+  background: rgba(231, 76, 60, 0.1);
+  border: 1px solid rgba(231, 76, 60, 0.25);
+  border-radius: 4px;
+  margin: 4px;
+}
+
+.server-list-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  transition: background 0.1s;
+}
+
+.server-list-item:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.server-health-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.server-health-green {
+  background: #4ade80;
+}
+
+.server-health-yellow {
+  background: #fbbf24;
+}
+
+.server-health-red {
+  background: #ef4444;
+}
+
+.server-list-item-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.server-list-hostname {
+  font-size: 13px;
+  color: var(--fg, #ccc);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.server-list-address {
+  font-size: 11px;
+  color: var(--fg, #ccc);
+  opacity: 0.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.server-list-sessions {
+  font-size: 11px;
+  color: var(--fg, #ccc);
+  opacity: 0.4;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Focus-visible for server list */
+.server-list-refresh:focus-visible,
+.server-list-close:focus-visible {
+  outline: 2px solid var(--accent, var(--cursor-color));
+  outline-offset: 2px;
+}
+
+/* ======================================================================
    Focus-Visible Indicators (keyboard navigation)
    ====================================================================== */
 

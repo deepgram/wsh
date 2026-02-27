@@ -1,4 +1,4 @@
-import type { WsRequest, WsResponse, EventType, ScreenResponse, ScrollbackResponse, SessionInfo } from "./types";
+import type { WsRequest, WsResponse, EventType, ScreenResponse, ScrollbackResponse, SessionInfo, ServerInfo } from "./types";
 
 type PendingRequest = {
   resolve: (value: unknown) => void;
@@ -519,5 +519,24 @@ export class WshClient {
         this.eventCallbacks.delete(session);
       }
     };
+  }
+
+  /**
+   * List all federated servers via HTTP GET /servers.
+   *
+   * This uses the HTTP endpoint since list_servers is not exposed
+   * as a WS JSON-RPC method.
+   */
+  async listServers(): Promise<ServerInfo[]> {
+    const httpBase = this.deriveHttpBase(this.url);
+    const headers: Record<string, string> = {};
+    if (this.token) {
+      headers["Authorization"] = `Bearer ${this.token}`;
+    }
+    const resp = await fetch(`${httpBase}/servers`, { headers });
+    if (!resp.ok) {
+      throw new Error(`Failed to list servers: ${resp.status}`);
+    }
+    return (await resp.json()) as ServerInfo[];
   }
 }

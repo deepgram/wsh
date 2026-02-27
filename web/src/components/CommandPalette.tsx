@@ -14,6 +14,7 @@ interface PaletteItem {
 interface CommandPaletteProps {
   client: WshClient;
   onClose: () => void;
+  onShowServers?: () => void;
 }
 
 function fuzzyMatch(query: string, text: string): number {
@@ -32,7 +33,7 @@ function fuzzyMatch(query: string, text: string): number {
   return qi === lower.length ? 1 : 0;
 }
 
-export function CommandPalette({ client, onClose }: CommandPaletteProps) {
+export function CommandPalette({ client, onClose, onShowServers }: CommandPaletteProps) {
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -117,6 +118,15 @@ export function CommandPalette({ client, onClose }: CommandPaletteProps) {
       action: () => { sidebarCollapsed.value = !sidebarCollapsed.value; onClose(); },
     });
 
+    if (onShowServers) {
+      result.push({
+        type: "action",
+        label: "Show Servers",
+        description: "View federated backend servers and their status",
+        action: () => { onShowServers(); },
+      });
+    }
+
     const themes: { id: Theme; label: string }[] = [
       { id: "glass", label: "Glass" },
       { id: "neon", label: "Neon" },
@@ -169,7 +179,7 @@ export function CommandPalette({ client, onClose }: CommandPaletteProps) {
     }
 
     return result;
-  }, [client, onClose]);
+  }, [client, onClose, onShowServers]);
 
   // Filter items
   const filtered = useMemo(() => {
