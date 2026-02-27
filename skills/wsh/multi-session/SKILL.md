@@ -169,6 +169,35 @@ This isn't true parallelism — it's staged work:
     send to "deploy": ./deploy.sh
     # only if build succeeded
 
+## Cross-Server Sessions (Federation)
+
+When wsh is configured as a federated cluster, sessions can span
+multiple servers. A hub server orchestrates one or more backend
+servers, and the session list aggregates across all healthy
+backends transparently.
+
+**What changes with federation:**
+- Sessions created on a specific backend include a `server`
+  field indicating which machine they live on
+- Session listing without a server filter returns sessions from
+  all healthy servers in the cluster
+- Tag-based workflows (fan-out, wait-for-idle with tag filter)
+  work transparently across server boundaries — tags are
+  cluster-wide, not per-server
+- The wait-for-any-session idle detection races across all
+  backends, returning whichever session settles first
+
+**What stays the same:**
+- The send/wait/read/decide loop is identical
+- Session operations are automatically routed to the right
+  server — you don't need to track which server owns which
+  session after creation
+- Tags, naming conventions, and cleanup discipline all apply
+
+For detailed guidance on distributed session management, server
+health monitoring, and failure handling, see the
+**wsh:cluster-orchestration** skill.
+
 ## Pitfalls
 
 ### Session Sprawl

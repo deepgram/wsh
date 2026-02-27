@@ -391,6 +391,29 @@ server daemon and creates a session named `default`. Use
 `--name`, the session has that name instead. Tags can be set at
 startup with `--tag`.
 
+## Federation
+
+wsh supports federation — a cluster of wsh servers where one
+hub orchestrates multiple backends. Session operations accept an
+optional `server` parameter to target a specific server in the
+cluster by hostname.
+
+When federation is configured:
+- Session creation can target a specific backend server
+- Session listing aggregates across all healthy backends
+- All session operations (input, screen, idle, overlays, etc.)
+  are transparently routed to the server that owns the session
+- Server management operations let you list servers, check
+  health, add/remove backends at runtime
+
+Without federation, everything works as a single server — the
+`server` parameter is simply absent. Federation is opt-in and
+does not change the behavior of single-server deployments.
+
+For detailed patterns on distributed session management, health
+monitoring, failure handling, and cross-server workflows, see the
+**wsh:cluster-orchestration** skill.
+
 ## Specialized Skills
 
 When your task matches one of these patterns, invoke the
@@ -428,3 +451,8 @@ dialogs.
 experience in the terminal. Combining overlays, panels, input
 capture, direct drawing, and alternate screen mode to create
 bespoke interfaces on the fly.
+
+**wsh:cluster-orchestration** — You need to manage sessions
+across multiple wsh servers. Distributing work across machines,
+monitoring backend health, handling server failures, coordinating
+cross-server workflows.
