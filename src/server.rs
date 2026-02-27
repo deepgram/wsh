@@ -64,6 +64,7 @@ pub struct FederationState {
     pub local_token: Option<String>,
     pub default_backend_token: Option<String>,
     pub ip_access: Option<Arc<crate::federation::ip_access::IpAccessControl>>,
+    pub server_id: String,
 }
 
 impl Default for FederationState {
@@ -75,6 +76,7 @@ impl Default for FederationState {
             local_token: None,
             default_backend_token: None,
             ip_access: None,
+            server_id: String::new(),
         }
     }
 }
@@ -404,7 +406,7 @@ async fn handle_client<S: AsyncRead + AsyncWrite + Unpin>(
             handle_reload_config(&mut stream, &federation_state).await
         }
         FrameType::ServerInfo => {
-            handle_server_info(&mut stream, &hostname).await
+            handle_server_info(&mut stream, &hostname, &federation_state.server_id).await
         }
         other => {
             let err = ErrorMsg {
@@ -787,6 +789,7 @@ async fn handle_list_servers<S: AsyncRead + AsyncWrite + Unpin>(
         health: "healthy".to_string(),
         role: "member".to_string(),
         sessions: Some(sessions.len()),
+        server_id: Some(fed_state.server_id.clone()),
     });
 
     // Add all registered backends
@@ -797,6 +800,7 @@ async fn handle_list_servers<S: AsyncRead + AsyncWrite + Unpin>(
             health: format!("{:?}", entry.health).to_lowercase(),
             role: format!("{:?}", entry.role).to_lowercase(),
             sessions: None,
+            server_id: entry.server_id,
         });
     }
 
@@ -976,10 +980,12 @@ async fn handle_reload_config<S: AsyncRead + AsyncWrite + Unpin>(
 async fn handle_server_info<S: AsyncRead + AsyncWrite + Unpin>(
     stream: &mut S,
     hostname: &str,
+    server_id: &str,
 ) -> io::Result<()> {
     let resp = ServerInfoResponseMsg {
         hostname: hostname.to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
+        server_id: server_id.to_string(),
     };
     let resp_frame = Frame::control(FrameType::ServerInfoResponse, &resp)
         .map_err(io::Error::other)?;

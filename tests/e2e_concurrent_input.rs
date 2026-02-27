@@ -107,6 +107,7 @@ async fn test_concurrent_input_from_multiple_sources() {
             federation_config_path: None,
             local_token: None,
             default_backend_token: None,
+            server_id: "test-server-id".to_string(),
     };
     let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
@@ -282,6 +283,7 @@ async fn test_rapid_http_requests() {
             federation_config_path: None,
             local_token: None,
             default_backend_token: None,
+            server_id: "test-server-id".to_string(),
     };
     let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;

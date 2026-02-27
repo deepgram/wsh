@@ -367,7 +367,7 @@ has one trust boundary (client <-> server). Federation adds:
 | **Broken Access Control** | `?server` omission always means local (no TOCTOU). Backends can't influence request routing. Compromised backend can't redirect requests to itself. |
 | **Security Misconfiguration** | Non-localhost without token = hard error. Secure defaults. CSP on all responses. |
 | **XSS** | CSP with strict policy. Terminal output rendered as text nodes. Server badges and names escaped. |
-| **SSRF** | Connects only to explicitly registered backends. No user-controlled URL fetching. Backend addresses validated (no `file://`, localhost loopback tricks). |
+| **SSRF** | Connects only to explicitly registered backends. No user-controlled URL fetching. Backend addresses validated (no `file://`, `0.0.0.0`). Self-loop prevention via server UUID comparison (not address blocking). Localhost/loopback allowed for local multi-server testing. |
 | **Insecure Deserialization** | All cross-server data is JSON with schema validation. Backend responses validated before forwarding. |
 
 ### Backend Response Validation
@@ -417,8 +417,8 @@ A compromised backend could return malicious data. Mitigations:
 - Malformed backend responses (invalid JSON, unexpected fields,
   oversized payloads)
 - Token enumeration attempts against server management endpoints
-- SSRF via backend registration (localhost, internal IPs, non-HTTP
-  schemes)
+- Self-loop detection via server UUID (registering self as backend)
+- Address validation (non-HTTP schemes, unspecified addresses)
 - Cross-server injection via crafted session names or hostnames
 - Config file with world-readable permissions
 

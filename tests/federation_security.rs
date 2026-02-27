@@ -1,7 +1,7 @@
 //! Security integration tests for the federation API.
 //!
-//! Tests SSRF prevention, invalid address rejection, token leak prevention,
-//! and invalid hostname rejection.
+//! Tests self-loop detection (via server UUID), invalid address rejection,
+//! token leak prevention, and invalid hostname rejection.
 
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -30,6 +30,7 @@ fn create_test_app_with_registry() -> (axum::Router, wsh::federation::registry::
         federation_config_path: None,
         local_token: None,
         default_backend_token: None,
+        server_id: "test-server-id".to_string(),
     };
     (router(state, RouterConfig::default()), backends)
 }
@@ -50,11 +51,12 @@ async fn start_test_server(app: axum::Router) -> SocketAddr {
 }
 
 // ══════════════════════════════════════════════════════════════════
-// Test 1: SSRF prevention -- reject localhost/loopback backends
+// Test 1: Localhost/loopback addresses now ACCEPTED
+// (self-loop detection is via server UUID, not address blocking)
 // ══════════════════════════════════════════════════════════════════
 
 #[tokio::test]
-async fn ssrf_reject_ipv4_loopback() {
+async fn localhost_ipv4_accepted() {
     let app = create_test_app();
     let addr = start_test_server(app).await;
     let client = reqwest::Client::new();
@@ -65,14 +67,11 @@ async fn ssrf_reject_ipv4_loopback() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 400, "127.0.0.1 should be rejected");
-
-    let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["error"]["code"], "invalid_request");
+    assert_eq!(resp.status(), 201, "127.0.0.1 should now be accepted");
 }
 
 #[tokio::test]
-async fn ssrf_reject_localhost() {
+async fn localhost_hostname_accepted() {
     let app = create_test_app();
     let addr = start_test_server(app).await;
     let client = reqwest::Client::new();
@@ -83,14 +82,11 @@ async fn ssrf_reject_localhost() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 400, "localhost should be rejected");
-
-    let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["error"]["code"], "invalid_request");
+    assert_eq!(resp.status(), 201, "localhost should now be accepted");
 }
 
 #[tokio::test]
-async fn ssrf_reject_ipv6_loopback() {
+async fn ipv6_loopback_accepted() {
     let app = create_test_app();
     let addr = start_test_server(app).await;
     let client = reqwest::Client::new();
@@ -101,10 +97,7 @@ async fn ssrf_reject_ipv6_loopback() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 400, "[::1] should be rejected");
-
-    let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["error"]["code"], "invalid_request");
+    assert_eq!(resp.status(), 201, "[::1] should now be accepted");
 }
 
 #[tokio::test]
@@ -201,6 +194,7 @@ async fn token_not_leaked_in_list_servers() {
             hostname: Some("backend-1".into()),
             health: BackendHealth::Healthy,
             role: BackendRole::Member,
+            server_id: None,
         })
         .unwrap();
 
@@ -234,6 +228,7 @@ async fn token_not_leaked_in_get_server() {
             hostname: Some("backend-2".into()),
             health: BackendHealth::Healthy,
             role: BackendRole::Member,
+            server_id: None,
         })
         .unwrap();
 
@@ -269,6 +264,7 @@ async fn registry_rejects_invalid_hostname_on_add() {
         hostname: Some("-invalid".into()),
         health: BackendHealth::Connecting,
         role: BackendRole::Member,
+        server_id: None,
     });
     assert!(result.is_err(), "hostname starting with hyphen should be rejected");
 }
@@ -282,6 +278,7 @@ async fn registry_rejects_hostname_with_spaces() {
         hostname: Some("invalid host".into()),
         health: BackendHealth::Connecting,
         role: BackendRole::Member,
+        server_id: None,
     });
     assert!(result.is_err(), "hostname with spaces should be rejected");
 }

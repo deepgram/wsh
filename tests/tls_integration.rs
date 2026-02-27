@@ -30,6 +30,7 @@ fn create_test_app_with_config(config: RouterConfig) -> axum::Router {
         federation_config_path: None,
         local_token: None,
         default_backend_token: None,
+        server_id: "test-server-id".to_string(),
     };
     router(state, config)
 }
@@ -242,6 +243,7 @@ async fn tls_federation_servers_endpoint() {
             hostname: Some("backend-1".to_string()),
             health: BackendHealth::Healthy,
             role: BackendRole::Member,
+            server_id: None,
         })
         .unwrap();
 
@@ -259,6 +261,7 @@ async fn tls_federation_servers_endpoint() {
         federation_config_path: None,
         local_token: None,
         default_backend_token: None,
+        server_id: "test-server-id".to_string(),
     };
     let app = router(state, RouterConfig::default());
 
@@ -308,6 +311,7 @@ async fn tls_base_prefix_federation_combined() {
             hostname: Some("node-1".to_string()),
             health: BackendHealth::Healthy,
             role: BackendRole::Member,
+            server_id: None,
         })
         .unwrap();
 
@@ -325,6 +329,7 @@ async fn tls_base_prefix_federation_combined() {
         federation_config_path: None,
         local_token: None,
         default_backend_token: None,
+        server_id: "test-server-id".to_string(),
     };
     let app = router(
         state,

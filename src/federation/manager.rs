@@ -17,6 +17,8 @@ pub struct FederationManager {
     connections: HashMap<String, BackendConnection>,
     default_token: Option<String>,
     local_token: Option<String>,
+    /// This server's UUID, passed to connections for self-loop detection.
+    server_id: String,
 }
 
 impl FederationManager {
@@ -27,6 +29,7 @@ impl FederationManager {
             connections: HashMap::new(),
             default_token: None,
             local_token: None,
+            server_id: String::new(),
         }
     }
 
@@ -35,6 +38,7 @@ impl FederationManager {
         config: FederationConfig,
         local_token: Option<String>,
         default_token: Option<String>,
+        server_id: String,
     ) -> Self {
         let registry = BackendRegistry::new();
         let mut connections = HashMap::new();
@@ -52,6 +56,7 @@ impl FederationManager {
                 hostname: None,
                 health: BackendHealth::Connecting,
                 role: BackendRole::Member,
+                server_id: None,
             };
 
             if registry.add(entry).is_ok() {
@@ -59,6 +64,7 @@ impl FederationManager {
                     backend_config.address.clone(),
                     token,
                     registry.clone(),
+                    server_id.clone(),
                 );
                 connections.insert(backend_config.address.clone(), conn);
             }
@@ -69,6 +75,7 @@ impl FederationManager {
             connections,
             default_token: default_token.or_else(|| config.default_token.clone()),
             local_token,
+            server_id,
         }
     }
 
@@ -99,6 +106,7 @@ impl FederationManager {
             hostname: None,
             health: BackendHealth::Connecting,
             role: BackendRole::Member,
+            server_id: None,
         };
 
         self.registry.add(entry)?;
@@ -107,6 +115,7 @@ impl FederationManager {
             address.to_string(),
             resolved_token,
             self.registry.clone(),
+            self.server_id.clone(),
         );
         self.connections.insert(address.to_string(), conn);
 
@@ -150,7 +159,7 @@ mod tests {
     #[tokio::test]
     async fn manager_from_empty_config() {
         let config = FederationConfig::default();
-        let manager = FederationManager::from_config(config, None, None);
+        let manager = FederationManager::from_config(config, None, None, "test-id".into());
         assert!(manager.registry().list().is_empty());
     }
 
@@ -171,7 +180,7 @@ mod tests {
             ],
             ip_access: None,
         };
-        let mut manager = FederationManager::from_config(config, None, None);
+        let mut manager = FederationManager::from_config(config, None, None, "test-id".into());
         let backends = manager.registry().list();
         assert_eq!(backends.len(), 2);
         // All start in Connecting state
@@ -200,9 +209,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn manager_rejects_localhost_address() {
+    async fn manager_accepts_localhost_address() {
         let mut manager = FederationManager::new();
         let result = manager.add_backend("http://127.0.0.1:9999", None);
-        assert!(result.is_err());
+        assert!(result.is_ok());
+        manager.shutdown_all().await;
     }
 }

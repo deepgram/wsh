@@ -451,6 +451,8 @@ pub struct ServerInfoEntry {
     pub role: String,
     #[serde(default)]
     pub sessions: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_id: Option<String>,
 }
 
 /// Client → Server: request to add a backend server.
@@ -497,6 +499,7 @@ pub struct ServerInfoMsg {}
 pub struct ServerInfoResponseMsg {
     pub hostname: String,
     pub version: String,
+    pub server_id: String,
 }
 
 /// Server → Client: full overlay state sync.
@@ -1014,6 +1017,7 @@ mod tests {
                     health: "healthy".to_string(),
                     role: "member".to_string(),
                     sessions: Some(3),
+                    server_id: Some("uuid-1".to_string()),
                 },
                 ServerInfoEntry {
                     hostname: None,
@@ -1021,6 +1025,7 @@ mod tests {
                     health: "connecting".to_string(),
                     role: "member".to_string(),
                     sessions: None,
+                    server_id: None,
                 },
             ],
         };
@@ -1127,11 +1132,13 @@ mod tests {
         let msg = ServerInfoResponseMsg {
             hostname: "my-host".to_string(),
             version: "0.1.0".to_string(),
+            server_id: "test-uuid".to_string(),
         };
         let frame = Frame::control(FrameType::ServerInfoResponse, &msg).unwrap();
         let decoded: ServerInfoResponseMsg = frame.parse_json().unwrap();
         assert_eq!(decoded.hostname, "my-host");
         assert_eq!(decoded.version, "0.1.0");
+        assert_eq!(decoded.server_id, "test-uuid");
     }
 
     #[test]

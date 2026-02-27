@@ -175,7 +175,7 @@ async fn federation_e2e_server_management() {
     let servers = body.as_array().unwrap();
     assert_eq!(servers.len(), 2);
 
-    // POST /servers with localhost should be rejected (SSRF prevention).
+    // POST /servers with localhost is accepted (self-loop detection is via server UUID, not address).
     let resp = client
         .post(format!("{}/servers", base))
         .json(&serde_json::json!({
@@ -184,7 +184,7 @@ async fn federation_e2e_server_management() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 400);
+    assert_eq!(resp.status(), 201);
 
     // POST /servers with duplicate address should be rejected.
     let resp = client
@@ -355,7 +355,7 @@ async fn federation_e2e_cross_server_proxy() {
     let federation_manager = FederationManager::new();
     let backends = federation_manager.registry().clone();
 
-    // Register the real backend, bypassing SSRF validation for localhost.
+    // Register the real backend (localhost is now allowed).
     backends
         .add_unchecked(BackendEntry {
             address: format!("http://{}", backend_addr),
@@ -363,6 +363,7 @@ async fn federation_e2e_cross_server_proxy() {
             hostname: Some("fed-e2e-backend-4".into()),
             health: BackendHealth::Healthy,
             role: BackendRole::Member,
+            server_id: None,
         })
         .unwrap();
 
@@ -380,6 +381,7 @@ async fn federation_e2e_cross_server_proxy() {
         federation_config_path: None,
         local_token: None,
         default_backend_token: None,
+        server_id: "test-server-id".to_string(),
     };
 
     // Start the in-process hub.

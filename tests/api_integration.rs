@@ -73,6 +73,7 @@ fn create_test_app() -> (axum::Router, mpsc::Receiver<Bytes>, broadcast::Sender<
             federation_config_path: None,
             local_token: None,
             default_backend_token: None,
+            server_id: "test-server-id".to_string(),
     };
     (router(state, RouterConfig::default()), input_rx, broker.sender())
 }
@@ -171,7 +172,7 @@ async fn test_api_input_multiple_requests() {
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
-    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new(), server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)), server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)), mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)), ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()), backends: wsh::federation::registry::BackendRegistry::new(), federation: std::sync::Arc::new(tokio::sync::Mutex::new(wsh::federation::manager::FederationManager::new())), ip_access: None, hostname: "test".to_string(), federation_config_path: None, local_token: None, default_backend_token: None };
+    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new(), server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)), server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)), mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)), ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()), backends: wsh::federation::registry::BackendRegistry::new(), federation: std::sync::Arc::new(tokio::sync::Mutex::new(wsh::federation::manager::FederationManager::new())), ip_access: None, hostname: "test".to_string(), federation_config_path: None, local_token: None, default_backend_token: None, server_id: "test-server-id".to_string() };
     let app = router(state, RouterConfig::default());
 
     let inputs = vec!["first input", "second input", "third input"];
@@ -266,7 +267,7 @@ async fn test_websocket_receives_pty_output() {
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
-    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new(), server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)), server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)), mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)), ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()), backends: wsh::federation::registry::BackendRegistry::new(), federation: std::sync::Arc::new(tokio::sync::Mutex::new(wsh::federation::manager::FederationManager::new())), ip_access: None, hostname: "test".to_string(), federation_config_path: None, local_token: None, default_backend_token: None };
+    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new(), server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)), server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)), mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)), ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()), backends: wsh::federation::registry::BackendRegistry::new(), federation: std::sync::Arc::new(tokio::sync::Mutex::new(wsh::federation::manager::FederationManager::new())), ip_access: None, hostname: "test".to_string(), federation_config_path: None, local_token: None, default_backend_token: None, server_id: "test-server-id".to_string() };
     let app = router(state, RouterConfig::default());
 
     let addr = start_test_server(app).await;
@@ -333,7 +334,7 @@ async fn test_websocket_sends_input_to_pty() {
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
-    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new(), server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)), server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)), mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)), ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()), backends: wsh::federation::registry::BackendRegistry::new(), federation: std::sync::Arc::new(tokio::sync::Mutex::new(wsh::federation::manager::FederationManager::new())), ip_access: None, hostname: "test".to_string(), federation_config_path: None, local_token: None, default_backend_token: None };
+    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new(), server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)), server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)), mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)), ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()), backends: wsh::federation::registry::BackendRegistry::new(), federation: std::sync::Arc::new(tokio::sync::Mutex::new(wsh::federation::manager::FederationManager::new())), ip_access: None, hostname: "test".to_string(), federation_config_path: None, local_token: None, default_backend_token: None, server_id: "test-server-id".to_string() };
     let app = router(state, RouterConfig::default());
 
     let addr = start_test_server(app).await;
@@ -396,7 +397,7 @@ async fn test_websocket_text_input_to_pty() {
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
-    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new(), server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)), server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)), mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)), ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()), backends: wsh::federation::registry::BackendRegistry::new(), federation: std::sync::Arc::new(tokio::sync::Mutex::new(wsh::federation::manager::FederationManager::new())), ip_access: None, hostname: "test".to_string(), federation_config_path: None, local_token: None, default_backend_token: None };
+    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new(), server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)), server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)), mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)), ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()), backends: wsh::federation::registry::BackendRegistry::new(), federation: std::sync::Arc::new(tokio::sync::Mutex::new(wsh::federation::manager::FederationManager::new())), ip_access: None, hostname: "test".to_string(), federation_config_path: None, local_token: None, default_backend_token: None, server_id: "test-server-id".to_string() };
     let app = router(state, RouterConfig::default());
 
     let addr = start_test_server(app).await;
@@ -458,7 +459,7 @@ async fn test_websocket_bidirectional_communication() {
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
-    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new(), server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)), server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)), mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)), ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()), backends: wsh::federation::registry::BackendRegistry::new(), federation: std::sync::Arc::new(tokio::sync::Mutex::new(wsh::federation::manager::FederationManager::new())), ip_access: None, hostname: "test".to_string(), federation_config_path: None, local_token: None, default_backend_token: None };
+    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new(), server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)), server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)), mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)), ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()), backends: wsh::federation::registry::BackendRegistry::new(), federation: std::sync::Arc::new(tokio::sync::Mutex::new(wsh::federation::manager::FederationManager::new())), ip_access: None, hostname: "test".to_string(), federation_config_path: None, local_token: None, default_backend_token: None, server_id: "test-server-id".to_string() };
     let app = router(state, RouterConfig::default());
 
     let addr = start_test_server(app).await;
@@ -539,7 +540,7 @@ async fn test_websocket_multiple_outputs() {
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
-    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new(), server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)), server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)), mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)), ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()), backends: wsh::federation::registry::BackendRegistry::new(), federation: std::sync::Arc::new(tokio::sync::Mutex::new(wsh::federation::manager::FederationManager::new())), ip_access: None, hostname: "test".to_string(), federation_config_path: None, local_token: None, default_backend_token: None };
+    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new(), server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)), server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)), mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)), ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()), backends: wsh::federation::registry::BackendRegistry::new(), federation: std::sync::Arc::new(tokio::sync::Mutex::new(wsh::federation::manager::FederationManager::new())), ip_access: None, hostname: "test".to_string(), federation_config_path: None, local_token: None, default_backend_token: None, server_id: "test-server-id".to_string() };
     let app = router(state, RouterConfig::default());
 
     let addr = start_test_server(app).await;
@@ -704,7 +705,7 @@ async fn test_websocket_line_event_includes_total_lines() {
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
-    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new(), server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)), server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)), mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)), ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()), backends: wsh::federation::registry::BackendRegistry::new(), federation: std::sync::Arc::new(tokio::sync::Mutex::new(wsh::federation::manager::FederationManager::new())), ip_access: None, hostname: "test".to_string(), federation_config_path: None, local_token: None, default_backend_token: None };
+    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new(), server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)), server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)), mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)), ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()), backends: wsh::federation::registry::BackendRegistry::new(), federation: std::sync::Arc::new(tokio::sync::Mutex::new(wsh::federation::manager::FederationManager::new())), ip_access: None, hostname: "test".to_string(), federation_config_path: None, local_token: None, default_backend_token: None, server_id: "test-server-id".to_string() };
     let app = router(state, RouterConfig::default());
 
     let addr = start_test_server(app).await;
@@ -796,7 +797,7 @@ async fn test_scrollback_endpoint() {
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
-    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new(), server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)), server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)), mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)), ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()), backends: wsh::federation::registry::BackendRegistry::new(), federation: std::sync::Arc::new(tokio::sync::Mutex::new(wsh::federation::manager::FederationManager::new())), ip_access: None, hostname: "test".to_string(), federation_config_path: None, local_token: None, default_backend_token: None };
+    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new(), server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)), server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)), mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)), ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()), backends: wsh::federation::registry::BackendRegistry::new(), federation: std::sync::Arc::new(tokio::sync::Mutex::new(wsh::federation::manager::FederationManager::new())), ip_access: None, hostname: "test".to_string(), federation_config_path: None, local_token: None, default_backend_token: None, server_id: "test-server-id".to_string() };
     let app = router(state, RouterConfig::default());
 
     // Send enough lines to create scrollback (more than 5 rows)
@@ -867,7 +868,7 @@ async fn test_scrollback_initial_state() {
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
-    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new(), server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)), server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)), mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)), ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()), backends: wsh::federation::registry::BackendRegistry::new(), federation: std::sync::Arc::new(tokio::sync::Mutex::new(wsh::federation::manager::FederationManager::new())), ip_access: None, hostname: "test".to_string(), federation_config_path: None, local_token: None, default_backend_token: None };
+    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new(), server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)), server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)), mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)), ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()), backends: wsh::federation::registry::BackendRegistry::new(), federation: std::sync::Arc::new(tokio::sync::Mutex::new(wsh::federation::manager::FederationManager::new())), ip_access: None, hostname: "test".to_string(), federation_config_path: None, local_token: None, default_backend_token: None, server_id: "test-server-id".to_string() };
     let app = router(state, RouterConfig::default());
 
     // Query immediately without any output

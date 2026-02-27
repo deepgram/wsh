@@ -3297,6 +3297,7 @@ pub(super) async fn server_info(
     Json(serde_json::json!({
         "hostname": state.hostname,
         "version": env!("CARGO_PKG_VERSION"),
+        "server_id": state.server_id,
     }))
 }
 
@@ -3331,6 +3332,7 @@ pub(super) async fn list_servers(
         "health": "healthy",
         "role": "member",
         "sessions": state.sessions.len(),
+        "server_id": state.server_id,
     })];
 
     for backend in state.backends.list() {
@@ -3339,6 +3341,7 @@ pub(super) async fn list_servers(
             "address": backend.address,
             "health": backend.health,
             "role": backend.role,
+            "server_id": backend.server_id,
         }));
     }
 
@@ -3355,7 +3358,7 @@ pub(super) async fn add_server(
         .ok_or_else(|| ApiError::InvalidRequest("missing 'address' field".into()))?;
     let token = body["token"].as_str();
 
-    // Validate address format and SSRF safety before acquiring the lock.
+    // Validate address format before acquiring the lock.
     crate::federation::registry::validate_backend_address(address)
         .map_err(|detail| ApiError::InvalidRequest(detail))?;
 
@@ -3412,6 +3415,7 @@ pub(super) async fn get_server(
             "health": "healthy",
             "role": "member",
             "sessions": state.sessions.len(),
+            "server_id": state.server_id,
         })));
     }
 
@@ -3423,5 +3427,6 @@ pub(super) async fn get_server(
         "address": backend.address,
         "health": backend.health,
         "role": backend.role,
+        "server_id": backend.server_id,
     })))
 }

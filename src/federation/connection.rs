@@ -24,9 +24,16 @@ impl BackendConnection {
         address: String,
         token: Option<String>,
         registry: BackendRegistry,
+        local_server_id: String,
     ) -> Self {
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-        let task = tokio::spawn(connection_loop(address, token, registry, shutdown_rx));
+        let task = tokio::spawn(connection_loop(
+            address,
+            token,
+            registry,
+            shutdown_rx,
+            local_server_id,
+        ));
         Self { shutdown_tx, task }
     }
 
@@ -46,6 +53,7 @@ async fn connection_loop(
     token: Option<String>,
     registry: BackendRegistry,
     mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
+    local_server_id: String,
 ) {
     let mut backoff = Duration::from_secs(1);
     let max_backoff = Duration::from_secs(60);
@@ -62,6 +70,7 @@ async fn connection_loop(
             hostname: None,
             health: BackendHealth::Connecting,
             role: crate::federation::registry::BackendRole::Member,
+            server_id: None,
         };
         let ws_url = backend_stub.ws_url_for("/ws/json");
 
@@ -100,13 +109,37 @@ async fn connection_loop(
             Ok((ws_stream, _)) => {
                 backoff = Duration::from_secs(1);
 
-                // Mark healthy as soon as the WebSocket handshake succeeds.
+                // Query server info (hostname + server_id) via HTTP endpoint.
+                let server_info = fetch_server_info(&address, token.as_deref()).await;
+
+                // Self-loop detection: if remote server_id matches local, reject permanently.
+                if let Ok(ref info) = server_info {
+                    if let Some(ref remote_id) = info.server_id {
+                        if *remote_id == local_server_id {
+                            tracing::warn!(
+                                backend = %address,
+                                server_id = %remote_id,
+                                "self-loop detected — backend is this server, marking rejected"
+                            );
+                            registry.set_server_id(&address, remote_id);
+                            registry.set_health(&address, BackendHealth::Rejected);
+                            return; // Permanent — no retry.
+                        }
+                    }
+                }
+
+                // Not a self-loop — mark healthy.
                 registry.set_health(&address, BackendHealth::Healthy);
                 tracing::info!(backend = %address, "backend connected");
 
-                // Query hostname via HTTP server_info endpoint (best-effort enrichment).
-                if let Ok(hostname) = fetch_hostname(&address, token.as_deref()).await {
-                    let _ = registry.set_hostname(&address, &hostname);
+                // Enrich with hostname and server_id from the response.
+                if let Ok(info) = server_info {
+                    if let Some(hostname) = info.hostname {
+                        let _ = registry.set_hostname(&address, &hostname);
+                    }
+                    if let Some(ref remote_id) = info.server_id {
+                        registry.set_server_id(&address, remote_id);
+                    }
                 }
 
                 // Run until disconnect or shutdown.
@@ -169,16 +202,22 @@ async fn run_connection(
     }
 }
 
-async fn fetch_hostname(
+struct ServerInfo {
+    hostname: Option<String>,
+    server_id: Option<String>,
+}
+
+async fn fetch_server_info(
     address: &str,
     token: Option<&str>,
-) -> Result<String, Box<dyn std::error::Error>> {
+) -> Result<ServerInfo, Box<dyn std::error::Error + Send + Sync>> {
     let backend_stub = BackendEntry {
         address: address.to_string(),
         token: None,
         hostname: None,
         health: BackendHealth::Connecting,
         role: crate::federation::registry::BackendRole::Member,
+        server_id: None,
     };
     let url = backend_stub.url_for("/server/info");
     let client = reqwest::Client::builder()
@@ -193,10 +232,10 @@ async fn fetch_hostname(
 
     let resp = req.send().await?;
     let body: serde_json::Value = resp.json().await?;
-    body["hostname"]
-        .as_str()
-        .map(|s| s.to_string())
-        .ok_or_else(|| "no hostname in response".into())
+    Ok(ServerInfo {
+        hostname: body["hostname"].as_str().map(|s| s.to_string()),
+        server_id: body["server_id"].as_str().map(|s| s.to_string()),
+    })
 }
 
 #[cfg(test)]
@@ -235,10 +274,11 @@ mod tests {
                 hostname: None,
                 health: BackendHealth::Connecting,
                 role: BackendRole::Member,
+                server_id: None,
             })
             .unwrap();
 
-        let conn = BackendConnection::spawn(addr.to_string(), None, registry.clone());
+        let conn = BackendConnection::spawn(addr.to_string(), None, registry.clone(), "test-local-id".into());
 
         // Wait for healthy.
         timeout(Duration::from_secs(5), async {
@@ -281,10 +321,11 @@ mod tests {
                 hostname: None,
                 health: BackendHealth::Connecting,
                 role: BackendRole::Member,
+                server_id: None,
             })
             .unwrap();
 
-        let conn = BackendConnection::spawn(addr.to_string(), None, registry.clone());
+        let conn = BackendConnection::spawn(addr.to_string(), None, registry.clone(), "test-local-id".into());
 
         // Wait for healthy first.
         timeout(Duration::from_secs(5), async {
@@ -333,10 +374,11 @@ mod tests {
                 hostname: None,
                 health: BackendHealth::Connecting,
                 role: BackendRole::Member,
+                server_id: None,
             })
             .unwrap();
 
-        let conn = BackendConnection::spawn(addr.to_string(), None, registry.clone());
+        let conn = BackendConnection::spawn(addr.to_string(), None, registry.clone(), "test-local-id".into());
 
         // Wait for healthy.
         timeout(Duration::from_secs(5), async {

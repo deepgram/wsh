@@ -95,6 +95,7 @@ pub fn create_test_state_with_size(rows: u16, cols: u16) -> (wsh::api::AppState,
         federation_config_path: None,
         local_token: None,
         default_backend_token: None,
+        server_id: "test-server-id".to_string(),
     };
     (state, ts.input_rx, output_tx, parser_tx)
 }

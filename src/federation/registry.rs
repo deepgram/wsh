@@ -8,6 +8,9 @@ pub enum BackendHealth {
     Connecting,
     Healthy,
     Unavailable,
+    /// The backend was detected as a self-loop (same server_id as local).
+    /// Visible in the registry but non-functional — no retries.
+    Rejected,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -26,6 +29,9 @@ pub struct BackendEntry {
     pub hostname: Option<String>,
     pub health: BackendHealth,
     pub role: BackendRole,
+    /// Remote server's UUID (populated after first successful /server/info fetch).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_id: Option<String>,
 }
 
 impl BackendEntry {
@@ -133,8 +139,10 @@ pub fn validate_hostname(hostname: &str) -> Result<(), String> {
 /// - Must have a non-empty host.
 /// - Must have a valid port (unless implied by scheme: 80/443).
 /// - May include a path prefix (e.g. `/wsh-node-1`).
-/// - Must NOT be a localhost/loopback address (SSRF prevention).
-/// - Must NOT be `0.0.0.0`.
+/// - Must NOT be `0.0.0.0` (unspecified address is never a valid target).
+///
+/// Localhost and loopback addresses are allowed — self-loop detection is
+/// handled at the connection layer via server UUID comparison.
 ///
 /// If a schemeless `host:port` is provided, the error message suggests the fix.
 pub fn validate_backend_address(address: &str) -> Result<(), String> {
@@ -208,16 +216,8 @@ pub fn validate_backend_address(address: &str) -> Result<(), String> {
             .map_err(|_| format!("invalid port: '{}'", port_str))?;
     }
 
-    // SSRF prevention: reject localhost/loopback.
-    let lower_host = host.to_lowercase();
-    if lower_host == "localhost" {
-        return Err("localhost addresses are not allowed (SSRF prevention)".into());
-    }
-
+    // Reject unspecified address (0.0.0.0 / ::) — never a valid backend target.
     if let Ok(ip) = host.parse::<std::net::IpAddr>() {
-        if ip.is_loopback() {
-            return Err("loopback addresses are not allowed (SSRF prevention)".into());
-        }
         if ip.is_unspecified() {
             return Err("unspecified address (0.0.0.0) is not allowed".into());
         }
@@ -353,6 +353,14 @@ impl BackendRegistry {
         }
     }
 
+    /// Set the server_id for a backend identified by address.
+    pub fn set_server_id(&self, address: &str, server_id: &str) {
+        let mut backends = self.inner.write();
+        if let Some(entry) = backends.iter_mut().find(|b| b.address == address) {
+            entry.server_id = Some(server_id.to_string());
+        }
+    }
+
     /// Add a backend entry WITHOUT validating the address or hostname.
     ///
     /// This is intended for internal use (e.g., tests that need to register
@@ -404,6 +412,7 @@ mod tests {
             hostname: None,
             health: BackendHealth::Connecting,
             role: BackendRole::Member,
+            server_id: None,
         })
         .unwrap();
         let list = reg.list();
@@ -420,6 +429,7 @@ mod tests {
             hostname: None,
             health: BackendHealth::Connecting,
             role: BackendRole::Member,
+            server_id: None,
         })
         .unwrap();
         assert!(reg.remove_by_address("http://10.0.1.10:8080"));
@@ -435,6 +445,7 @@ mod tests {
             hostname: Some("prod-1".into()),
             health: BackendHealth::Healthy,
             role: BackendRole::Member,
+            server_id: None,
         })
         .unwrap();
         assert!(reg.remove_by_hostname("prod-1"));
@@ -450,6 +461,7 @@ mod tests {
             hostname: None,
             health: BackendHealth::Connecting,
             role: BackendRole::Member,
+            server_id: None,
         })
         .unwrap();
         assert!(reg
@@ -459,6 +471,7 @@ mod tests {
                 hostname: None,
                 health: BackendHealth::Connecting,
                 role: BackendRole::Member,
+                server_id: None,
             })
             .is_err());
     }
@@ -472,6 +485,7 @@ mod tests {
             hostname: Some("same-host".into()),
             health: BackendHealth::Healthy,
             role: BackendRole::Member,
+            server_id: None,
         })
         .unwrap();
         assert!(reg
@@ -481,6 +495,7 @@ mod tests {
                 hostname: Some("same-host".into()),
                 health: BackendHealth::Healthy,
                 role: BackendRole::Member,
+                server_id: None,
             })
             .is_err());
     }
@@ -494,6 +509,7 @@ mod tests {
             hostname: None,
             health: BackendHealth::Connecting,
             role: BackendRole::Member,
+            server_id: None,
         })
         .unwrap();
         reg.set_hostname("http://10.0.1.10:8080", "prod-1").unwrap();
@@ -510,6 +526,7 @@ mod tests {
             hostname: None,
             health: BackendHealth::Connecting,
             role: BackendRole::Member,
+            server_id: None,
         })
         .unwrap();
         reg.set_health("http://10.0.1.10:8080", BackendHealth::Unavailable);
@@ -526,6 +543,7 @@ mod tests {
             hostname: Some("prod-1".into()),
             health: BackendHealth::Healthy,
             role: BackendRole::Member,
+            server_id: None,
         })
         .unwrap();
         let entry = reg.get_by_hostname("prod-1").unwrap();
@@ -541,6 +559,7 @@ mod tests {
             hostname: Some("healthy".into()),
             health: BackendHealth::Healthy,
             role: BackendRole::Member,
+            server_id: None,
         })
         .unwrap();
         reg.add(BackendEntry {
@@ -549,6 +568,7 @@ mod tests {
             hostname: Some("down".into()),
             health: BackendHealth::Unavailable,
             role: BackendRole::Member,
+            server_id: None,
         })
         .unwrap();
         let healthy = reg.healthy();
@@ -693,20 +713,20 @@ mod tests {
     }
 
     #[test]
-    fn address_localhost_rejected() {
-        assert!(validate_backend_address("http://localhost:8080").is_err());
-        assert!(validate_backend_address("http://LOCALHOST:8080").is_err());
+    fn address_localhost_accepted() {
+        assert!(validate_backend_address("http://localhost:8080").is_ok());
+        assert!(validate_backend_address("http://LOCALHOST:8080").is_ok());
     }
 
     #[test]
-    fn address_loopback_ipv4_rejected() {
-        assert!(validate_backend_address("http://127.0.0.1:8080").is_err());
-        assert!(validate_backend_address("http://127.0.0.2:8080").is_err());
+    fn address_loopback_ipv4_accepted() {
+        assert!(validate_backend_address("http://127.0.0.1:8080").is_ok());
+        assert!(validate_backend_address("http://127.0.0.2:8080").is_ok());
     }
 
     #[test]
-    fn address_loopback_ipv6_rejected() {
-        assert!(validate_backend_address("http://[::1]:8080").is_err());
+    fn address_loopback_ipv6_accepted() {
+        assert!(validate_backend_address("http://[::1]:8080").is_ok());
     }
 
     #[test]
@@ -733,7 +753,7 @@ mod tests {
         let entry = BackendEntry {
             address: "http://10.0.1.10:8080".into(),
             token: None, hostname: None,
-            health: BackendHealth::Healthy, role: BackendRole::Member,
+            health: BackendHealth::Healthy, role: BackendRole::Member, server_id: None,
         };
         assert_eq!(entry.url_for("/sessions"), "http://10.0.1.10:8080/sessions");
     }
@@ -743,7 +763,7 @@ mod tests {
         let entry = BackendEntry {
             address: "https://proxy.example.com/wsh-node-1".into(),
             token: None, hostname: None,
-            health: BackendHealth::Healthy, role: BackendRole::Member,
+            health: BackendHealth::Healthy, role: BackendRole::Member, server_id: None,
         };
         assert_eq!(
             entry.url_for("/sessions"),
@@ -756,7 +776,7 @@ mod tests {
         let entry = BackendEntry {
             address: "http://10.0.1.10:8080".into(),
             token: None, hostname: None,
-            health: BackendHealth::Healthy, role: BackendRole::Member,
+            health: BackendHealth::Healthy, role: BackendRole::Member, server_id: None,
         };
         assert_eq!(entry.ws_url_for("/ws/json"), "ws://10.0.1.10:8080/ws/json");
     }
@@ -766,7 +786,7 @@ mod tests {
         let entry = BackendEntry {
             address: "https://proxy.example.com/wsh".into(),
             token: None, hostname: None,
-            health: BackendHealth::Healthy, role: BackendRole::Member,
+            health: BackendHealth::Healthy, role: BackendRole::Member, server_id: None,
         };
         assert_eq!(
             entry.ws_url_for("/ws/json"),
@@ -777,7 +797,7 @@ mod tests {
     // ── Registry add with validation ─────────────────────────────
 
     #[test]
-    fn registry_add_rejects_localhost_address() {
+    fn registry_add_accepts_localhost_address() {
         let reg = BackendRegistry::new();
         let result = reg.add(BackendEntry {
             address: "http://127.0.0.1:8080".into(),
@@ -785,9 +805,9 @@ mod tests {
             hostname: None,
             health: BackendHealth::Connecting,
             role: BackendRole::Member,
+            server_id: None,
         });
-        assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), RegistryError::InvalidAddress(_)));
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -799,6 +819,7 @@ mod tests {
             hostname: Some("-invalid".into()),
             health: BackendHealth::Connecting,
             role: BackendRole::Member,
+            server_id: None,
         });
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), RegistryError::InvalidHostname(_)));
@@ -813,8 +834,41 @@ mod tests {
             hostname: None,
             health: BackendHealth::Connecting,
             role: BackendRole::Member,
+            server_id: None,
         });
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), RegistryError::InvalidAddress(_)));
+    }
+
+    // ── Rejected health and server_id tests ─────────────────────
+
+    #[test]
+    fn rejected_health_serializes_as_snake_case() {
+        let json = serde_json::to_value(BackendHealth::Rejected).unwrap();
+        assert_eq!(json, serde_json::json!("rejected"));
+    }
+
+    #[test]
+    fn set_server_id_updates_entry() {
+        let reg = BackendRegistry::new();
+        reg.add(BackendEntry {
+            address: "http://10.0.1.10:8080".into(),
+            token: None,
+            hostname: None,
+            health: BackendHealth::Connecting,
+            role: BackendRole::Member,
+            server_id: None,
+        })
+        .unwrap();
+        reg.set_server_id("http://10.0.1.10:8080", "test-uuid-123");
+        let list = reg.list();
+        assert_eq!(list[0].server_id.as_deref(), Some("test-uuid-123"));
+    }
+
+    #[test]
+    fn set_server_id_noop_for_missing_address() {
+        let reg = BackendRegistry::new();
+        reg.set_server_id("http://nonexistent:8080", "uuid");
+        assert!(reg.list().is_empty());
     }
 }

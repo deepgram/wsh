@@ -519,6 +519,9 @@ async fn run_server(
         );
     }
 
+    // Generate a unique server identity for federation loop prevention.
+    let server_id = uuid::Uuid::new_v4().to_string();
+
     // Create the FederationManager: spawns persistent WebSocket connections
     // for each configured backend server.
     let federation_manager = Arc::new(tokio::sync::Mutex::new(
@@ -526,6 +529,7 @@ async fn run_server(
             fed_config,
             token.clone(),
             fed_default_token.clone(),
+            server_id.clone(),
         ),
     ));
 
@@ -555,6 +559,7 @@ async fn run_server(
         federation_config_path: if config_path.exists() { Some(config_path) } else { None },
         local_token: token.clone(),
         default_backend_token: fed_default_token,
+        server_id: server_id.clone(),
     };
 
     if !cors_origins.is_empty() {
@@ -573,6 +578,7 @@ async fn run_server(
         local_token: state.local_token.clone(),
         default_backend_token: state.default_backend_token.clone(),
         ip_access: state.ip_access.clone(),
+        server_id: state.server_id.clone(),
     };
     if let Some(ref prefix) = base_prefix {
         tracing::info!(prefix = %prefix, "base path prefix configured");

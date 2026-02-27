@@ -44,6 +44,7 @@ fn create_test_app_with_registry() -> (axum::Router, wsh::federation::registry::
         federation_config_path: None,
         local_token: None,
         default_backend_token: None,
+        server_id: "test-server-id".to_string(),
     };
     (router(state, RouterConfig::default()), backends)
 }
@@ -586,6 +587,7 @@ async fn server_param_with_unavailable_backend_returns_503() {
             hostname: Some("unavailable-host".into()),
             health: BackendHealth::Unavailable,
             role: BackendRole::Member,
+            server_id: None,
         })
         .unwrap();
 

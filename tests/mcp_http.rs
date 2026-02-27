@@ -31,6 +31,7 @@ fn create_test_app() -> axum::Router {
             federation_config_path: None,
             local_token: None,
             default_backend_token: None,
+            server_id: "test-server-id".to_string(),
     };
     router(state, RouterConfig::default())
 }
@@ -285,6 +286,7 @@ async fn test_mcp_endpoint_exempt_from_auth() {
             federation_config_path: None,
             local_token: None,
             default_backend_token: None,
+            server_id: "test-server-id".to_string(),
     };
     // Create router WITH auth token
     let app = router(state, RouterConfig { token: Some("secret-token".to_string()), ..Default::default() });
@@ -1557,6 +1559,7 @@ async fn test_http_and_mcp_coexist() {
             federation_config_path: None,
             local_token: None,
             default_backend_token: None,
+            server_id: "test-server-id".to_string(),
     };
     let app = router(state, RouterConfig::default());
     let addr = start_test_server(app).await;

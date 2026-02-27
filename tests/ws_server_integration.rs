@@ -26,6 +26,7 @@ fn create_empty_state() -> api::AppState {
             federation_config_path: None,
             local_token: None,
             default_backend_token: None,
+            server_id: "test-server-id".to_string(),
     }
 }
 

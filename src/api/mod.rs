@@ -87,6 +87,8 @@ pub struct AppState {
     pub local_token: Option<String>,
     /// Default token for backend connections (from config file).
     pub default_backend_token: Option<String>,
+    /// Unique identifier for this server instance (UUID v4, generated fresh on each start).
+    pub server_id: String,
 }
 
 pub(crate) fn get_session(
@@ -396,6 +398,7 @@ mod tests {
             federation_config_path: None,
             local_token: None,
             default_backend_token: None,
+            server_id: "test-server-id".to_string(),
         };
         (state, input_rx, "test".to_string())
     }
@@ -986,6 +989,7 @@ mod tests {
             federation_config_path: None,
             local_token: None,
             default_backend_token: None,
+            server_id: "test-server-id".to_string(),
         }
     }
 
@@ -1493,6 +1497,7 @@ mod tests {
                 federation_config_path: None,
                 local_token: None,
                 default_backend_token: None,
+                server_id: "test-server-id".to_string(),
             },
             RouterConfig::default(),
         );
@@ -1559,6 +1564,7 @@ mod tests {
                 federation_config_path: None,
                 local_token: None,
                 default_backend_token: None,
+                server_id: "test-server-id".to_string(),
             },
             RouterConfig::default(),
         );
@@ -1622,6 +1628,7 @@ mod tests {
                 federation_config_path: None,
                 local_token: None,
                 default_backend_token: None,
+                server_id: "test-server-id".to_string(),
             },
             RouterConfig::default(),
         );

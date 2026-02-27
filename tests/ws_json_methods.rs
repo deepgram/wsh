@@ -62,6 +62,7 @@ fn create_test_state() -> (api::AppState, mpsc::Receiver<Bytes>, mpsc::Sender<By
             federation_config_path: None,
             local_token: None,
             default_backend_token: None,
+            server_id: "test-server-id".to_string(),
     };
     (state, input_rx, parser_tx)
 }
@@ -226,6 +227,7 @@ async fn test_ws_subscribe_then_events() {
             federation_config_path: None,
             local_token: None,
             default_backend_token: None,
+            server_id: "test-server-id".to_string(),
     };
     let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
@@ -371,6 +373,7 @@ async fn test_ws_methods_interleaved_with_events() {
             federation_config_path: None,
             local_token: None,
             default_backend_token: None,
+            server_id: "test-server-id".to_string(),
     };
     let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;

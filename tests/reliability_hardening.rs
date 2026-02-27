@@ -124,6 +124,7 @@ async fn test_max_sessions_http_503() {
             federation_config_path: None,
             local_token: None,
             default_backend_token: None,
+            server_id: "test-server-id".to_string(),
     };
     let app = router(state, RouterConfig::default());
 

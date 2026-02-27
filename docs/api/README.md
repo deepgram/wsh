@@ -1121,9 +1121,13 @@ Returns this server's identity.
 ```json
 {
   "hostname": "hub-host",
-  "version": "0.1.0"
+  "version": "0.1.0",
+  "server_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 }
 ```
+
+The `server_id` is a UUID v4 generated fresh on each server start. It uniquely
+identifies this server instance and is used for federation self-loop detection.
 
 ### List Servers
 
@@ -1142,19 +1146,22 @@ Returns all servers in the cluster, including the hub itself.
     "address": "local",
     "health": "healthy",
     "role": "member",
+    "server_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
     "sessions": 3
   },
   {
     "hostname": "backend-1",
     "address": "http://10.0.1.10:8080",
     "health": "healthy",
-    "role": "member"
+    "role": "member",
+    "server_id": "f9e8d7c6-b5a4-3210-fedc-ba9876543210"
   }
 ]
 ```
 
 The hub always appears with `"address": "local"` and includes a `sessions` count.
-Backend entries include their network address and current health status.
+Backend entries include their network address, current health status, and `server_id`
+(populated after the hub connects and queries the backend's `/server/info`).
 
 ### Register a Backend Server
 
@@ -1177,11 +1184,12 @@ Content-Type: application/json
 | `address` | string | yes | Full URL with `http://` or `https://` scheme. May include a path prefix (e.g., `https://proxy.example.com/wsh-node-1`) |
 | `token` | string | no | Authentication token for the backend |
 
-The address must include an `http://` or `https://` scheme, must not be a
-localhost/loopback address (SSRF prevention), and must have a valid host.
-If an `[ip_access]` section is configured in the federation config, the
-resolved IP is checked against the blocklist and allowlist before the
-backend is registered.
+The address must include an `http://` or `https://` scheme and must have a valid
+host (the unspecified address `0.0.0.0` is rejected). Localhost and loopback
+addresses are allowed — self-loop detection is handled via server UUID comparison
+on first contact, not address blocking. If an `[ip_access]` section is configured
+in the federation config, the resolved IP is checked against the blocklist and
+allowlist before the backend is registered.
 
 **Response:** `201 Created`
 
@@ -1199,7 +1207,7 @@ hub establishes a connection and resolves the backend's hostname.
 
 | Status | Code | When |
 |--------|------|------|
-| 400 | `invalid_request` | Invalid address format or SSRF violation |
+| 400 | `invalid_request` | Invalid address format (bad scheme, empty host, unspecified address) |
 | 409 | `server_already_registered` | Address already registered |
 
 ### Get Server Status
@@ -1217,7 +1225,8 @@ Returns detailed status for a single server.
   "hostname": "backend-1",
   "address": "http://10.0.1.10:8080",
   "health": "healthy",
-  "role": "member"
+  "role": "member",
+  "server_id": "f9e8d7c6-b5a4-3210-fedc-ba9876543210"
 }
 ```
 
@@ -1250,20 +1259,26 @@ Removes a backend from the cluster and disconnects from it.
 | `healthy` | Connected and responding normally |
 | `connecting` | Initial connection or reconnection in progress |
 | `unavailable` | Connection lost, not responding |
+| `rejected` | Self-loop detected (backend has the same `server_id` as the hub) |
 
 Only healthy backends participate in session aggregation and proxy operations.
-The hub automatically reconnects to backends that become unavailable.
+The hub automatically reconnects to backends that become unavailable. Rejected
+backends are permanently disabled (no retry) — this indicates a misconfiguration
+where the server was added as its own backend.
 
 ### Backend Connections
 
 The hub maintains a persistent WebSocket connection to each registered backend.
-These connections serve three purposes:
+These connections serve four purposes:
 
-1. **Health signaling** — Connection state directly maps to health status.
+1. **Self-loop detection** — On initial connection, the hub queries `GET /server/info`
+   on the backend. If the backend's `server_id` matches the hub's own UUID, the
+   backend is marked `rejected` and no further connection attempts are made.
+2. **Health signaling** — Connection state directly maps to health status.
    When the connection drops, the backend is immediately marked `unavailable`.
-2. **Hostname discovery** — On initial connection, the hub queries `GET /server/info`
-   on the backend to learn its hostname.
-3. **Keepalive** — Ping/pong frames are sent every 30 seconds to detect silent failures.
+3. **Identity discovery** — The `/server/info` response provides the backend's
+   hostname and `server_id`, which are stored in the registry.
+4. **Keepalive** — Ping/pong frames are sent every 30 seconds to detect silent failures.
 
 Reconnection uses exponential backoff (1s initial, 60s maximum). When a backend
 recovers, its sessions reappear in aggregated listings automatically.

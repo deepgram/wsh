@@ -355,6 +355,7 @@ mod tests {
             federation_config_path: None,
             local_token: None,
             default_backend_token: None,
+            server_id: "test-server-id".to_string(),
         };
 
         let request = ReadResourceRequestParams {
@@ -382,6 +383,7 @@ mod tests {
             federation_config_path: None,
             local_token: None,
             default_backend_token: None,
+            server_id: "test-server-id".to_string(),
         };
 
         let request = ReadResourceRequestParams {
@@ -409,6 +411,7 @@ mod tests {
             federation_config_path: None,
             local_token: None,
             default_backend_token: None,
+            server_id: "test-server-id".to_string(),
         };
 
         let request = ReadResourceRequestParams {
@@ -446,6 +449,7 @@ mod tests {
             federation_config_path: None,
             local_token: None,
             default_backend_token: None,
+            server_id: "test-server-id".to_string(),
         };
 
         let request = ReadResourceRequestParams {
@@ -475,6 +479,7 @@ mod tests {
             federation_config_path: None,
             local_token: None,
             default_backend_token: None,
+            server_id: "test-server-id".to_string(),
         };
 
         let result = list_resources(&state).await.unwrap();
