@@ -88,6 +88,11 @@ pub fn create_test_state_with_size(rows: u16, cols: u16) -> (wsh::api::AppState,
         server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()),
+        backends: wsh::federation::registry::BackendRegistry::new(),
+        hostname: "test".to_string(),
+        federation_config_path: None,
+        local_token: None,
+        default_backend_token: None,
     };
     (state, ts.input_rx, output_tx, parser_tx)
 }

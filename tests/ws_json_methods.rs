@@ -55,6 +55,11 @@ fn create_test_state() -> (api::AppState, mpsc::Receiver<Bytes>, mpsc::Sender<By
             server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()),
+            backends: wsh::federation::registry::BackendRegistry::new(),
+            hostname: "test".to_string(),
+            federation_config_path: None,
+            local_token: None,
+            default_backend_token: None,
     };
     (state, input_rx, parser_tx)
 }
@@ -212,6 +217,11 @@ async fn test_ws_subscribe_then_events() {
             server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()),
+            backends: wsh::federation::registry::BackendRegistry::new(),
+            hostname: "test".to_string(),
+            federation_config_path: None,
+            local_token: None,
+            default_backend_token: None,
     };
     let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
@@ -350,6 +360,11 @@ async fn test_ws_methods_interleaved_with_events() {
             server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()),
+            backends: wsh::federation::registry::BackendRegistry::new(),
+            hostname: "test".to_string(),
+            federation_config_path: None,
+            local_token: None,
+            default_backend_token: None,
     };
     let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;

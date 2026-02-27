@@ -72,6 +72,16 @@ pub struct AppState {
     pub mcp_session_count: Arc<std::sync::atomic::AtomicUsize>,
     /// Short-lived ticket store for WebSocket authentication.
     pub ticket_store: Arc<ticket::TicketStore>,
+    /// Registry of known backend servers for federation.
+    pub backends: crate::federation::registry::BackendRegistry,
+    /// This server's hostname (for federation identity).
+    pub hostname: String,
+    /// Path to the federation config file (if any).
+    pub federation_config_path: Option<std::path::PathBuf>,
+    /// Local server's auth token (used as fallback for backend connections).
+    pub local_token: Option<String>,
+    /// Default token for backend connections (from config file).
+    pub default_backend_token: Option<String>,
 }
 
 pub(crate) fn get_session(
@@ -355,6 +365,11 @@ mod tests {
             server_ws_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             mcp_session_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             ticket_store: Arc::new(ticket::TicketStore::new()),
+            backends: crate::federation::registry::BackendRegistry::new(),
+            hostname: "test".to_string(),
+            federation_config_path: None,
+            local_token: None,
+            default_backend_token: None,
         };
         (state, input_rx, "test".to_string())
     }
@@ -938,6 +953,11 @@ mod tests {
             server_ws_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             mcp_session_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             ticket_store: Arc::new(ticket::TicketStore::new()),
+            backends: crate::federation::registry::BackendRegistry::new(),
+            hostname: "test".to_string(),
+            federation_config_path: None,
+            local_token: None,
+            default_backend_token: None,
         }
     }
 
@@ -1438,6 +1458,11 @@ mod tests {
                 server_ws_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 mcp_session_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 ticket_store: Arc::new(ticket::TicketStore::new()),
+                backends: crate::federation::registry::BackendRegistry::new(),
+                hostname: "test".to_string(),
+                federation_config_path: None,
+                local_token: None,
+                default_backend_token: None,
             },
             RouterConfig::default(),
         );
@@ -1497,6 +1522,11 @@ mod tests {
                 server_ws_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 mcp_session_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 ticket_store: Arc::new(ticket::TicketStore::new()),
+                backends: crate::federation::registry::BackendRegistry::new(),
+                hostname: "test".to_string(),
+                federation_config_path: None,
+                local_token: None,
+                default_backend_token: None,
             },
             RouterConfig::default(),
         );
@@ -1553,6 +1583,11 @@ mod tests {
                 server_ws_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 mcp_session_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 ticket_store: Arc::new(ticket::TicketStore::new()),
+                backends: crate::federation::registry::BackendRegistry::new(),
+                hostname: "test".to_string(),
+                federation_config_path: None,
+                local_token: None,
+                default_backend_token: None,
             },
             RouterConfig::default(),
         );

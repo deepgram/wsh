@@ -100,6 +100,11 @@ async fn test_concurrent_input_from_multiple_sources() {
             server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()),
+            backends: wsh::federation::registry::BackendRegistry::new(),
+            hostname: "test".to_string(),
+            federation_config_path: None,
+            local_token: None,
+            default_backend_token: None,
     };
     let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
@@ -268,6 +273,11 @@ async fn test_rapid_http_requests() {
             server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()),
+            backends: wsh::federation::registry::BackendRegistry::new(),
+            hostname: "test".to_string(),
+            federation_config_path: None,
+            local_token: None,
+            default_backend_token: None,
     };
     let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;

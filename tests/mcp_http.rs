@@ -24,6 +24,11 @@ fn create_test_app() -> axum::Router {
             server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()),
+            backends: wsh::federation::registry::BackendRegistry::new(),
+            hostname: "test".to_string(),
+            federation_config_path: None,
+            local_token: None,
+            default_backend_token: None,
     };
     router(state, RouterConfig::default())
 }
@@ -271,6 +276,11 @@ async fn test_mcp_endpoint_exempt_from_auth() {
             server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()),
+            backends: wsh::federation::registry::BackendRegistry::new(),
+            hostname: "test".to_string(),
+            federation_config_path: None,
+            local_token: None,
+            default_backend_token: None,
     };
     // Create router WITH auth token
     let app = router(state, RouterConfig { token: Some("secret-token".to_string()), ..Default::default() });
@@ -1532,6 +1542,11 @@ async fn test_http_and_mcp_coexist() {
             server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()),
+            backends: wsh::federation::registry::BackendRegistry::new(),
+            hostname: "test".to_string(),
+            federation_config_path: None,
+            local_token: None,
+            default_backend_token: None,
     };
     let app = router(state, RouterConfig::default());
     let addr = start_test_server(app).await;

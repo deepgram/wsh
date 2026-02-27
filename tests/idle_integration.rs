@@ -65,6 +65,11 @@ fn create_test_state() -> (api::AppState, mpsc::Receiver<Bytes>, ActivityTracker
             server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()),
+            backends: wsh::federation::registry::BackendRegistry::new(),
+            hostname: "test".to_string(),
+            federation_config_path: None,
+            local_token: None,
+            default_backend_token: None,
     };
     (state, input_rx, activity, parser_tx)
 }
@@ -824,6 +829,11 @@ fn create_multi_session_state() -> (api::AppState, ActivityTracker, ActivityTrac
             server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()),
+            backends: wsh::federation::registry::BackendRegistry::new(),
+            hostname: "test".to_string(),
+            federation_config_path: None,
+            local_token: None,
+            default_backend_token: None,
     };
     (state, activity_a, activity_b, parser_tx_a, parser_tx_b)
 }
@@ -975,6 +985,11 @@ async fn test_http_idle_any_no_sessions_returns_404() {
             server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             mcp_session_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             ticket_store: std::sync::Arc::new(wsh::api::ticket::TicketStore::new()),
+            backends: wsh::federation::registry::BackendRegistry::new(),
+            hostname: "test".to_string(),
+            federation_config_path: None,
+            local_token: None,
+            default_backend_token: None,
     };
     let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;

@@ -107,6 +107,14 @@ enum Commands {
         /// Rate limit in requests per second (disabled if omitted)
         #[arg(long)]
         rate_limit: Option<u32>,
+
+        /// Path to federation config file (TOML)
+        #[arg(long, env = "WSH_CONFIG")]
+        config: Option<PathBuf>,
+
+        /// Override system hostname for server identity
+        #[arg(long, env = "WSH_HOSTNAME")]
+        hostname: Option<String>,
     },
 
     /// Attach to an existing session on the server
@@ -265,8 +273,8 @@ async fn main() -> Result<(), WshError> {
     let server_name = cli.server_name.clone();
 
     match cli.command {
-        Some(Commands::Server { bind, token, ephemeral, max_sessions, cors_origins, rate_limit }) => {
-            run_server(bind, token, socket, ephemeral, max_sessions, server_name, cors_origins, rate_limit).await
+        Some(Commands::Server { bind, token, ephemeral, max_sessions, cors_origins, rate_limit, config, hostname }) => {
+            run_server(bind, token, socket, ephemeral, max_sessions, server_name, cors_origins, rate_limit, config, hostname).await
         }
         Some(Commands::Attach { name, scrollback, alt_screen }) => {
             run_attach(name, scrollback, socket, alt_screen, server_name).await
@@ -335,6 +343,8 @@ async fn run_server(
     server_name: String,
     cors_origins: Vec<String>,
     rate_limit: Option<u32>,
+    config_arg: Option<PathBuf>,
+    hostname_arg: Option<String>,
 ) -> Result<(), WshError> {
     tracing::info!(instance = %server_name, "wsh server starting");
 
@@ -351,6 +361,34 @@ async fn run_server(
         }
         None => None,
     };
+
+    // Resolve config path: CLI arg, else platform config dir
+    let config_path = config_arg.unwrap_or_else(|| {
+        dirs::config_dir()
+            .unwrap_or_else(|| {
+                // dirs::config_dir() returns None only in minimal environments
+                // (no HOME, no XDG_CONFIG_HOME). Fall back to $HOME/.config.
+                std::env::var("HOME")
+                    .map(|h| PathBuf::from(h).join(".config"))
+                    .unwrap_or_else(|_| PathBuf::from("/etc"))
+            })
+            .join("wsh")
+            .join("config.toml")
+    });
+
+    // Load federation config (optional — missing file is fine)
+    let fed_config = wsh::config::FederationConfig::load(&config_path)
+        .map_err(|e| eprintln!("Warning: {}", e))
+        .ok()
+        .flatten();
+
+    // Resolve hostname: CLI arg > config file > system hostname
+    let hostname = hostname_arg
+        .or_else(|| fed_config.as_ref()?.server.as_ref()?.hostname.clone())
+        .unwrap_or_else(|| wsh::config::resolve_hostname(None));
+
+    let fed_config = fed_config.unwrap_or_default();
+    tracing::info!(hostname = %hostname, config = %config_path.display(), "server identity resolved");
 
     let persistent = !ephemeral;
     // When --max-sessions is explicitly provided, use that value.
@@ -371,6 +409,11 @@ async fn run_server(
         server_ws_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         mcp_session_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         ticket_store: Arc::new(api::ticket::TicketStore::new()),
+        backends: wsh::federation::registry::BackendRegistry::new(),
+        hostname,
+        federation_config_path: if config_path.exists() { Some(config_path) } else { None },
+        local_token: token.clone(),
+        default_backend_token: fed_config.default_token.clone(),
     };
 
     if !cors_origins.is_empty() {
