@@ -30,10 +30,16 @@ pub struct BackendServerConfig {
 
 impl FederationConfig {
     /// Load config from a TOML file path. Returns None if file doesn't exist.
+    ///
+    /// Checks file permissions and warns if world-readable.
     pub fn load(path: &std::path::Path) -> Result<Option<Self>, ConfigError> {
         if !path.exists() {
             return Ok(None);
         }
+
+        // Warn if the config file is world-readable (may contain tokens).
+        check_config_permissions(path);
+
         let contents = std::fs::read_to_string(path)
             .map_err(|e| ConfigError::ReadFailed(path.to_path_buf(), e))?;
         let config: Self =
@@ -82,6 +88,42 @@ impl std::fmt::Display for ConfigError {
 }
 
 impl std::error::Error for ConfigError {}
+
+/// Check file permissions on a config file and warn if world-readable.
+///
+/// On Unix, checks `st_mode & 0o004` (world-readable bit). If set, logs a
+/// warning because the config file may contain authentication tokens.
+#[cfg(unix)]
+pub fn check_config_permissions(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let metadata = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(_) => return, // File doesn't exist or can't be read; nothing to warn about.
+    };
+
+    let mode = metadata.permissions().mode();
+    if mode & 0o004 != 0 {
+        tracing::warn!(
+            "Federation config file {} is world-readable (mode {:o}). \
+             It may contain tokens -- consider restricting permissions to 600.",
+            path.display(),
+            mode & 0o7777,
+        );
+    }
+}
+
+/// No-op on non-Unix platforms.
+#[cfg(not(unix))]
+pub fn check_config_permissions(_path: &std::path::Path) {}
+
+/// Returns true if the given file mode has the world-readable bit set.
+///
+/// This is a pure helper for testing; it does NOT read the filesystem.
+#[cfg(unix)]
+pub fn is_world_readable(mode: u32) -> bool {
+    mode & 0o004 != 0
+}
 
 /// Resolve the server's hostname. Uses config override if present,
 /// otherwise falls back to system hostname.
@@ -168,6 +210,68 @@ mod tests {
     fn resolve_hostname_falls_back_to_system() {
         let hostname = resolve_hostname(None);
         assert!(!hostname.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn is_world_readable_detects_644() {
+        // 0o644 = rw-r--r-- (world-readable bit is set)
+        assert!(is_world_readable(0o644));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn is_world_readable_rejects_600() {
+        // 0o600 = rw------- (no world-readable bit)
+        assert!(!is_world_readable(0o600));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn is_world_readable_detects_755() {
+        assert!(is_world_readable(0o755));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn is_world_readable_rejects_700() {
+        assert!(!is_world_readable(0o700));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn check_permissions_world_readable_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test-config.toml");
+        std::fs::write(&path, "# test").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        // The function should not panic. The actual warning is emitted via tracing.
+        // We verify that the file IS world-readable.
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert!(mode & 0o004 != 0, "file should be world-readable");
+
+        // Call the function -- should not panic.
+        check_config_permissions(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn check_permissions_restricted_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test-config.toml");
+        std::fs::write(&path, "# test").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert!(mode & 0o004 == 0, "file should NOT be world-readable");
+
+        // Call the function -- should not panic.
+        check_config_permissions(&path);
     }
 
     #[test]
