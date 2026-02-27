@@ -60,6 +60,7 @@ pub async fn serve(
     cancel: tokio_util::sync::CancellationToken,
     token: Option<String>,
     shutdown_request: tokio_util::sync::CancellationToken,
+    hostname: String,
 ) -> io::Result<()> {
     // Remove stale socket file if it exists. When used with
     // acquire_instance_lock(), the caller has already proven exclusive
@@ -96,8 +97,9 @@ pub async fn serve(
                         let sessions = sessions.clone();
                         let token = token.clone();
                         let shutdown_request = shutdown_request.clone();
+                        let hostname = hostname.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = handle_client(stream, sessions, token, shutdown_request).await {
+                            if let Err(e) = handle_client(stream, sessions, token, shutdown_request, hostname).await {
                                 tracing::debug!(?e, "client connection ended");
                             }
                         });
@@ -166,6 +168,7 @@ async fn handle_client<S: AsyncRead + AsyncWrite + Unpin>(
     sessions: SessionRegistry,
     token: Option<String>,
     shutdown_request: tokio_util::sync::CancellationToken,
+    hostname: String,
 ) -> io::Result<()> {
     // Read initial control frame (with timeout to reject idle connections)
     let frame = tokio::time::timeout(
@@ -181,7 +184,7 @@ async fn handle_client<S: AsyncRead + AsyncWrite + Unpin>(
             let msg: CreateSessionMsg = frame.parse_json().map_err(|e| {
                 io::Error::new(io::ErrorKind::InvalidData, e)
             })?;
-            handle_create_session(&mut stream, sessions, msg).await
+            handle_create_session(&mut stream, sessions, msg, &hostname).await
         }
         FrameType::AttachSession => {
             let msg: AttachSessionMsg = frame.parse_json().map_err(|e| {
@@ -190,7 +193,7 @@ async fn handle_client<S: AsyncRead + AsyncWrite + Unpin>(
             handle_attach_session(&mut stream, sessions, msg).await
         }
         FrameType::ListSessions => {
-            handle_list_sessions(&mut stream, sessions).await
+            handle_list_sessions(&mut stream, sessions, &hostname).await
         }
         FrameType::KillSession => {
             let msg: KillSessionMsg = frame.parse_json().map_err(|e| {
@@ -240,6 +243,7 @@ async fn handle_create_session<S: AsyncRead + AsyncWrite + Unpin>(
     stream: &mut S,
     sessions: SessionRegistry,
     msg: CreateSessionMsg,
+    hostname: &str,
 ) -> io::Result<()> {
     let command = match &msg.command {
         Some(cmd) => SpawnCommand::Command {
@@ -291,6 +295,7 @@ async fn handle_create_session<S: AsyncRead + AsyncWrite + Unpin>(
     // Send response
     let resp = CreateSessionResponseMsg {
         name: name.clone(),
+        server: hostname.to_string(),
         pid: session.pid,
         rows,
         cols,
@@ -427,6 +432,7 @@ async fn handle_attach_session<S: AsyncRead + AsyncWrite + Unpin>(
 async fn handle_list_sessions<S: AsyncRead + AsyncWrite + Unpin>(
     stream: &mut S,
     sessions: SessionRegistry,
+    hostname: &str,
 ) -> io::Result<()> {
     let names = sessions.list();
     let resp = ListSessionsResponseMsg {
@@ -439,6 +445,7 @@ async fn handle_list_sessions<S: AsyncRead + AsyncWrite + Unpin>(
                 tags.sort();
                 Some(SessionInfoMsg {
                     name,
+                    server: hostname.to_string(),
                     pid: session.pid,
                     command: session.command.clone(),
                     rows,
@@ -948,7 +955,7 @@ mod tests {
         let cancel = tokio_util::sync::CancellationToken::new();
         let shutdown_request = tokio_util::sync::CancellationToken::new();
         tokio::spawn(async move {
-            serve(sessions, &socket_path, cancel, token, shutdown_request).await.unwrap();
+            serve(sessions, &socket_path, cancel, token, shutdown_request, "test".to_string()).await.unwrap();
         });
 
         // Wait for socket to appear

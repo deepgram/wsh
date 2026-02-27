@@ -245,6 +245,8 @@ pub struct CreateSessionMsg {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateSessionResponseMsg {
     pub name: String,
+    #[serde(default)]
+    pub server: String,
     pub pid: Option<u32>,
     pub rows: u16,
     pub cols: u16,
@@ -319,6 +321,8 @@ pub struct ListSessionsResponseMsg {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionInfoMsg {
     pub name: String,
+    #[serde(default)]
+    pub server: String,
     pub pid: Option<u32>,
     pub command: String,
     pub rows: u16,
@@ -586,6 +590,7 @@ mod tests {
     fn control_frame_create_session_response() {
         let msg = CreateSessionResponseMsg {
             name: "session-0".to_string(),
+            server: "test".to_string(),
             pid: None,
             rows: 40,
             cols: 120,
@@ -593,6 +598,7 @@ mod tests {
         let frame = Frame::control(FrameType::CreateSessionResponse, &msg).unwrap();
         let decoded: CreateSessionResponseMsg = frame.parse_json().unwrap();
         assert_eq!(decoded.name, "session-0");
+        assert_eq!(decoded.server, "test");
         assert_eq!(decoded.pid, None);
         assert_eq!(decoded.rows, 40);
         assert_eq!(decoded.cols, 120);
@@ -731,6 +737,7 @@ mod tests {
             sessions: vec![
                 SessionInfoMsg {
                     name: "alpha".to_string(),
+                    server: "test".to_string(),
                     pid: Some(1234),
                     command: "/bin/bash".to_string(),
                     rows: 24,
@@ -741,6 +748,7 @@ mod tests {
                 },
                 SessionInfoMsg {
                     name: "beta".to_string(),
+                    server: "test".to_string(),
                     pid: None,
                     command: String::new(),
                     rows: 0,

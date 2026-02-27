@@ -2816,6 +2816,7 @@ pub(super) struct CreateSessionRequest {
 #[derive(Serialize)]
 pub(super) struct SessionInfo {
     pub name: String,
+    pub server: String,
     pub pid: Option<u32>,
     pub command: String,
     pub rows: u16,
@@ -2825,12 +2826,13 @@ pub(super) struct SessionInfo {
     pub last_activity_ms: u64,
 }
 
-fn build_session_info(session: &crate::session::Session) -> SessionInfo {
+fn build_session_info(session: &crate::session::Session, hostname: &str) -> SessionInfo {
     let (rows, cols) = session.terminal_size.get();
     let mut tags: Vec<String> = session.tags.read().iter().cloned().collect();
     tags.sort();
     SessionInfo {
         name: session.name.clone(),
+        server: hostname.to_string(),
         pid: session.pid,
         command: session.command.clone(),
         rows,
@@ -2879,7 +2881,7 @@ pub(super) async fn session_list(
         .into_iter()
         .filter_map(|name| {
             let session = state.sessions.get(&name)?;
-            Some(build_session_info(&session))
+            Some(build_session_info(&session, &state.hostname))
         })
         .collect();
     Json(infos)
@@ -2958,7 +2960,7 @@ pub(super) async fn session_create(
 
     Ok((
         StatusCode::CREATED,
-        Json(build_session_info(&session)),
+        Json(build_session_info(&session, &state.hostname)),
     ))
 }
 
@@ -2967,7 +2969,7 @@ pub(super) async fn session_get(
     Path(name): Path<String>,
 ) -> Result<Json<SessionInfo>, ApiError> {
     let session = get_session(&state.sessions, &name)?;
-    Ok(Json(build_session_info(&session)))
+    Ok(Json(build_session_info(&session, &state.hostname)))
 }
 
 pub(super) async fn session_update(
@@ -3007,7 +3009,7 @@ pub(super) async fn session_update(
     }
 
     let session = get_session(&state.sessions, &current_name)?;
-    Ok(Json(build_session_info(&session)))
+    Ok(Json(build_session_info(&session, &state.hostname)))
 }
 
 pub(super) async fn session_kill(

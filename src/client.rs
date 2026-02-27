@@ -617,7 +617,7 @@ mod tests {
         tokio::spawn(async move {
             let cancel = tokio_util::sync::CancellationToken::new();
             let shutdown_request = tokio_util::sync::CancellationToken::new();
-            server::serve(sessions, &socket_path, cancel, token, shutdown_request).await.unwrap();
+            server::serve(sessions, &socket_path, cancel, token, shutdown_request, "test".to_string()).await.unwrap();
         });
 
         // Wait for socket to appear
