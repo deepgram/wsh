@@ -580,11 +580,11 @@ async fn test_mcp_list_prompts() {
         .as_array()
         .expect("Expected prompts array in list prompts response");
 
-    // Should have exactly 9 prompts (one per skill)
+    // Should have exactly 10 prompts (one per skill)
     assert_eq!(
         prompts.len(),
-        9,
-        "Expected 9 prompts, got {}",
+        10,
+        "Expected 10 prompts, got {}",
         prompts.len()
     );
 
@@ -623,6 +623,10 @@ async fn test_mcp_list_prompts() {
     assert!(
         prompt_names.contains(&"wsh:generative-ui"),
         "Missing wsh:generative-ui prompt"
+    );
+    assert!(
+        prompt_names.contains(&"wsh:cluster-orchestration"),
+        "Missing wsh:cluster-orchestration prompt"
     );
 
     // Verify all prompts have descriptions
