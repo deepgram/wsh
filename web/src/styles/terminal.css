@@ -1038,6 +1038,41 @@ html, body, #app {
   opacity: 0.6;
 }
 
+/* Group-by toggle (tag / server) */
+.sidebar-groupby-toggle {
+  display: flex;
+  gap: 1px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 4px;
+  padding: 1px;
+  margin-left: auto;
+  margin-right: 4px;
+}
+
+.sidebar-groupby-btn {
+  background: none;
+  border: none;
+  color: var(--fg, #ccc);
+  opacity: 0.4;
+  cursor: pointer;
+  padding: 1px 6px;
+  font-size: 10px;
+  line-height: 1.4;
+  border-radius: 3px;
+  transition: opacity 0.15s, background 0.15s;
+  font-family: inherit;
+}
+
+.sidebar-groupby-btn:hover {
+  opacity: 0.7;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.sidebar-groupby-btn.active {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.08);
+}
+
 .sidebar-collapse-btn,
 .sidebar-expand-btn {
   background: none;

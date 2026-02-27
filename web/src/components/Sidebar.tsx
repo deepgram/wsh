@@ -1,7 +1,7 @@
 import { useCallback } from "preact/hooks";
 import type { WshClient } from "../api/ws";
 import { dragState, dropTargetTag, handleGroupDragOver, handleGroupDragLeave, handleGroupDrop, endDrag } from "../hooks/useDragDrop";
-import { groups, selectedGroups, collapsedGroups, toggleGroupCollapsed, getGroupStatusCounts } from "../state/groups";
+import { groups, selectedGroups, collapsedGroups, toggleGroupCollapsed, getGroupStatusCounts, groupBy, setGroupBy } from "../state/groups";
 import { connectionState } from "../state/sessions";
 import { ThumbnailCell } from "./ThumbnailCell";
 import { ThemePicker } from "./ThemePicker";
@@ -74,6 +74,26 @@ export function Sidebar({ client, collapsed, onToggleCollapse }: SidebarProps) {
     <div class="sidebar-content">
       <div class="sidebar-header">
         <span class="sidebar-title">Sessions</span>
+        <div class="sidebar-groupby-toggle" role="radiogroup" aria-label="Group by">
+          <button
+            class={`sidebar-groupby-btn ${groupBy.value === "tag" ? "active" : ""}`}
+            onClick={() => { setGroupBy("tag"); selectedGroups.value = ["all"]; }}
+            title="Group by tag"
+            role="radio"
+            aria-checked={groupBy.value === "tag"}
+          >
+            Tag
+          </button>
+          <button
+            class={`sidebar-groupby-btn ${groupBy.value === "server" ? "active" : ""}`}
+            onClick={() => { setGroupBy("server"); selectedGroups.value = ["all"]; }}
+            title="Group by server"
+            role="radio"
+            aria-checked={groupBy.value === "server"}
+          >
+            Srv
+          </button>
+        </div>
         <button class="sidebar-collapse-btn" onClick={onToggleCollapse} title="Collapse sidebar">
           &#9666;
         </button>

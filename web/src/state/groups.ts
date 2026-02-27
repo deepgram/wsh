@@ -1,6 +1,16 @@
 import { computed, signal } from "@preact/signals";
 import { sessionInfoMap, type ViewMode } from "./sessions";
 
+export type GroupByMode = "tag" | "server";
+export const groupBy = signal<GroupByMode>(
+  (localStorage.getItem("wsh-group-by") as GroupByMode) || "tag"
+);
+
+export function setGroupBy(mode: GroupByMode): void {
+  groupBy.value = mode;
+  localStorage.setItem("wsh-group-by", mode);
+}
+
 export interface Group {
   tag: string;
   label: string;
@@ -45,6 +55,15 @@ export const tileLayouts = signal<Record<string, {
 
 export const groups = computed<Group[]>(() => {
   const infoMap = sessionInfoMap.value;
+  const mode = groupBy.value;
+
+  if (mode === "server") {
+    return computeServerGroups(infoMap);
+  }
+  return computeTagGroups(infoMap);
+});
+
+function computeTagGroups(infoMap: Map<string, import("../api/types").SessionInfo>): Group[] {
   const tagGroups = new Map<string, string[]>();
   const untagged: string[] = [];
 
@@ -91,7 +110,56 @@ export const groups = computed<Group[]>(() => {
   });
 
   return result;
-});
+}
+
+function computeServerGroups(infoMap: Map<string, import("../api/types").SessionInfo>): Group[] {
+  const serverGroups = new Map<string, string[]>();
+  const local: string[] = [];
+
+  for (const [name, info] of infoMap) {
+    const server = info.server;
+    if (!server) {
+      local.push(name);
+    } else {
+      const group = serverGroups.get(server) || [];
+      group.push(name);
+      serverGroups.set(server, group);
+    }
+  }
+
+  const result: Group[] = [];
+
+  // Local sessions first
+  if (local.length > 0) {
+    result.push({
+      tag: "local",
+      label: "Local",
+      sessions: local,
+      isSpecial: true,
+    });
+  }
+
+  const sortedServers = Array.from(serverGroups.keys()).sort();
+  for (const server of sortedServers) {
+    const sessions = serverGroups.get(server)!;
+    result.push({
+      tag: `server:${server}`,
+      label: server,
+      sessions,
+      isSpecial: false,
+    });
+  }
+
+  const allSessions = Array.from(infoMap.keys());
+  result.push({
+    tag: "all",
+    label: "All Sessions",
+    sessions: allSessions,
+    isSpecial: true,
+  });
+
+  return result;
+}
 
 export const activeGroupSessions = computed<string[]>(() => {
   const selected = selectedGroups.value;
