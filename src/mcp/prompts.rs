@@ -57,6 +57,11 @@ const SKILLS: &[SkillDef] = &[
         description: "Building dynamic interactive terminal experiences",
         content: include_str!("../../skills/wsh/generative-ui/SKILL.md"),
     },
+    SkillDef {
+        name: "wsh:cluster-orchestration",
+        description: "Managing sessions across multiple federated wsh servers",
+        content: include_str!("../../skills/wsh/cluster-orchestration/SKILL.md"),
+    },
 ];
 
 pub async fn list_prompts() -> Result<ListPromptsResult, ErrorData> {
@@ -96,9 +101,9 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn list_prompts_returns_nine_prompts() {
+    async fn list_prompts_returns_ten_prompts() {
         let result = list_prompts().await.unwrap();
-        assert_eq!(result.prompts.len(), 9);
+        assert_eq!(result.prompts.len(), 10);
     }
 
     #[tokio::test]
@@ -115,6 +120,7 @@ mod tests {
         assert!(names.contains(&"wsh:visual-feedback"));
         assert!(names.contains(&"wsh:input-capture"));
         assert!(names.contains(&"wsh:generative-ui"));
+        assert!(names.contains(&"wsh:cluster-orchestration"));
     }
 
     #[tokio::test]
