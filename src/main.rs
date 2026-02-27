@@ -390,6 +390,17 @@ async fn run_server(
     let fed_config = fed_config.unwrap_or_default();
     tracing::info!(hostname = %hostname, config = %config_path.display(), "server identity resolved");
 
+    // Save default_token before fed_config is consumed by FederationManager.
+    let fed_default_token = fed_config.default_token.clone();
+
+    // Create the FederationManager: spawns persistent WebSocket connections
+    // for each configured backend server.
+    let federation_manager = wsh::federation::manager::FederationManager::from_config(
+        fed_config,
+        token.clone(),
+        fed_default_token.clone(),
+    );
+
     let persistent = !ephemeral;
     // When --max-sessions is explicitly provided, use that value.
     // Otherwise, the registry uses its built-in default (256).
@@ -409,11 +420,11 @@ async fn run_server(
         server_ws_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         mcp_session_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         ticket_store: Arc::new(api::ticket::TicketStore::new()),
-        backends: wsh::federation::registry::BackendRegistry::new(),
+        backends: federation_manager.registry().clone(),
         hostname,
         federation_config_path: if config_path.exists() { Some(config_path) } else { None },
         local_token: token.clone(),
-        default_backend_token: fed_config.default_token.clone(),
+        default_backend_token: fed_default_token,
     };
 
     if !cors_origins.is_empty() {
@@ -627,10 +638,13 @@ async fn run_server(
         tracing::warn!("shutdown timed out waiting for connections to close");
     }
 
-    // 4. Drain sessions (detach clients, SIGHUP children, schedule SIGKILL)
+    // 4. Shut down federation backend connections
+    federation_manager.shutdown_all().await;
+
+    // 5. Drain sessions (detach clients, SIGHUP children, schedule SIGKILL)
     let kill_handle = sessions.drain();
 
-    // 5. Await server tasks with a timeout. axum's graceful shutdown
+    // 6. Await server tasks with a timeout. axum's graceful shutdown
     //    waits for all in-flight connections to complete, which can block
     //    indefinitely if a WebSocket or SSE connection is stuck (half-open
     //    TCP, unresponsive client, etc.). Without this timeout the server
@@ -655,7 +669,7 @@ async fn run_server(
         tracing::warn!("server tasks did not exit within 5s, abandoning");
     }
 
-    // 6. Wait for SIGKILL escalation to complete (if any sessions were drained)
+    // 7. Wait for SIGKILL escalation to complete (if any sessions were drained)
     if let Some(handle) = kill_handle {
         let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
     }
