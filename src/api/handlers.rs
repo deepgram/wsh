@@ -3091,6 +3091,15 @@ pub(super) async fn exit_alt_screen(
     Ok(StatusCode::NO_CONTENT)
 }
 
+pub(super) async fn server_info(
+    State(state): State<AppState>,
+) -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "hostname": state.hostname,
+        "version": env!("CARGO_PKG_VERSION"),
+    }))
+}
+
 pub(super) async fn server_persist_get(
     State(state): State<AppState>,
 ) -> impl IntoResponse {

@@ -198,6 +198,7 @@ pub fn router(state: AppState, config: RouterConfig) -> Router {
         )
         .route("/sessions/{name}/detach", post(session_detach))
         .route("/idle", get(idle_any))
+        .route("/server/info", get(server_info))
         .route("/server/persist", get(server_persist_get).put(server_persist_set))
         .route("/ws/json", get(ws_json_server));
 

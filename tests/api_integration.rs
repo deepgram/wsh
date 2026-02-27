@@ -891,3 +891,27 @@ async fn test_scrollback_initial_state() {
     let total_lines = json["total_lines"].as_u64().unwrap_or(0);
     assert_eq!(total_lines, 24, "Expected initial screen lines (24 rows), got {}", total_lines);
 }
+
+#[tokio::test]
+async fn server_info_returns_hostname_and_version() {
+    let (app, _, _) = create_test_app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/server/info")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["hostname"], "test");
+    assert!(json["version"].is_string());
+}
