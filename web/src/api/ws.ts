@@ -25,20 +25,33 @@ type EventCallback = (event: any) => void;
  *
  * We try both address families because SSH port-forwards may bind
  * to either IPv4 or IPv6 loopback depending on system configuration.
+ *
+ * NOTE: Fallback URLs must be same-origin to satisfy the server's
+ * Content-Security-Policy (`connect-src 'self'`).  Rewriting
+ * `localhost` → `127.0.0.1` would create a cross-origin request that
+ * the browser blocks.  We only add fallbacks when they share the
+ * same hostname (and therefore origin) as the primary URL.
  */
 function buildWsUrls(primary: string): string[] {
   const urls = [primary];
   try {
     const parsed = new URL(primary);
-    if (parsed.hostname === "localhost") {
-      const v4 = new URL(primary);
-      v4.hostname = "127.0.0.1";
-      urls.push(v4.toString());
-
+    const host = parsed.hostname;
+    // For numeric addresses, add the other loopback family as a
+    // same-protocol fallback.  These are NOT cross-origin because
+    // the page itself was loaded from that same numeric address.
+    if (host === "127.0.0.1") {
       const v6 = new URL(primary);
       v6.hostname = "[::1]";
       urls.push(v6.toString());
+    } else if (host === "[::1]" || host === "::1") {
+      const v4 = new URL(primary);
+      v4.hostname = "127.0.0.1";
+      urls.push(v4.toString());
     }
+    // For "localhost" (or any other hostname), do NOT add numeric
+    // fallbacks — they would be cross-origin and blocked by CSP.
+    // The browser's own DNS resolution handles A/AAAA for us.
   } catch {
     // malformed URL — just use primary
   }

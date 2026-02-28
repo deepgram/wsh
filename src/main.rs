@@ -91,6 +91,11 @@ enum Commands {
         #[arg(long, env = "WSH_TOKEN")]
         token: Option<String>,
 
+        /// Disable authentication even on non-localhost bindings.
+        /// WARNING: Anyone with network access can execute commands.
+        #[arg(long, env = "WSH_NO_AUTH")]
+        no_auth: bool,
+
         /// Run in ephemeral mode (exit when last session ends).
         /// By default, `wsh server` runs in persistent mode.
         #[arg(long)]
@@ -294,8 +299,15 @@ fn resolve_socket_path(socket: Option<PathBuf>, server_name: &str) -> PathBuf {
 /// are rejected to prevent accidental auth bypass (e.g. `WSH_TOKEN=""`).
 const MIN_TOKEN_LENGTH: usize = 16;
 
-fn resolve_token(bind: &SocketAddr, user_token: &Option<String>) -> Result<Option<String>, WshError> {
+fn resolve_token(bind: &SocketAddr, user_token: &Option<String>, no_auth: bool) -> Result<Option<String>, WshError> {
     if is_loopback(bind) {
+        return Ok(None);
+    }
+    if no_auth {
+        tracing::warn!(
+            "Authentication disabled (--no-auth). \
+             Anyone with network access to this server can execute arbitrary commands."
+        );
         return Ok(None);
     }
     match user_token {
@@ -337,8 +349,8 @@ async fn main() -> Result<(), WshError> {
     let server_name = cli.server_name.clone();
 
     match cli.command {
-        Some(Commands::Server { bind, token, ephemeral, max_sessions, cors_origins, rate_limit, config, hostname, base_prefix, tls_cert, tls_key }) => {
-            run_server(bind, token, socket, ephemeral, max_sessions, server_name, cors_origins, rate_limit, config, hostname, base_prefix, tls_cert, tls_key).await
+        Some(Commands::Server { bind, token, no_auth, ephemeral, max_sessions, cors_origins, rate_limit, config, hostname, base_prefix, tls_cert, tls_key }) => {
+            run_server(bind, token, no_auth, socket, ephemeral, max_sessions, server_name, cors_origins, rate_limit, config, hostname, base_prefix, tls_cert, tls_key).await
         }
         Some(Commands::Attach { name, scrollback, alt_screen }) => {
             run_attach(name, scrollback, socket, alt_screen, server_name).await
@@ -404,6 +416,7 @@ fn init_tracing_stderr() {
 async fn run_server(
     bind: SocketAddr,
     token: Option<String>,
+    no_auth: bool,
     socket: Option<PathBuf>,
     ephemeral: bool,
     max_sessions: Option<usize>,
@@ -449,7 +462,7 @@ async fn run_server(
         }
     };
 
-    let token = resolve_token(&bind, &token)?;
+    let token = resolve_token(&bind, &token, no_auth)?;
     if token.is_some() {
         tracing::info!("auth token configured");
     }
@@ -643,7 +656,10 @@ async fn run_server(
         let cancel4 = http_cancel.clone();
         let app_v6 = app.clone();
         http_handle = tokio::spawn(async move {
-            if let Err(e) = axum::serve(listener, app)
+            if let Err(e) = axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
                 .with_graceful_shutdown(cancel4.cancelled_owned())
                 .await
             {
@@ -654,7 +670,10 @@ async fn run_server(
         http6_handle = ipv6_listener.map(|l| {
             let cancel6 = http_cancel.clone();
             tokio::spawn(async move {
-                if let Err(e) = axum::serve(l, app_v6)
+                if let Err(e) = axum::serve(
+                    l,
+                    app_v6.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+                )
                     .with_graceful_shutdown(cancel6.cancelled_owned())
                     .await
                 {
