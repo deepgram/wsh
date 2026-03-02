@@ -62,6 +62,11 @@ const SKILLS: &[SkillDef] = &[
         description: "Managing sessions across multiple federated wsh servers",
         content: include_str!("../../skills/wsh/cluster-orchestration/SKILL.md"),
     },
+    SkillDef {
+        name: "wsh:infrastructure-ops",
+        description: "Fleet management: rolling deploys, package upgrades, config management, and interactive operations across servers",
+        content: include_str!("../../skills/wsh/infrastructure-ops/SKILL.md"),
+    },
 ];
 
 pub async fn list_prompts() -> Result<ListPromptsResult, ErrorData> {
@@ -103,7 +108,7 @@ mod tests {
     #[tokio::test]
     async fn list_prompts_returns_ten_prompts() {
         let result = list_prompts().await.unwrap();
-        assert_eq!(result.prompts.len(), 10);
+        assert_eq!(result.prompts.len(), 11);
     }
 
     #[tokio::test]
@@ -121,6 +126,7 @@ mod tests {
         assert!(names.contains(&"wsh:input-capture"));
         assert!(names.contains(&"wsh:generative-ui"));
         assert!(names.contains(&"wsh:cluster-orchestration"));
+        assert!(names.contains(&"wsh:infrastructure-ops"));
     }
 
     #[tokio::test]
