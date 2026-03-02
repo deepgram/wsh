@@ -69,6 +69,7 @@ Per-session endpoints are nested under `/sessions/:name`.
 |--------|------|-------------|
 | `GET` | `/server/persist` | Query current persistence mode |
 | `PUT` | `/server/persist` | Set persistence mode (on/off) |
+| `GET` | `/idle` | Wait for any session to become idle |
 | `GET` | `/ws/json` | Server-level JSON WebSocket (multi-session) |
 
 ### Federation Endpoints
@@ -86,8 +87,8 @@ Per-session endpoints are nested under `/sessions/:name`.
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/health` | Health check (no auth) |
-| `GET` | `/openapi.yaml` | OpenAPI specification (no auth) |
-| `GET` | `/docs` | This documentation (no auth) |
+| `GET` | `/openapi.yaml` | OpenAPI specification |
+| `GET` | `/docs` | This documentation |
 
 ## Quick Start
 
@@ -170,7 +171,7 @@ Always returns 200. Not subject to authentication.
 ## Input Injection
 
 ```
-POST /input
+POST /sessions/:name/input
 ```
 
 Sends raw bytes to the terminal's PTY. The request body is forwarded verbatim
@@ -188,13 +189,13 @@ Sends raw bytes to the terminal's PTY. The request body is forwarded verbatim
 **Example -- send Ctrl+C:**
 
 ```bash
-printf '\x03' | curl -X POST http://localhost:8080/input --data-binary @-
+printf '\x03' | curl -X POST http://localhost:8080/sessions/default/input --data-binary @-
 ```
 
 ## Screen State
 
 ```
-GET /screen?format=styled
+GET /sessions/:name/screen?format=styled
 ```
 
 Returns the current visible screen, including cursor position and whether the
@@ -275,7 +276,7 @@ Terminal colors serialize as one of:
 ## Scrollback Buffer
 
 ```
-GET /scrollback?format=styled&offset=0&limit=100
+GET /sessions/:name/scrollback?format=styled&offset=0&limit=100
 ```
 
 Returns lines from the scrollback buffer (history above the visible screen).
@@ -305,12 +306,12 @@ Use `total_lines` and `offset` for pagination.
 
 See [websocket.md](websocket.md) for the full WebSocket protocol documentation.
 
-### Raw Binary WebSocket (`/ws/raw`)
+### Raw Binary WebSocket (`/sessions/:name/ws/raw`)
 
 Bidirectional byte stream. Output from the PTY arrives as binary frames. Send
 binary or text frames to inject input.
 
-### JSON Event WebSocket (`/ws/json`)
+### JSON Event WebSocket (`/sessions/:name/ws/json`)
 
 Structured request/response protocol over WebSocket. Supports method calls
 (query state, inject input, manage overlays) and event subscriptions. After
@@ -347,7 +348,7 @@ Includes focus tracking for directing input to specific overlays or panels.
 ## Idle Detection
 
 ```
-GET /idle?timeout_ms=2000
+GET /sessions/:name/idle?timeout_ms=2000
 ```
 
 Long-polls until the terminal has been idle (no PTY output or input from any
@@ -378,7 +379,7 @@ arrives, it responds immediately (unless `last_generation` or `fresh` are used).
 }
 ```
 
-The `screen` object has the same shape as `GET /screen`. The `generation` field
+The `screen` object has the same shape as `GET /sessions/:name/screen`. The `generation` field
 is a monotonic counter that increments on each activity event.
 
 **Preventing busy-loop storms:**
@@ -390,18 +391,18 @@ something happens — preventing rapid-fire immediate responses:
 
 ```bash
 # First call: may return immediately if already idle
-curl 'http://localhost:8080/idle?timeout_ms=500&format=plain'
+curl 'http://localhost:8080/sessions/default/idle?timeout_ms=500&format=plain'
 # Response: {"screen": ..., "generation": 42}
 
 # Subsequent call: blocks until new activity, then waits for idle
-curl 'http://localhost:8080/idle?timeout_ms=500&last_generation=42&format=plain'
+curl 'http://localhost:8080/sessions/default/idle?timeout_ms=500&last_generation=42&format=plain'
 ```
 
 Alternatively, use `fresh=true` to always observe real silence without tracking
 generation state — at the cost of always waiting at least `timeout_ms`:
 
 ```bash
-curl 'http://localhost:8080/idle?timeout_ms=500&fresh=true&format=plain'
+curl 'http://localhost:8080/sessions/default/idle?timeout_ms=500&fresh=true&format=plain'
 ```
 
 **Errors:**
@@ -1059,7 +1060,7 @@ The `scrollback` and `screen` fields contain base64-encoded raw terminal bytes
 See [authentication.md](authentication.md) for the full authentication documentation.
 
 When wsh binds to a non-localhost address, bearer token authentication is
-required on all endpoints except `/health`, `/docs`, and `/openapi.yaml`.
+required on all endpoints except `/health`.
 
 ## Error Responses
 

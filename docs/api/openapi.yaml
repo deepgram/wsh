@@ -975,7 +975,6 @@ paths:
       operationId: getOpenApiSpec
       summary: OpenAPI specification
       tags: [meta]
-      security: []
       responses:
         "200":
           description: This OpenAPI spec.
@@ -989,7 +988,6 @@ paths:
       operationId: getDocs
       summary: API documentation
       tags: [meta]
-      security: []
       responses:
         "200":
           description: API documentation in Markdown.

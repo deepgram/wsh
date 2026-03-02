@@ -32,16 +32,16 @@ The `screen_mode` field is omitted from JSON responses when the value is
 
 ### List Filtering
 
-List endpoints (`GET /overlay`, `GET /panel`) only return elements whose
+List endpoints (`GET /sessions/:name/overlay`, `GET /sessions/:name/panel`) only return elements whose
 `screen_mode` matches the session's current mode. When in normal mode, you
 only see normal-mode elements. When in alt mode, you only see alt-mode
 elements.
 
-`GET /overlay/:id` and `GET /panel/:id` return any element regardless of mode.
+`GET /sessions/:name/overlay/:id` and `GET /sessions/:name/panel/:id` return any element regardless of mode.
 
 ### Exit Cleanup
 
-Exiting alt screen mode (`POST /screen_mode/exit_alt`) deletes all overlays
+Exiting alt screen mode (`POST /sessions/:name/screen_mode/exit_alt`) deletes all overlays
 and panels tagged with `screen_mode: "alt"`. The PTY reclaims any space that
 was allocated to alt-mode panels.
 
@@ -50,7 +50,7 @@ was allocated to alt-mode panels.
 ### Get Current Screen Mode
 
 ```
-GET /screen_mode
+GET /sessions/:name/screen_mode
 ```
 
 Returns the session's current screen mode.
@@ -64,13 +64,13 @@ Returns the session's current screen mode.
 **Example:**
 
 ```bash
-curl http://localhost:8080/screen_mode
+curl http://localhost:8080/sessions/default/screen_mode
 ```
 
 ### Enter Alternate Screen Mode
 
 ```
-POST /screen_mode/enter_alt
+POST /sessions/:name/screen_mode/enter_alt
 ```
 
 Switches the session to alternate screen mode. New overlays and panels will be
@@ -84,13 +84,13 @@ alt mode.
 **Example:**
 
 ```bash
-curl -X POST http://localhost:8080/screen_mode/enter_alt
+curl -X POST http://localhost:8080/sessions/default/screen_mode/enter_alt
 ```
 
 ### Exit Alternate Screen Mode
 
 ```
-POST /screen_mode/exit_alt
+POST /sessions/:name/screen_mode/exit_alt
 ```
 
 Switches the session back to normal screen mode. All alt-mode overlays and
@@ -105,7 +105,7 @@ normal mode.
 **Example:**
 
 ```bash
-curl -X POST http://localhost:8080/screen_mode/exit_alt
+curl -X POST http://localhost:8080/sessions/default/screen_mode/exit_alt
 ```
 
 ## WebSocket Methods
@@ -152,30 +152,21 @@ Switch back to normal screen mode. Deletes all alt-mode elements.
 
 ```bash
 # Enter alt screen mode for a temporary UI context
-curl -X POST http://localhost:8080/screen_mode/enter_alt
+curl -X POST http://localhost:8080/sessions/default/screen_mode/enter_alt
 
 # Create alt-mode UI elements (auto-tagged with screen_mode: "alt")
-curl -X POST http://localhost:8080/panel \
+curl -X POST http://localhost:8080/sessions/default/panel \
   -H 'Content-Type: application/json' \
   -d '{"position": "top", "height": 1, "spans": [{"text": " Agent Menu "}], "background": {"bg": "blue"}}'
 
-curl -X POST http://localhost:8080/overlay \
+curl -X POST http://localhost:8080/sessions/default/overlay \
   -H 'Content-Type: application/json' \
   -d '{"x": 5, "y": 3, "width": 40, "height": 5, "background": {"bg": {"r": 30, "g": 30, "b": 30}}, "spans": [{"text": "Option 1: Build\nOption 2: Test\nOption 3: Deploy"}]}'
 
 # ... agent interaction happens ...
 
 # Exit alt screen -- all alt-mode elements are automatically deleted
-curl -X POST http://localhost:8080/screen_mode/exit_alt
+curl -X POST http://localhost:8080/sessions/default/screen_mode/exit_alt
 # Normal-mode overlays and panels reappear
 ```
 
-## Server Mode
-
-In server mode, the screen mode endpoints are nested under the session path:
-
-| Method | Path |
-|--------|------|
-| `GET` | `/sessions/:name/screen_mode` |
-| `POST` | `/sessions/:name/screen_mode/enter_alt` |
-| `POST` | `/sessions/:name/screen_mode/exit_alt` |

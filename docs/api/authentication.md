@@ -14,8 +14,7 @@ Authentication depends on the bind address:
 | Any other address | Yes | Network-accessible -- must authenticate |
 
 When no authentication is required, all endpoints are open. When authentication
-is required, every endpoint except `/health`, `/docs`, and `/openapi.yaml`
-requires a valid token.
+is required, every endpoint except `/health` requires a valid token.
 
 ## Token Configuration
 
@@ -161,8 +160,8 @@ exchange flow internally -- it acquires a short-lived ticket via
   under a path prefix for clean reverse-proxy deployment; `/health` stays at
   root for load balancer probes.
 - Tokens are compared in constant time to prevent timing attacks.
-- `/health`, `/docs`, and `/openapi.yaml` are always unauthenticated so
-  monitoring tools and documentation browsers work without credentials.
+- `/health` is always unauthenticated so monitoring tools and load balancer
+  probes work without credentials.
 - When binding to a non-localhost address, rate limiting (100 req/s per IP)
   is applied by default. Override with `--rate-limit`.
 - For federated deployments, the `[ip_access]` section in the federation

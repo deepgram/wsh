@@ -96,7 +96,7 @@ For simple error handling, use HTTP status codes:
 For precise handling, switch on the `code` field:
 
 ```python
-response = requests.post(f"{base}/input", data=b"hello")
+response = requests.post(f"{base}/sessions/{session}/input", data=b"hello")
 if response.status_code != 204:
     error = response.json()["error"]
     match error["code"]:

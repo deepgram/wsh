@@ -46,7 +46,7 @@ When running on localhost (default), no authentication is required.
 ## Raw Binary WebSocket
 
 ```
-GET /ws/raw
+GET /sessions/:name/ws/raw
 ```
 
 A bidirectional byte stream mirroring the terminal's PTY.
@@ -79,7 +79,7 @@ verbatim -- no JSON encoding.
 ## JSON Event WebSocket
 
 ```
-GET /ws/json
+GET /sessions/:name/ws/json
 ```
 
 A structured protocol for querying terminal state, injecting input, managing
@@ -224,13 +224,13 @@ Subscribe is not required first.
 
 Start receiving real-time events. See Step 2 above for full details.
 
-**Params:** `events` (required), `interval_ms`, `format`
+**Params:** `events` (required), `interval_ms`, `format`, `idle_timeout_ms`
 
 **Result:** `{"events": ["lines", "cursor"]}`
 
 ### `get_screen`
 
-Get the current visible screen. Same response shape as `GET /screen`.
+Get the current visible screen. Same response shape as `GET /sessions/:name/screen`.
 
 **Params:** `format` (`"plain"` | `"styled"`, default `"styled"`)
 
@@ -246,7 +246,7 @@ Get the current visible screen. Same response shape as `GET /screen`.
 
 ### `get_scrollback`
 
-Get scrollback buffer contents. Same response shape as `GET /scrollback`.
+Get scrollback buffer contents. Same response shape as `GET /sessions/:name/scrollback`.
 
 **Params:** `format` (default `"styled"`), `offset` (default `0`), `limit` (default `100`)
 
@@ -410,11 +410,15 @@ Create a positioned text overlay on the terminal.
 |-------|------|----------|-------------|
 | `x` | integer | yes | Column position |
 | `y` | integer | yes | Row position |
+| `width` | integer | yes | Width in columns |
+| `height` | integer | yes | Height in rows |
 | `z` | integer | no | Z-order (stacking) |
+| `background` | BackgroundStyle | no | Background fill for the bounding rectangle |
 | `spans` | array | yes | Array of span objects (see overlay docs) |
+| `focusable` | boolean | no | Whether the overlay can receive input focus (default: false) |
 
 ```json
-{"id": 10, "method": "create_overlay", "params": {"x": 60, "y": 0, "z": 100, "spans": [{"text": "Status: OK", "fg": "green"}]}}
+{"id": 10, "method": "create_overlay", "params": {"x": 60, "y": 0, "width": 20, "height": 1, "z": 100, "spans": [{"text": "Status: OK", "fg": "green"}]}}
 ```
 
 **Result:** `{"id": "overlay-uuid"}`
@@ -833,7 +837,7 @@ Full screen state snapshot. Sent on initial connection and after resets.
 }
 ```
 
-The `screen` object has the same shape as the `GET /screen` response.
+The `screen` object has the same shape as the `GET /sessions/:name/screen` response.
 
 ### `diff`
 

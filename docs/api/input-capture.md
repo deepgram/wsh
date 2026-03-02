@@ -19,7 +19,7 @@ receive every keystroke. The difference is whether the PTY also gets the input.
 ## Checking the Current Mode
 
 ```
-GET /input/mode
+GET /sessions/:name/input/mode
 ```
 
 **Response:**
@@ -31,13 +31,13 @@ GET /input/mode
 **Example:**
 
 ```bash
-curl http://localhost:8080/input/mode
+curl http://localhost:8080/sessions/default/input/mode
 ```
 
 ## Switching to Capture Mode
 
 ```
-POST /input/capture
+POST /sessions/:name/input/capture
 ```
 
 **Response:** `204 No Content`
@@ -57,7 +57,7 @@ curl -X POST http://localhost:8080/sessions/default/input/capture
 ## Releasing Back to Passthrough
 
 ```
-POST /input/release
+POST /sessions/:name/input/release
 ```
 
 **Response:** `204 No Content`
@@ -155,14 +155,16 @@ import json
 import requests
 
 BASE = "http://localhost:8080"
+SESSION = "default"
 
 async def approval_flow():
     # 1. Capture input
-    requests.post(f"{BASE}/input/capture")
+    requests.post(f"{BASE}/sessions/{SESSION}/input/capture")
 
     # 2. Show overlay asking for approval
-    resp = requests.post(f"{BASE}/overlay", json={
+    resp = requests.post(f"{BASE}/sessions/{SESSION}/overlay", json={
         "x": 0, "y": 23, "z": 999,
+        "width": 20, "height": 1,
         "spans": [
             {"text": " Approve? [y/n] ", "bg": "yellow", "bold": True}
         ]
@@ -170,10 +172,10 @@ async def approval_flow():
     overlay_id = resp.json()["id"]
 
     # 3. Listen for input
-    async with websockets.connect(f"ws://localhost:8080/ws/json") as ws:
+    async with websockets.connect(f"ws://localhost:8080/sessions/{SESSION}/ws/json") as ws:
         await ws.recv()  # {"connected": true}
-        await ws.send(json.dumps({"events": ["input"]}))
-        await ws.recv()  # {"subscribed": [...]}
+        await ws.send(json.dumps({"method": "subscribe", "params": {"events": ["input"]}}))
+        await ws.recv()  # {"method": "subscribe", "result": {"events": ["input"]}}
         await ws.recv()  # sync event
 
         while True:
@@ -188,8 +190,8 @@ async def approval_flow():
                     break
 
     # 4. Clean up
-    requests.delete(f"{BASE}/overlay/{overlay_id}")
-    requests.post(f"{BASE}/input/release")
+    requests.delete(f"{BASE}/sessions/{SESSION}/overlay/{overlay_id}")
+    requests.post(f"{BASE}/sessions/{SESSION}/input/release")
 ```
 
 ## Focus Tracking
@@ -200,7 +202,7 @@ panel. At most one element has focus at a time.
 ### Set Focus
 
 ```
-POST /input/focus
+POST /sessions/:name/input/focus
 Content-Type: application/json
 ```
 
@@ -225,7 +227,7 @@ have `focusable: true`.
 **Example:**
 
 ```bash
-curl -X POST http://localhost:8080/input/focus \
+curl -X POST http://localhost:8080/sessions/default/input/focus \
   -H 'Content-Type: application/json' \
   -d '{"id": "f47ac10b-58cc-4372-a567-0e02b2c3d479"}'
 ```
@@ -233,7 +235,7 @@ curl -X POST http://localhost:8080/input/focus \
 ### Remove Focus
 
 ```
-POST /input/unfocus
+POST /sessions/:name/input/unfocus
 ```
 
 Clears input focus. No element receives directed input.
@@ -243,13 +245,13 @@ Clears input focus. No element receives directed input.
 **Example:**
 
 ```bash
-curl -X POST http://localhost:8080/input/unfocus
+curl -X POST http://localhost:8080/sessions/default/input/unfocus
 ```
 
 ### Get Current Focus
 
 ```
-GET /input/focus
+GET /sessions/:name/input/focus
 ```
 
 Returns the ID of the currently focused element, or `null` if nothing has focus.
@@ -269,22 +271,22 @@ or when nothing is focused:
 **Example:**
 
 ```bash
-curl http://localhost:8080/input/focus
+curl http://localhost:8080/sessions/default/input/focus
 ```
 
 ### Focus Auto-Clear
 
 Focus is automatically cleared when:
 
-- Input mode is released (`POST /input/release`) -- returning to passthrough
+- Input mode is released (`POST /sessions/:name/input/release`) -- returning to passthrough
   mode clears focus
 - The focused element is deleted -- deleting an overlay or panel that has focus
   clears focus
-- All overlays or panels are cleared (`DELETE /overlay`, `DELETE /panel`)
+- All overlays or panels are cleared (`DELETE /sessions/:name/overlay`, `DELETE /sessions/:name/panel`)
 
 ## Notes
 
-- Input injected via `POST /input` always reaches the PTY regardless of input
+- Input injected via `POST /sessions/:name/input` always reaches the PTY regardless of input
   mode. Capture mode only affects keyboard input from the local terminal.
 - State is shared across all API clients. If one client captures input, it
   affects all clients and the local terminal.

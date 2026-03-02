@@ -51,7 +51,7 @@ with `height: 2` can use a newline to place content on its second row.
 ## Create a Panel
 
 ```
-POST /panel
+POST /sessions/:name/panel
 Content-Type: application/json
 ```
 
@@ -89,7 +89,7 @@ Content-Type: application/json
 **Example:**
 
 ```bash
-curl -X POST http://localhost:8080/panel \
+curl -X POST http://localhost:8080/sessions/default/panel \
   -H 'Content-Type: application/json' \
   -d '{"position": "top", "height": 2, "z": 100, "background": {"bg": "blue"}, "spans": [{"text": "Status: ", "bold": true}, {"text": "OK", "fg": "green"}]}'
 ```
@@ -97,7 +97,7 @@ curl -X POST http://localhost:8080/panel \
 ## List Panels
 
 ```
-GET /panel
+GET /sessions/:name/panel
 ```
 
 Returns all panels filtered by the session's current screen mode, sorted by
@@ -129,13 +129,13 @@ is omitted when `false`.
 **Example:**
 
 ```bash
-curl http://localhost:8080/panel
+curl http://localhost:8080/sessions/default/panel
 ```
 
 ## Get a Single Panel
 
 ```
-GET /panel/:id
+GET /sessions/:name/panel/:id
 ```
 
 **Response:** `200 OK` with the panel object.
@@ -145,13 +145,13 @@ GET /panel/:id
 **Example:**
 
 ```bash
-curl http://localhost:8080/panel/f47ac10b-58cc-4372-a567-0e02b2c3d479
+curl http://localhost:8080/sessions/default/panel/f47ac10b-58cc-4372-a567-0e02b2c3d479
 ```
 
 ## Replace a Panel
 
 ```
-PUT /panel/:id
+PUT /sessions/:name/panel/:id
 Content-Type: application/json
 ```
 
@@ -185,7 +185,7 @@ Fully replaces the panel's properties.
 **Example:**
 
 ```bash
-curl -X PUT http://localhost:8080/panel/f47ac10b-58cc-4372-a567-0e02b2c3d479 \
+curl -X PUT http://localhost:8080/sessions/default/panel/f47ac10b-58cc-4372-a567-0e02b2c3d479 \
   -H 'Content-Type: application/json' \
   -d '{"position": "top", "height": 2, "z": 100, "spans": [{"text": "Status: ", "bold": true}, {"text": "Error", "fg": "red"}]}'
 ```
@@ -193,7 +193,7 @@ curl -X PUT http://localhost:8080/panel/f47ac10b-58cc-4372-a567-0e02b2c3d479 \
 ## Partially Update a Panel
 
 ```
-PATCH /panel/:id
+PATCH /sessions/:name/panel/:id
 Content-Type: application/json
 ```
 
@@ -227,7 +227,7 @@ optional -- only provided fields are updated.
 **Example:**
 
 ```bash
-curl -X PATCH http://localhost:8080/panel/f47ac10b-58cc-4372-a567-0e02b2c3d479 \
+curl -X PATCH http://localhost:8080/sessions/default/panel/f47ac10b-58cc-4372-a567-0e02b2c3d479 \
   -H 'Content-Type: application/json' \
   -d '{"height": 3, "spans": [{"text": "Line 1\nLine 2\nLine 3"}]}'
 ```
@@ -235,7 +235,7 @@ curl -X PATCH http://localhost:8080/panel/f47ac10b-58cc-4372-a567-0e02b2c3d479 \
 ## Partial Span Update by ID
 
 ```
-POST /panel/:id/spans
+POST /sessions/:name/panel/:id/spans
 Content-Type: application/json
 ```
 
@@ -260,7 +260,7 @@ list when only one or two values change.
 **Example:**
 
 ```bash
-curl -X POST http://localhost:8080/panel/f47ac10b-58cc-4372-a567-0e02b2c3d479/spans \
+curl -X POST http://localhost:8080/sessions/default/panel/f47ac10b-58cc-4372-a567-0e02b2c3d479/spans \
   -H 'Content-Type: application/json' \
   -d '{"spans": [{"id": "value", "text": "Error", "fg": "red"}]}'
 ```
@@ -268,7 +268,7 @@ curl -X POST http://localhost:8080/panel/f47ac10b-58cc-4372-a567-0e02b2c3d479/sp
 ## Region Write
 
 ```
-POST /panel/:id/write
+POST /sessions/:name/panel/:id/write
 Content-Type: application/json
 ```
 
@@ -311,7 +311,7 @@ Each region write object:
 **Example:**
 
 ```bash
-curl -X POST http://localhost:8080/panel/f47ac10b-58cc-4372-a567-0e02b2c3d479/write \
+curl -X POST http://localhost:8080/sessions/default/panel/f47ac10b-58cc-4372-a567-0e02b2c3d479/write \
   -H 'Content-Type: application/json' \
   -d '{"writes": [{"row": 0, "col": 0, "text": "X", "fg": "red"}]}'
 ```
@@ -319,7 +319,7 @@ curl -X POST http://localhost:8080/panel/f47ac10b-58cc-4372-a567-0e02b2c3d479/wr
 ## Delete a Panel
 
 ```
-DELETE /panel/:id
+DELETE /sessions/:name/panel/:id
 ```
 
 **Response:** `204 No Content`
@@ -331,13 +331,13 @@ If the deleted panel had input focus, focus is automatically cleared.
 **Example:**
 
 ```bash
-curl -X DELETE http://localhost:8080/panel/f47ac10b-58cc-4372-a567-0e02b2c3d479
+curl -X DELETE http://localhost:8080/sessions/default/panel/f47ac10b-58cc-4372-a567-0e02b2c3d479
 ```
 
 ## Clear All Panels
 
 ```
-DELETE /panel
+DELETE /sessions/:name/panel
 ```
 
 Removes every panel. The PTY reclaims the full terminal height. Focus is
@@ -348,7 +348,7 @@ cleared if any panel had focus.
 **Example:**
 
 ```bash
-curl -X DELETE http://localhost:8080/panel
+curl -X DELETE http://localhost:8080/sessions/default/panel
 ```
 
 ## WebSocket Methods
@@ -466,7 +466,7 @@ progress indicators that should never be obscured by terminal output.
 
 ```bash
 # Create a two-row status bar at the top of the terminal with a dark background
-curl -X POST http://localhost:8080/panel \
+curl -X POST http://localhost:8080/sessions/default/panel \
   -H 'Content-Type: application/json' \
   -d '{
     "position": "top",
@@ -484,7 +484,7 @@ curl -X POST http://localhost:8080/panel \
 # {"id":"abc123"}
 
 # Update just the status and icon using partial span update
-curl -X POST http://localhost:8080/panel/abc123/spans \
+curl -X POST http://localhost:8080/sessions/default/panel/abc123/spans \
   -H 'Content-Type: application/json' \
   -d '{
     "spans": [
@@ -494,5 +494,5 @@ curl -X POST http://localhost:8080/panel/abc123/spans \
   }'
 
 # Clean up when done
-curl -X DELETE http://localhost:8080/panel/abc123
+curl -X DELETE http://localhost:8080/sessions/default/panel/abc123
 ```

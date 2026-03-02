@@ -32,7 +32,7 @@ See [alt-screen.md](alt-screen.md) for details.
 ## Create an Overlay
 
 ```
-POST /overlay
+POST /sessions/:name/overlay
 Content-Type: application/json
 ```
 
@@ -74,7 +74,7 @@ Content-Type: application/json
 **Example:**
 
 ```bash
-curl -X POST http://localhost:8080/overlay \
+curl -X POST http://localhost:8080/sessions/default/overlay \
   -H 'Content-Type: application/json' \
   -d '{"x": 10, "y": 0, "z": 100, "width": 30, "height": 3, "background": {"bg": "blue"}, "spans": [{"text": "Status: OK", "fg": "green"}]}'
 ```
@@ -82,7 +82,7 @@ curl -X POST http://localhost:8080/overlay \
 ## List Overlays
 
 ```
-GET /overlay
+GET /sessions/:name/overlay
 ```
 
 Returns overlays filtered by the session's current screen mode.
@@ -114,13 +114,13 @@ Note: `region_writes` is omitted when empty. `screen_mode` is omitted when
 **Example:**
 
 ```bash
-curl http://localhost:8080/overlay
+curl http://localhost:8080/sessions/default/overlay
 ```
 
 ## Get a Single Overlay
 
 ```
-GET /overlay/:id
+GET /sessions/:name/overlay/:id
 ```
 
 **Response:** `200 OK` with the overlay object.
@@ -130,13 +130,13 @@ GET /overlay/:id
 **Example:**
 
 ```bash
-curl http://localhost:8080/overlay/f47ac10b-58cc-4372-a567-0e02b2c3d479
+curl http://localhost:8080/sessions/default/overlay/f47ac10b-58cc-4372-a567-0e02b2c3d479
 ```
 
 ## Update Overlay Spans
 
 ```
-PUT /overlay/:id
+PUT /sessions/:name/overlay/:id
 Content-Type: application/json
 ```
 
@@ -160,7 +160,7 @@ Replaces the overlay's spans while keeping its position, size, and z-order.
 **Example:**
 
 ```bash
-curl -X PUT http://localhost:8080/overlay/f47ac10b-58cc-4372-a567-0e02b2c3d479 \
+curl -X PUT http://localhost:8080/sessions/default/overlay/f47ac10b-58cc-4372-a567-0e02b2c3d479 \
   -H 'Content-Type: application/json' \
   -d '{"spans": [{"text": "Status: ", "bold": true}, {"text": "Error", "fg": "red"}]}'
 ```
@@ -168,7 +168,7 @@ curl -X PUT http://localhost:8080/overlay/f47ac10b-58cc-4372-a567-0e02b2c3d479 \
 ## Partial Span Update by ID
 
 ```
-POST /overlay/:id/spans
+POST /sessions/:name/overlay/:id/spans
 Content-Type: application/json
 ```
 
@@ -193,7 +193,7 @@ span list when only one or two values change.
 **Example:**
 
 ```bash
-curl -X POST http://localhost:8080/overlay/f47ac10b-58cc-4372-a567-0e02b2c3d479/spans \
+curl -X POST http://localhost:8080/sessions/default/overlay/f47ac10b-58cc-4372-a567-0e02b2c3d479/spans \
   -H 'Content-Type: application/json' \
   -d '{"spans": [{"id": "value", "text": "Error", "fg": "red"}]}'
 ```
@@ -201,7 +201,7 @@ curl -X POST http://localhost:8080/overlay/f47ac10b-58cc-4372-a567-0e02b2c3d479/
 ## Region Write
 
 ```
-POST /overlay/:id/write
+POST /sessions/:name/overlay/:id/write
 Content-Type: application/json
 ```
 
@@ -244,7 +244,7 @@ Each region write object:
 **Example:**
 
 ```bash
-curl -X POST http://localhost:8080/overlay/f47ac10b-58cc-4372-a567-0e02b2c3d479/write \
+curl -X POST http://localhost:8080/sessions/default/overlay/f47ac10b-58cc-4372-a567-0e02b2c3d479/write \
   -H 'Content-Type: application/json' \
   -d '{"writes": [{"row": 0, "col": 0, "text": "X", "fg": "red"}]}'
 ```
@@ -252,7 +252,7 @@ curl -X POST http://localhost:8080/overlay/f47ac10b-58cc-4372-a567-0e02b2c3d479/
 ## Move or Reorder an Overlay
 
 ```
-PATCH /overlay/:id
+PATCH /sessions/:name/overlay/:id
 Content-Type: application/json
 ```
 
@@ -286,7 +286,7 @@ All fields are optional -- only provided fields are updated.
 **Example:**
 
 ```bash
-curl -X PATCH http://localhost:8080/overlay/f47ac10b-58cc-4372-a567-0e02b2c3d479 \
+curl -X PATCH http://localhost:8080/sessions/default/overlay/f47ac10b-58cc-4372-a567-0e02b2c3d479 \
   -H 'Content-Type: application/json' \
   -d '{"x": 20, "y": 5, "z": 200}'
 ```
@@ -294,7 +294,7 @@ curl -X PATCH http://localhost:8080/overlay/f47ac10b-58cc-4372-a567-0e02b2c3d479
 ## Delete an Overlay
 
 ```
-DELETE /overlay/:id
+DELETE /sessions/:name/overlay/:id
 ```
 
 **Response:** `204 No Content`
@@ -306,13 +306,13 @@ If the deleted overlay had input focus, focus is automatically cleared.
 **Example:**
 
 ```bash
-curl -X DELETE http://localhost:8080/overlay/f47ac10b-58cc-4372-a567-0e02b2c3d479
+curl -X DELETE http://localhost:8080/sessions/default/overlay/f47ac10b-58cc-4372-a567-0e02b2c3d479
 ```
 
 ## Clear All Overlays
 
 ```
-DELETE /overlay
+DELETE /sessions/:name/overlay
 ```
 
 Removes every overlay. Focus is cleared if any overlay had focus.
@@ -322,7 +322,7 @@ Removes every overlay. Focus is cleared if any overlay had focus.
 **Example:**
 
 ```bash
-curl -X DELETE http://localhost:8080/overlay
+curl -X DELETE http://localhost:8080/sessions/default/overlay
 ```
 
 ## Overlay Spans
@@ -400,7 +400,7 @@ use named strings or flat `{"r": N, "g": N, "b": N}` objects.
 
 ```bash
 # Create a status overlay at the top-right with background fill
-curl -X POST http://localhost:8080/overlay \
+curl -X POST http://localhost:8080/sessions/default/overlay \
   -H 'Content-Type: application/json' \
   -d '{
     "x": 60, "y": 0, "z": 100,
@@ -415,7 +415,7 @@ curl -X POST http://localhost:8080/overlay \
 # {"id":"abc123"}
 
 # Update just the status text using partial span update
-curl -X POST http://localhost:8080/overlay/abc123/spans \
+curl -X POST http://localhost:8080/sessions/default/overlay/abc123/spans \
   -H 'Content-Type: application/json' \
   -d '{
     "spans": [
@@ -425,7 +425,7 @@ curl -X POST http://localhost:8080/overlay/abc123/spans \
   }'
 
 # Or use region writes for cell-level updates
-curl -X POST http://localhost:8080/overlay/abc123/write \
+curl -X POST http://localhost:8080/sessions/default/overlay/abc123/write \
   -H 'Content-Type: application/json' \
   -d '{
     "writes": [
@@ -434,5 +434,5 @@ curl -X POST http://localhost:8080/overlay/abc123/write \
   }'
 
 # Clean up when done
-curl -X DELETE http://localhost:8080/overlay/abc123
+curl -X DELETE http://localhost:8080/sessions/default/overlay/abc123
 ```
