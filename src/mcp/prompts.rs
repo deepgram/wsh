@@ -106,7 +106,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn list_prompts_returns_ten_prompts() {
+    async fn list_prompts_returns_eleven_prompts() {
         let result = list_prompts().await.unwrap();
         assert_eq!(result.prompts.len(), 11);
     }
