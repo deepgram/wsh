@@ -132,7 +132,7 @@ export function Terminal({ session, client, captureInput }: TerminalProps) {
   const isFocused = session === focusedSession.value;
   useEffect(() => {
     if (captureInput && isFocused && textareaRef.current) {
-      textareaRef.current.focus();
+      textareaRef.current.focus({ preventScroll: true });
     }
   }, [captureInput, isFocused]);
 
@@ -160,10 +160,10 @@ export function Terminal({ session, client, captureInput }: TerminalProps) {
     }
   }, [client, session]);
 
-  // Click on terminal container focuses the hidden textarea
-  const handleContainerClick = useCallback(() => {
+  // Click on terminal wrapper focuses the hidden textarea
+  const handleWrapperClick = useCallback(() => {
     if (captureInput && textareaRef.current) {
-      textareaRef.current.focus();
+      textareaRef.current.focus({ preventScroll: true });
     }
   }, [captureInput]);
 
@@ -352,25 +352,10 @@ export function Terminal({ session, client, captureInput }: TerminalProps) {
 
   return (
     <div
-      class={containerClass}
-      ref={containerRef}
+      class="terminal-wrapper"
       style={{ fontSize: `${fontSize}px` }}
-      onClick={handleContainerClick}
+      onClick={handleWrapperClick}
     >
-      {/* Hidden measurement span for character cell size */}
-      <span
-        ref={measureRef}
-        style={{
-          position: "absolute",
-          visibility: "hidden",
-          whiteSpace: "pre",
-          fontFamily: "inherit",
-          fontSize: "inherit",
-          lineHeight: "inherit",
-        }}
-      >
-        X
-      </span>
       {captureInput && (
         <textarea
           ref={textareaRef}
@@ -384,12 +369,31 @@ export function Terminal({ session, client, captureInput }: TerminalProps) {
           aria-label={`Terminal input for ${session}`}
         />
       )}
-      {allLines.map((line, i) =>
-        renderLine(line, i, i === cursorLineIndex ? { col: screen.cursor.col } : null),
-      )}
-      {disconnected && (
-        <div class="terminal-disconnected">Connection lost</div>
-      )}
+      <div
+        class={containerClass}
+        ref={containerRef}
+      >
+        {/* Hidden measurement span for character cell size */}
+        <span
+          ref={measureRef}
+          style={{
+            position: "absolute",
+            visibility: "hidden",
+            whiteSpace: "pre",
+            fontFamily: "inherit",
+            fontSize: "inherit",
+            lineHeight: "inherit",
+          }}
+        >
+          X
+        </span>
+        {allLines.map((line, i) =>
+          renderLine(line, i, i === cursorLineIndex ? { col: screen.cursor.col } : null),
+        )}
+        {disconnected && (
+          <div class="terminal-disconnected">Connection lost</div>
+        )}
+      </div>
     </div>
   );
 }

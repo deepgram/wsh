@@ -91,13 +91,25 @@ html, body, #app {
    Terminal
    ========================================================================== */
 
+.terminal-wrapper {
+  flex: 1;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  font-family: "SF Mono", "Menlo", "Monaco", "Cascadia Code", "Consolas", monospace;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
 .terminal-container {
   flex: 1;
   overflow-y: auto;
   padding: 4px 8px;
-  font-family: "SF Mono", "Menlo", "Monaco", "Cascadia Code", "Consolas", monospace;
-  font-size: 14px;
-  line-height: 1.4;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
   -webkit-overflow-scrolling: touch;
   position: relative;
 }
@@ -108,6 +120,9 @@ html, body, #app {
   flex-direction: column;
 }
 
+/* Hidden textarea lives OUTSIDE the scroll container to prevent browsers from
+   scrolling .terminal-container to bring the textarea into view on focus or
+   keystroke.  Positioned relative to .terminal-wrapper instead. */
 .terminal-hidden-input {
   position: absolute;
   top: 0;
