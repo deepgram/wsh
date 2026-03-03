@@ -21,9 +21,12 @@ cargo build
 cargo test
 ```
 
-This produces a dynamically-linked binary for your host system.
+This produces a dynamically-linked binary at `target/debug/wsh`.
 
 ## Release Builds
+
+All `nix build` commands place the binary at `result/bin/wsh` (a symlink into
+the Nix store). Each subsequent `nix build` replaces the `result` symlink.
 
 ### Default (dynamic, host platform)
 
@@ -42,12 +45,14 @@ just works.
 
 ```bash
 nix build .#wsh-x86_64-linux-musl
+./result/bin/wsh --version
 ```
 
 **aarch64** (cross-compiled from x86_64, works on Raspberry Pi 4/5):
 
 ```bash
 nix build .#wsh-aarch64-linux-musl
+# result/bin/wsh — aarch64 binary, won't run on x86_64 host
 ```
 
 Both binaries are ~20MB.
@@ -62,12 +67,14 @@ Mac).
 
 ```bash
 nix build .#wsh-x86_64-apple-darwin
+# result/bin/wsh — Mach-O binary, won't run on Linux
 ```
 
 **aarch64 (Apple Silicon):**
 
 ```bash
 nix build .#wsh-aarch64-apple-darwin
+# result/bin/wsh — Mach-O binary, won't run on Linux
 ```
 
 ## Verifying Binaries
@@ -117,14 +124,14 @@ ssh pi@raspberrypi chmod +x /usr/local/bin/wsh
 
 ## Build Targets Summary
 
-| Target | Command | Output |
-|--------|---------|--------|
-| Dev build | `cargo build` | Dynamic, glibc, host arch |
-| Default release | `nix build` | Dynamic, glibc, host arch |
-| x86_64 static | `nix build .#wsh-x86_64-linux-musl` | Static, musl, x86_64 |
-| aarch64 static | `nix build .#wsh-aarch64-linux-musl` | Static, musl, aarch64 |
-| x86_64 macOS | `nix build .#wsh-x86_64-apple-darwin` | Dynamic, x86_64, macOS 11+ |
-| aarch64 macOS | `nix build .#wsh-aarch64-apple-darwin` | Dynamic, aarch64, macOS 11+ |
+| Target | Command | Binary | Output |
+|--------|---------|--------|--------|
+| Dev build | `cargo build` | `target/debug/wsh` | Dynamic, glibc, host arch |
+| Default release | `nix build` | `result/bin/wsh` | Dynamic, glibc, host arch |
+| x86_64 static | `nix build .#wsh-x86_64-linux-musl` | `result/bin/wsh` | Static, musl, x86_64 |
+| aarch64 static | `nix build .#wsh-aarch64-linux-musl` | `result/bin/wsh` | Static, musl, aarch64 |
+| x86_64 macOS | `nix build .#wsh-x86_64-apple-darwin` | `result/bin/wsh` | Dynamic, x86_64, macOS 11+ |
+| aarch64 macOS | `nix build .#wsh-aarch64-apple-darwin` | `result/bin/wsh` | Dynamic, aarch64, macOS 11+ |
 
 ## Notes
 
