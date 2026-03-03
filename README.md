@@ -12,11 +12,19 @@ wsh sits between your terminal emulator and your shell. It maintains a full term
 
 ## Install
 
+**Homebrew** (macOS and Linux):
+
 ```bash
-curl -fsSL https://wsh.dev/install.sh | sh
+brew install deepgram/tap/wsh
 ```
 
-Or with Cargo:
+**Shell script** (Linux and macOS):
+
+```bash
+curl -fsSL https://github.com/deepgram/wsh/releases/latest/download/install.sh | sh
+```
+
+**Cargo** (build from source):
 
 ```bash
 cargo install wsh

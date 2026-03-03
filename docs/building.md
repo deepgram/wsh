@@ -133,6 +133,35 @@ ssh pi@raspberrypi chmod +x /usr/local/bin/wsh
 | x86_64 macOS | `nix build .#wsh-x86_64-apple-darwin` | `result/bin/wsh` | Dynamic, x86_64, macOS 11+ |
 | aarch64 macOS | `nix build .#wsh-aarch64-apple-darwin` | `result/bin/wsh` | Dynamic, aarch64, macOS 11+ |
 
+## Shell Completions
+
+Generate completions for your shell:
+
+```bash
+# Bash
+wsh completions bash > /etc/bash_completion.d/wsh
+
+# Zsh
+wsh completions zsh > /usr/local/share/zsh/site-functions/_wsh
+
+# Fish
+wsh completions fish > ~/.config/fish/completions/wsh.fish
+```
+
+Homebrew installs completions automatically.
+
+## Running as a Service
+
+wsh auto-spawns an ephemeral server on first use, so most users don't need a
+service. For persistent server operation, see the contrib templates:
+
+- **Linux (systemd):** `contrib/linux/wsh.service`
+- **macOS (launchd):** `contrib/macos/com.deepgram.wsh.plist`
+- **Homebrew:** `brew services start wsh`
+
+Configuration is via environment variables in `~/.config/wsh/server.env`.
+See `contrib/linux/server.env` for available options.
+
 ## Notes
 
 - The web frontend is built automatically by Nix using Bun/Vite and embedded
