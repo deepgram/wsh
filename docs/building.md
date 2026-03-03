@@ -1,7 +1,7 @@
 # Building from Source
 
 wsh uses [Nix](https://nixos.org/) for reproducible builds. All build commands
-work on x86_64 Linux. macOS support is planned.
+run on x86_64 Linux, including cross-compilation for macOS.
 
 ## Prerequisites
 
@@ -52,6 +52,24 @@ nix build .#wsh-aarch64-linux-musl
 
 Both binaries are ~20MB.
 
+### macOS Binaries
+
+These are cross-compiled from Linux using cargo-zigbuild with a pinned macOS
+SDK. The binaries link dynamically against `libSystem.dylib` (present on every
+Mac).
+
+**x86_64 (Intel Mac):**
+
+```bash
+nix build .#wsh-x86_64-apple-darwin
+```
+
+**aarch64 (Apple Silicon):**
+
+```bash
+nix build .#wsh-aarch64-apple-darwin
+```
+
 ## Verifying Binaries
 
 Check that a binary is statically linked:
@@ -94,6 +112,8 @@ ssh pi@raspberrypi chmod +x /usr/local/bin/wsh
 | Default release | `nix build` | Dynamic, glibc, host arch |
 | x86_64 static | `nix build .#wsh-x86_64-linux-musl` | Static, musl, x86_64 |
 | aarch64 static | `nix build .#wsh-aarch64-linux-musl` | Static, musl, aarch64 |
+| x86_64 macOS | `nix build .#wsh-x86_64-apple-darwin` | Dynamic, x86_64, macOS 11+ |
+| aarch64 macOS | `nix build .#wsh-aarch64-apple-darwin` | Dynamic, aarch64, macOS 11+ |
 
 ## Notes
 
@@ -108,3 +128,7 @@ ssh pi@raspberrypi chmod +x /usr/local/bin/wsh
 - First-time cross-compilation builds are slow (~10 minutes) because Nix
   downloads and builds the entire musl cross-toolchain. Subsequent builds use
   the Nix store cache.
+- macOS binaries are cross-compiled from Linux using
+  [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild) with a pinned
+  MacOSX 14.5 SDK. They link dynamically against `libSystem.dylib` (always
+  present on macOS). The minimum deployment target is macOS 11.0 (Big Sur).
