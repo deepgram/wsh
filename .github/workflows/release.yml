@@ -1,0 +1,155 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - wsh-x86_64-linux-musl
+          - wsh-aarch64-linux-musl
+          - wsh-x86_64-apple-darwin
+          - wsh-aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@main
+
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: Build ${{ matrix.target }}
+        run: nix build .#${{ matrix.target }} --print-build-logs
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: result/bin/wsh
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release
+          for target in wsh-x86_64-linux-musl wsh-aarch64-linux-musl wsh-x86_64-apple-darwin wsh-aarch64-apple-darwin; do
+            cp "artifacts/$target/wsh" "release/$target"
+            chmod +x "release/$target"
+          done
+          cp install.sh release/install.sh
+
+          # Generate checksums
+          cd release
+          sha256sum wsh-* > checksums.txt
+          cat checksums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            release/wsh-*
+            release/install.sh
+            release/checksums.txt
+
+  update-homebrew:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Compute SHA256 hashes
+        id: hashes
+        run: |
+          for target in wsh-x86_64-linux-musl wsh-aarch64-linux-musl wsh-x86_64-apple-darwin wsh-aarch64-apple-darwin; do
+            hash=$(sha256sum "artifacts/$target/wsh" | awk '{print $1}')
+            key=$(echo "$target" | tr '-' '_')
+            echo "${key}=${hash}" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: Update Homebrew formula
+        uses: actions/checkout@v4
+        with:
+          repository: deepgram/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
+
+      - name: Write formula
+        env:
+          VERSION: ${{ github.ref_name }}
+          HASH_X86_64_DARWIN: ${{ steps.hashes.outputs.wsh_x86_64_apple_darwin }}
+          HASH_AARCH64_DARWIN: ${{ steps.hashes.outputs.wsh_aarch64_apple_darwin }}
+          HASH_X86_64_LINUX: ${{ steps.hashes.outputs.wsh_x86_64_linux_musl }}
+          HASH_AARCH64_LINUX: ${{ steps.hashes.outputs.wsh_aarch64_linux_musl }}
+        run: |
+          cat > homebrew-tap/Formula/wsh.rb << EOF
+          class Wsh < Formula
+            desc "The Web Shell — an API for your terminal"
+            homepage "https://github.com/deepgram/wsh"
+            version "${VERSION#v}"
+            license "ISC"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://github.com/deepgram/wsh/releases/download/${VERSION}/wsh-aarch64-apple-darwin"
+                sha256 "${HASH_AARCH64_DARWIN}"
+              else
+                url "https://github.com/deepgram/wsh/releases/download/${VERSION}/wsh-x86_64-apple-darwin"
+                sha256 "${HASH_X86_64_DARWIN}"
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.arm?
+                url "https://github.com/deepgram/wsh/releases/download/${VERSION}/wsh-aarch64-linux-musl"
+                sha256 "${HASH_AARCH64_LINUX}"
+              else
+                url "https://github.com/deepgram/wsh/releases/download/${VERSION}/wsh-x86_64-linux-musl"
+                sha256 "${HASH_X86_64_LINUX}"
+              end
+            end
+
+            def install
+              bin.install stable.url.split("/").last => "wsh"
+
+              generate_completions_from_executable(bin/"wsh", "completions")
+            end
+
+            service do
+              run [opt_bin/"wsh", "server"]
+              keep_alive true
+              log_path var/"log/wsh.log"
+              error_log_path var/"log/wsh.log"
+            end
+
+            test do
+              assert_match "wsh", shell_output("#{bin}/wsh --version")
+            end
+          end
+          EOF
+
+      - name: Push formula update
+        working-directory: homebrew-tap
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/wsh.rb
+          git commit -m "wsh ${GITHUB_REF_NAME}"
+          git push
