@@ -104,7 +104,7 @@ done
 TAP_DIR="$(mktemp -d)"
 trap 'rm -rf "$STAGING" "$TAP_DIR"' EXIT
 
-gh repo clone "$TAP_REPO" "$TAP_DIR" -- --depth 1
+git clone --depth 1 "git@github.com:$TAP_REPO.git" "$TAP_DIR"
 mkdir -p "$TAP_DIR/Formula"
 
 BARE_VERSION="${VERSION#v}"
