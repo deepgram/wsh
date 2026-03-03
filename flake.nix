@@ -43,6 +43,11 @@
             '';
           };
 
+          macOsSdk = pkgs.fetchurl {
+            url = "https://github.com/joseluisq/macosx-sdks/releases/download/14.5/MacOSX14.5.sdk.tar.xz";
+            hash = "sha256-bhRiddGfAn+qLoNU2l4CZ1E6vwE7jxatZaIxZTorHF0=";
+          };
+
           mkWsh = crossPkgs: crossPkgs.rustPlatform.buildRustPackage {
             pname = "wsh";
             version = "0.1.0";
