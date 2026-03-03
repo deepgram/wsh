@@ -143,6 +143,7 @@ CARGOEOF
             qemu
             zig
             cargo-zigbuild
+            gh
           ] ++ [
             llm-agents.packages.${system}.agent-browser
           ];
