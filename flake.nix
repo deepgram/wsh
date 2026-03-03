@@ -18,7 +18,7 @@
         rustToolchain = pkgs.rust-bin.stable.latest.default;
       in
       {
-        packages.default = let
+        packages = let
           webFrontend = pkgs.stdenvNoCC.mkDerivation {
             pname = "wsh-web";
             version = "0.1.0";
@@ -42,22 +42,26 @@
               cp -r ../web-dist $out
             '';
           };
-        in pkgs.rustPlatform.buildRustPackage {
-          pname = "wsh";
-          version = "0.1.0";
-          src = ./.;
-          cargoLock.lockFile = ./Cargo.lock;
-          nativeBuildInputs = [ pkgs.pkg-config ];
 
-          preBuild = ''
-            cp -r ${webFrontend} web-dist
-          '';
+          mkWsh = crossPkgs: crossPkgs.rustPlatform.buildRustPackage {
+            pname = "wsh";
+            version = "0.1.0";
+            src = ./.;
+            cargoLock.lockFile = ./Cargo.lock;
+            nativeBuildInputs = [ crossPkgs.pkg-config ];
 
-          WSH_SKIP_WEB_BUILD = "1";
+            preBuild = ''
+              cp -r ${webFrontend} web-dist
+            '';
 
-          # Tests that spawn a PTY need a real shell, which isn't
-          # available in the Nix build sandbox.
-          doCheck = false;
+            WSH_SKIP_WEB_BUILD = "1";
+
+            # Tests that spawn a PTY need a real shell, which isn't
+            # available in the Nix build sandbox.
+            doCheck = false;
+          };
+        in {
+          default = mkWsh pkgs;
         };
 
         devShells.default = pkgs.mkShell {
