@@ -62,6 +62,8 @@
           };
         in {
           default = mkWsh pkgs;
+          wsh-x86_64-linux-musl = mkWsh pkgs.pkgsCross.musl64.pkgsStatic;
+          wsh-aarch64-linux-musl = mkWsh pkgs.pkgsCross.aarch64-multiplatform-musl.pkgsStatic;
         };
 
         devShells.default = pkgs.mkShell {
