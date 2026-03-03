@@ -140,6 +140,8 @@ CARGOEOF
             websocat
             bun
             qemu
+            zig
+            cargo-zigbuild
           ] ++ [
             llm-agents.packages.${system}.agent-browser
           ];
