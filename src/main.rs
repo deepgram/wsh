@@ -12,7 +12,8 @@
 //! Unix socket listeners. Runs in persistent mode by default (stays alive when
 //! sessions end). Use `--ephemeral` to exit when the last session ends.
 
-use clap::{Parser as ClapParser, Subcommand};
+use clap::{CommandFactory, Parser as ClapParser, Subcommand};
+use clap_complete::{generate, Shell};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -236,6 +237,12 @@ enum Commands {
         #[arg(long, env = "WSH_TOKEN")]
         token: Option<String>,
     },
+
+    /// Generate shell completions for bash, zsh, or fish
+    Completions {
+        /// Shell to generate completions for
+        shell: Shell,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -381,6 +388,11 @@ async fn main() -> Result<(), WshError> {
         }
         Some(Commands::Mcp { bind, token }) => {
             run_mcp(bind, socket, token, server_name).await
+        }
+        Some(Commands::Completions { shell }) => {
+            let mut cmd = Cli::command();
+            generate(shell, &mut cmd, "wsh", &mut std::io::stdout());
+            Ok(())
         }
         None => {
             run_default(cli).await
