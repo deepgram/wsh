@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.deepgram.wsh</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/wsh</string>
+        <string>server</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/wsh.stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/wsh.stderr.log</string>
+
+    <!--
+    Uncomment and edit to customize:
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>WSH_SERVER_NAME</key>
+        <string>default</string>
+
+        <key>WSH_TOKEN</key>
+        <string>your-secret-token</string>
+
+        <key>WSH_TLS_CERT</key>
+        <string>/path/to/cert.pem</string>
+
+        <key>WSH_TLS_KEY</key>
+        <string>/path/to/key.pem</string>
+
+        <key>WSH_HOSTNAME</key>
+        <string>my-host.example.com</string>
+
+        <key>WSH_BASE_PREFIX</key>
+        <string>/wsh</string>
+    </dict>
+    -->
+</dict>
+</plist>

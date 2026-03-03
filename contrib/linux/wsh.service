@@ -1,0 +1,14 @@
+[Unit]
+Description=wsh terminal API server
+Documentation=https://github.com/deepgram/wsh
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/wsh server
+Restart=on-failure
+RestartSec=5
+EnvironmentFile=-%h/.config/wsh/server.env
+
+[Install]
+WantedBy=default.target
