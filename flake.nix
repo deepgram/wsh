@@ -76,10 +76,59 @@
             # available in the Nix build sandbox.
             doCheck = false;
           };
+
+          mkWshDarwin = target: pkgs.stdenv.mkDerivation {
+            pname = "wsh";
+            version = "0.1.0";
+            src = ./.;
+
+            nativeBuildInputs = [
+              rustToolchainDarwin
+              pkgs.zig
+              pkgs.cargo-zigbuild
+            ];
+
+            buildPhase = ''
+              export HOME=$TMPDIR
+
+              # Vendor cargo dependencies
+              mkdir -p .cargo
+              cat > .cargo/config.toml <<CARGOEOF
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "${cargoVendor}"
+CARGOEOF
+
+              # Untar macOS SDK
+              mkdir -p $TMPDIR/sdk
+              tar xf ${macOsSdk} -C $TMPDIR/sdk
+              export SDKROOT=$TMPDIR/sdk/MacOSX14.5.sdk
+              export MACOSX_DEPLOYMENT_TARGET=11.0
+
+              # Framework and library linking
+              export LIBRARY_PATH=$SDKROOT/usr/lib
+              export RUSTFLAGS="-L framework=$SDKROOT/System/Library/Frameworks"
+
+              # Copy pre-built web frontend
+              cp -r ${webFrontend} web-dist
+              export WSH_SKIP_WEB_BUILD=1
+
+              cargo zigbuild --release --target ${target}
+            '';
+
+            installPhase = ''
+              mkdir -p $out/bin
+              cp target/${target}/release/wsh $out/bin/wsh
+            '';
+          };
         in {
           default = mkWsh pkgs;
           wsh-x86_64-linux-musl = mkWsh pkgs.pkgsCross.musl64.pkgsStatic;
           wsh-aarch64-linux-musl = mkWsh pkgs.pkgsCross.aarch64-multiplatform-musl.pkgsStatic;
+          wsh-x86_64-apple-darwin = mkWshDarwin "x86_64-apple-darwin";
+          wsh-aarch64-apple-darwin = mkWshDarwin "aarch64-apple-darwin";
         };
 
         devShells.default = pkgs.mkShell {
