@@ -74,6 +74,7 @@
             jq
             websocat
             bun
+            qemu
           ] ++ [
             llm-agents.packages.${system}.agent-browser
           ];
