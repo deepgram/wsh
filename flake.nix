@@ -54,6 +54,7 @@
             hash = "sha256-bhRiddGfAn+qLoNU2l4CZ1E6vwE7jxatZaIxZTorHF0=";
           };
 
+          # FOD: hash must be updated when Cargo.lock changes
           cargoVendor = pkgs.rustPlatform.fetchCargoVendor {
             src = ./.;
             hash = "sha256-9yCS4AtmUq2Gh+ZsFiDCz2/wzcgjEgbuGSHvvf/02Gk=";

@@ -72,7 +72,7 @@ nix build .#wsh-aarch64-apple-darwin
 
 ## Verifying Binaries
 
-Check that a binary is statically linked:
+Check that a Linux binary is statically linked:
 
 ```bash
 file result/bin/wsh
@@ -88,6 +88,17 @@ shell):
 ```bash
 nix develop -c qemu-aarch64 result/bin/wsh --version
 ```
+
+Check that macOS binaries have the correct architecture:
+
+```bash
+file result/bin/wsh
+# Mach-O 64-bit executable arm64    (aarch64)
+# Mach-O 64-bit executable x86_64   (Intel)
+```
+
+macOS binaries cannot be executed on Linux. Full functional testing requires
+macOS hardware.
 
 ## Installing
 
