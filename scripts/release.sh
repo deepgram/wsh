@@ -20,20 +20,20 @@ set -euo pipefail
 #   2. Creates a git tag (e.g. "v0.2.0") on your current commit and pushes it
 #      to GitHub. This is how GitHub knows which commit a release corresponds to.
 #
-#   3. Creates a "GitHub Release" — this is a page on GitHub
-#      (github.com/deepgram/wsh/releases) where the binaries are hosted for
-#      download. The `gh` CLI handles all the uploading. After this step,
-#      the install script (curl|sh) starts working for this version.
+#   3. Creates a "GitHub Release" — a page on GitHub where the binaries are
+#      hosted for download. If `gh` (GitHub CLI) is available, this is fully
+#      automatic. If not, the script stages all the files and tells you how
+#      to upload them through the GitHub website.
 #
 #   4. Updates the Homebrew formula in the deepgram/homebrew-tap repo with
 #      the new version and binary checksums. After this step,
 #      `brew install deepgram/tap/wsh` installs the new version.
 #
 # Prerequisites (one-time setup, see docs/releasing.md):
-#   - You're inside `nix develop` (provides nix, gh, etc.)
-#   - You've run `gh auth login` at least once
-#   - The deepgram/homebrew-tap repo exists on GitHub
+#   - You're inside `nix develop` (provides nix, etc.)
 #   - Your SSH key can push to both repos
+#   - The deepgram/homebrew-tap repo exists on GitHub
+#   - Optional: `gh auth login` for fully automated releases
 #
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -57,7 +57,7 @@ if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 fi
 
 # These are the GitHub repos we'll interact with.
-REPO="deepgram/wsh"           # This repo — where the release is published
+REPO="deepgram/wsh"               # This repo — where the release is published
 TAP_REPO="deepgram/homebrew-tap"  # The Homebrew tap — where the formula lives
 
 # The four binary targets we build. These names match the Nix flake outputs
@@ -69,18 +69,37 @@ TARGETS=(
     wsh-aarch64-apple-darwin    # macOS Apple Silicon (M1/M2/M3/M4)
 )
 
+# Check whether `gh` (GitHub CLI) is available. If it is, we can create
+# the GitHub Release automatically. If not, we'll stage files and print
+# instructions for uploading through the browser.
+HAS_GH=false
+if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+    HAS_GH=true
+fi
+
 echo "==> Releasing wsh $VERSION"
+if [ "$HAS_GH" = false ]; then
+    echo "    (gh CLI not available — will use browser upload for GitHub Release)"
+fi
 echo ""
 
 # ── Step 1: Build all 4 binaries ──────────────────────────────────
 #
 # Each `nix build .#<target>` cross-compiles a binary and places it
-# at result/bin/wsh. We copy each one to a temp staging directory
-# with the target name (e.g. "wsh-x86_64-linux-musl") so GitHub
-# Release has distinct filenames for each platform.
+# at result/bin/wsh. We copy each one to a staging directory with
+# the target name (e.g. "wsh-x86_64-linux-musl") so GitHub Release
+# has distinct filenames for each platform.
 
-STAGING="$(mktemp -d)"
-trap 'rm -rf "$STAGING"' EXIT
+# Use a persistent staging directory (not auto-cleaned) when doing
+# manual upload, so the files survive after the script exits.
+if [ "$HAS_GH" = true ]; then
+    STAGING="$(mktemp -d)"
+    trap 'rm -rf "$STAGING"' EXIT
+else
+    STAGING="release-$VERSION"
+    rm -rf "$STAGING"
+    mkdir -p "$STAGING"
+fi
 
 for target in "${TARGETS[@]}"; do
     echo "==> Building $target"
@@ -123,24 +142,44 @@ echo ""
 # ── Step 3: Create a GitHub Release ───────────────────────────────
 #
 # A "GitHub Release" is a page on your repo where you can attach
-# downloadable files (our binaries). The `gh release create` command:
-#   - Creates the release page at github.com/deepgram/wsh/releases/tag/v0.2.0
-#   - Uploads all the files we list as "release assets" (downloadable files)
-#   - Auto-generates release notes from commit messages since last tag
+# downloadable files (our binaries).
 #
 # After this step, these URLs become live:
 #   https://github.com/deepgram/wsh/releases/download/v0.2.0/wsh-x86_64-linux-musl
 #   https://github.com/deepgram/wsh/releases/download/v0.2.0/install.sh
 #   etc.
 
-echo "==> Creating GitHub Release"
-gh release create "$VERSION" \
-    --repo "$REPO" \
-    --title "$VERSION" \
-    --generate-notes \
-    "$STAGING"/wsh-* \
-    "$STAGING/checksums.txt" \
-    "$STAGING/install.sh"
+if [ "$HAS_GH" = true ]; then
+    # `gh release create` does everything:
+    #   - Creates the release page
+    #   - Uploads all the files we list as "release assets"
+    #   - Auto-generates release notes from commit messages
+    echo "==> Creating GitHub Release (via gh)"
+    gh release create "$VERSION" \
+        --repo "$REPO" \
+        --title "$VERSION" \
+        --generate-notes \
+        "$STAGING"/wsh-* \
+        "$STAGING/checksums.txt" \
+        "$STAGING/install.sh"
+else
+    echo "==> GitHub Release: manual upload required"
+    echo ""
+    echo "    The binaries are staged in: $(pwd)/$STAGING/"
+    echo ""
+    echo "    Open this URL in your browser:"
+    echo "      https://github.com/$REPO/releases/new?tag=$VERSION&title=$VERSION"
+    echo ""
+    echo "    Then drag and drop ALL of these files onto the upload area:"
+    echo ""
+    for f in "$STAGING"/wsh-* "$STAGING/checksums.txt" "$STAGING/install.sh"; do
+        echo "      $(basename "$f")"
+    done
+    echo ""
+    echo "    Click 'Publish release' when done."
+    echo ""
+    read -rp "    Press Enter after you've published the release..."
+fi
 
 echo ""
 
@@ -169,7 +208,11 @@ done
 
 # Clone the tap repo to a temp directory, update the formula, push.
 TAP_DIR="$(mktemp -d)"
-trap 'rm -rf "$STAGING" "$TAP_DIR"' EXIT
+if [ "$HAS_GH" = true ]; then
+    trap 'rm -rf "$STAGING" "$TAP_DIR"' EXIT
+else
+    trap 'rm -rf "$TAP_DIR"' EXIT
+fi
 
 git clone --depth 1 "git@github.com:$TAP_REPO.git" "$TAP_DIR"
 mkdir -p "$TAP_DIR/Formula"

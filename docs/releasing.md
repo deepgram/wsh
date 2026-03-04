@@ -10,83 +10,90 @@ When you release wsh, four things happen:
 1. **Binaries are built** for all 4 platforms (Linux x86_64, Linux aarch64,
    macOS Intel, macOS Apple Silicon)
 2. **A GitHub Release is created** — a page on GitHub where the binaries are
-   hosted for download
+   hosted for public download
 3. **The install script starts working** for the new version (`curl ... | sh`)
 4. **The Homebrew formula is updated** so `brew install` and `brew upgrade`
    get the new version
 
-All of this is handled by a single script: `scripts/release.sh`.
+All of this is handled by `scripts/release.sh`. The script works in two modes:
+
+- **With `gh` (GitHub CLI):** Fully automatic — builds, uploads, updates
+  formula, done.
+- **Without `gh`:** Builds the binaries and stages them locally, then opens a
+  browser URL where you drag-and-drop the files to create the release. The
+  Homebrew formula update is still automatic.
 
 ## One-Time Setup
 
-These steps only need to be done once, ever.
-
 ### 1. Install Nix
-
-If you haven't already:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf -L https://install.determinate.systems/nix | sh
 ```
 
-### 2. Log in to the GitHub CLI
+### 2. Verify SSH access to GitHub
 
-The release script uses `gh` (the GitHub CLI) to create releases. Enter the
-dev shell and log in:
-
-```bash
-nix develop
-gh auth login
-```
-
-It'll open a browser window. Log in with your GitHub account. Pick these
-options when asked:
-
-- **What account?** → GitHub.com
-- **Preferred protocol?** → SSH
-- **Upload your SSH key?** → Yes (if it offers)
-- **Title for this SSH key?** → Anything (e.g. "wsh dev machine")
-- **How would you like to authenticate?** → Login with a web browser
-
-You only need to do this once. The token is saved at `~/.config/gh/hosts.yml`.
-
-To verify it worked:
-
-```bash
-gh auth status
-```
-
-You should see something like:
-
-```
-github.com
-  ✓ Logged in to github.com account yourname
-```
-
-### 3. Verify SSH access to GitHub
-
-The release script pushes to two repos via SSH (`git@github.com:...`). Make
+The release script pushes git tags and updates the Homebrew tap via SSH. Make
 sure your SSH key is set up:
 
 ```bash
 ssh -T git@github.com
 ```
 
-You should see: `Hi yourname! You've successfully authenticated`.
+You should see:
 
-If not, you need to add your SSH key to GitHub:
-https://github.com/settings/keys
+```
+Hi yourname! You've successfully authenticated, but GitHub does not provide shell access.
+```
+
+If you see "Permission denied" instead, you need to add your SSH key to GitHub:
+
+1. Check if you have a key: `ls ~/.ssh/id_*.pub`
+2. If not, create one: `ssh-keygen -t ed25519` (press Enter for all defaults)
+3. Copy the public key: `cat ~/.ssh/id_ed25519.pub`
+4. Go to https://github.com/settings/keys
+5. Click "New SSH key", paste the key, give it a name, click "Add SSH key"
+6. Test again: `ssh -T git@github.com`
+
+### 3. (Optional) Set up the GitHub CLI
+
+This makes releases fully automatic — the script creates the GitHub Release
+and uploads binaries without opening a browser. If you skip this, the script
+will stage the files locally and tell you to upload them through the browser.
+
+```bash
+nix develop
+gh auth login
+```
+
+When asked:
+
+- **What account?** → GitHub.com
+- **Preferred protocol?** → SSH
+- **How would you like to authenticate?** → Login with a web browser
+
+A browser window opens. Authorize the app. Done. To verify:
+
+```bash
+gh auth status
+```
+
+You should see:
+
+```
+github.com
+  ✓ Logged in to github.com account yourname
+```
 
 ## Cutting a Release
 
 ### 1. Make sure your code is ready
 
-All the changes you want in the release should be committed and pushed to
-master:
+Everything you want in the release should be committed and pushed:
 
 ```bash
-git status          # nothing uncommitted
-git push origin master   # up to date with GitHub
+git status               # should show nothing uncommitted
+git push origin master   # push to GitHub
 ```
 
 ### 2. Pick a version number
@@ -99,15 +106,15 @@ We use [semantic versioning](https://semver.org/): `vMAJOR.MINOR.PATCH`.
 
 ### 3. Update the version in Cargo.toml
 
-Edit `Cargo.toml` and change the version:
+Edit `Cargo.toml` and change the version number (no "v" prefix here):
 
 ```toml
 [package]
 name = "wsh"
-version = "0.2.0"    # ← update this (no "v" prefix here)
+version = "0.2.0"    # ← update this
 ```
 
-Commit it:
+Commit and push:
 
 ```bash
 git add Cargo.toml
@@ -122,41 +129,79 @@ nix develop
 ./scripts/release.sh v0.2.0
 ```
 
-The script will:
-
-1. **Build all 4 binaries** — you'll see each one being compiled. This takes
-   ~5 minutes on first run (Nix caches make subsequent builds faster).
-   Each binary is verified with `file` so you can see it's the right format.
-
-2. **Create a git tag** called `v0.2.0` pointing at your current commit, and
-   push it to GitHub. (A tag is just a name for a specific commit.)
-
-3. **Create a GitHub Release** at
-   `github.com/deepgram/wsh/releases/tag/v0.2.0` and upload:
-   - The 4 binaries
-   - `checksums.txt` (SHA256 hashes for verification)
-   - `install.sh` (the curl|sh installer)
-
-4. **Update the Homebrew formula** in the `deepgram/homebrew-tap` repo with
-   the new version and checksums.
-
-When it's done, you'll see:
+**What you'll see:**
 
 ```
+==> Releasing wsh v0.2.0
+
+==> Building wsh-x86_64-linux-musl
+    result/bin/wsh: ELF 64-bit LSB executable, x86-64, ...
+==> Building wsh-aarch64-linux-musl
+    result/bin/wsh: ELF 64-bit LSB executable, ARM aarch64, ...
+==> Building wsh-x86_64-apple-darwin
+    result/bin/wsh: Mach-O 64-bit executable x86_64
+==> Building wsh-aarch64-apple-darwin
+    result/bin/wsh: Mach-O 64-bit executable arm64
+
+==> Generating checksums
+abc123...  wsh-aarch64-apple-darwin
+def456...  wsh-aarch64-linux-musl
+789abc...  wsh-x86_64-apple-darwin
+012def...  wsh-x86_64-linux-musl
+
+==> Tagging v0.2.0
+==> Pushing tag v0.2.0 to GitHub
+```
+
+**If you have `gh` set up**, the script continues automatically:
+
+```
+==> Creating GitHub Release (via gh)
+https://github.com/deepgram/wsh/releases/tag/v0.2.0
+
+==> Updating Homebrew formula
+
 ==> Done! Released wsh v0.2.0
-
-    GitHub Release: https://github.com/deepgram/wsh/releases/tag/v0.2.0
-    Install:        brew install deepgram/tap/wsh
-    Or:             curl -fsSL https://github.com/deepgram/wsh/releases/latest/download/install.sh | sh
 ```
+
+**If you don't have `gh`**, the script pauses and tells you to upload manually:
+
+```
+==> GitHub Release: manual upload required
+
+    The binaries are staged in: /path/to/wsh/release-v0.2.0/
+
+    Open this URL in your browser:
+      https://github.com/deepgram/wsh/releases/new?tag=v0.2.0&title=v0.2.0
+
+    Then drag and drop ALL of these files onto the upload area:
+
+      wsh-aarch64-apple-darwin
+      wsh-aarch64-linux-musl
+      wsh-x86_64-apple-darwin
+      wsh-x86_64-linux-musl
+      checksums.txt
+      install.sh
+
+    Click 'Publish release' when done.
+
+    Press Enter after you've published the release...
+```
+
+After you press Enter, the script continues with the Homebrew formula update
+(which uses git over SSH, not `gh`).
 
 ### 5. Verify the release
 
-Check the GitHub Release page — click the link the script printed, or go to:
-https://github.com/deepgram/wsh/releases
+Go to https://github.com/deepgram/wsh/releases. You should see the release
+with 6 assets (4 binaries + checksums.txt + install.sh).
 
-You should see the release with all 6 assets listed (4 binaries + checksums +
-install script).
+Test the install script:
+
+```bash
+curl -fsSL https://github.com/deepgram/wsh/releases/latest/download/install.sh | sh
+wsh --version
+```
 
 ## How Users Install After a Release
 
@@ -179,78 +224,93 @@ curl -fsSL https://github.com/deepgram/wsh/releases/latest/download/install.sh |
 WSH_VERSION=v0.2.0 curl -fsSL https://github.com/deepgram/wsh/releases/latest/download/install.sh | sh
 ```
 
-**Direct download:**
+**Direct download (fully manual):**
+
+Go to https://github.com/deepgram/wsh/releases/latest and download the file
+for your platform:
+
+| Platform | File |
+|----------|------|
+| Linux x86_64 (Intel/AMD) | `wsh-x86_64-linux-musl` |
+| Linux aarch64 (Raspberry Pi, Graviton) | `wsh-aarch64-linux-musl` |
+| macOS Intel | `wsh-x86_64-apple-darwin` |
+| macOS Apple Silicon (M1/M2/M3/M4) | `wsh-aarch64-apple-darwin` |
+
+Then:
 
 ```bash
-# Pick the right one for your platform:
-curl -LO https://github.com/deepgram/wsh/releases/latest/download/wsh-x86_64-linux-musl
-curl -LO https://github.com/deepgram/wsh/releases/latest/download/wsh-aarch64-linux-musl
-curl -LO https://github.com/deepgram/wsh/releases/latest/download/wsh-x86_64-apple-darwin
-curl -LO https://github.com/deepgram/wsh/releases/latest/download/wsh-aarch64-apple-darwin
 chmod +x wsh-*
 sudo mv wsh-* /usr/local/bin/wsh
+wsh --version
 ```
 
 ## Troubleshooting
 
-### "gh: not logged in"
+### Build fails
 
-Run `gh auth login` inside `nix develop`. See the one-time setup section.
+If a `nix build` step fails, try clearing the result symlink and rebuilding:
 
-### "Permission denied" pushing tags
+```bash
+rm -f result
+nix build .#wsh-x86_64-linux-musl
+```
 
-Your SSH key may not have push access to the repo. Check:
+For macOS cross-compilation issues, see [building.md](building.md).
+
+### "Permission denied" pushing the tag
+
+Your SSH key doesn't have push access. See the SSH setup section above, or
+check:
 
 ```bash
 ssh -T git@github.com
 ```
 
-If it doesn't show your username, add your SSH key at
-https://github.com/settings/keys.
-
 ### "Tag already exists"
 
-If you need to redo a release with the same version:
+If you need to redo a release with the same version number:
 
 ```bash
-# Delete the tag locally and on GitHub
+# Delete the tag locally and remotely
 git tag -d v0.2.0
 git push origin :refs/tags/v0.2.0
 
-# Delete the GitHub Release
+# Delete the GitHub Release (if it exists)
+# With gh:
 gh release delete v0.2.0 --repo deepgram/wsh --yes
+# Without gh: go to github.com/deepgram/wsh/releases, find the release,
+# click the trash icon.
 
-# Re-run the release script
+# Re-run
 ./scripts/release.sh v0.2.0
 ```
 
-### Build fails
-
-If a `nix build` step fails, it's usually a Nix cache or network issue. Try:
-
-```bash
-# Clear the result symlink and retry
-rm -f result
-nix build .#wsh-x86_64-linux-musl
-```
-
-For macOS cross-compilation issues, see the troubleshooting section in
-`docs/building.md`.
-
 ### Homebrew formula push fails
 
-If the script can't push to `deepgram/homebrew-tap`, check that your SSH key
-has write access to that repo. You can update the formula manually:
+The script clones `deepgram/homebrew-tap` via SSH and pushes the updated
+formula. If it fails, check your SSH access and do it manually:
 
 ```bash
 git clone git@github.com:deepgram/homebrew-tap.git
-# Edit Formula/wsh.rb with the new version and SHA256 hashes
-# (the script prints the checksums — copy them from the output)
 cd homebrew-tap
+# Edit Formula/wsh.rb — update the version and sha256 hashes
+# (copy the hashes from the checksums.txt the script printed)
 git add Formula/wsh.rb
 git commit -m "wsh v0.2.0"
 git push
 ```
+
+### Browser upload: "tag not found"
+
+If the browser release page says the tag doesn't exist, the tag push may have
+failed. Check:
+
+```bash
+git tag -l v0.2.0          # is the tag local?
+git ls-remote origin v0.2.0  # is it on GitHub?
+```
+
+If it's local but not remote: `git push origin v0.2.0`
 
 ## Reference
 
