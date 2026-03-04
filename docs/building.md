@@ -109,6 +109,8 @@ macOS hardware.
 
 ## Installing
 
+For publishing releases, see [releasing.md](releasing.md).
+
 Copy the binary to your PATH:
 
 ```bash
