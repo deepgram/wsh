@@ -552,7 +552,7 @@ pub enum SessionEvent {
     Created { name: String },
     Renamed { old_name: String, new_name: String },
     Destroyed { name: String },
-    TagsChanged { name: String, added: Vec<String>, removed: Vec<String> },
+    TagsChanged { name: String, tags: Vec<String>, added: Vec<String>, removed: Vec<String> },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -933,11 +933,18 @@ impl SessionRegistry {
                 added.push(tag.clone());
             }
         }
+        let all_tags: Vec<String> = if !added.is_empty() {
+            let mut t: Vec<String> = session_tags.iter().cloned().collect();
+            t.sort();
+            t
+        } else {
+            vec![]
+        };
         drop(session_tags);
         drop(inner);
         if !added.is_empty() {
             let _ = self.events_tx.send(SessionEvent::TagsChanged {
-                name: name.to_string(), added, removed: vec![],
+                name: name.to_string(), tags: all_tags, added, removed: vec![],
             });
         }
         Ok(())
@@ -964,11 +971,18 @@ impl SessionRegistry {
                 removed.push(tag.clone());
             }
         }
+        let all_tags: Vec<String> = if !removed.is_empty() {
+            let mut t: Vec<String> = session_tags.iter().cloned().collect();
+            t.sort();
+            t
+        } else {
+            vec![]
+        };
         drop(session_tags);
         drop(inner);
         if !removed.is_empty() {
             let _ = self.events_tx.send(SessionEvent::TagsChanged {
-                name: name.to_string(), added: vec![], removed,
+                name: name.to_string(), tags: all_tags, added: vec![], removed,
             });
         }
         Ok(())
@@ -1573,12 +1587,13 @@ mod tests {
         registry.add_tags("s1", &["build".into(), "test".into()]).unwrap();
         let ev = rx.recv().await.expect("should receive TagsChanged event");
         match ev {
-            SessionEvent::TagsChanged { ref name, ref added, ref removed } => {
+            SessionEvent::TagsChanged { ref name, ref tags, ref added, ref removed } => {
                 assert_eq!(name, "s1");
                 let mut added_sorted = added.clone();
                 added_sorted.sort();
                 assert_eq!(added_sorted, vec!["build", "test"]);
                 assert!(removed.is_empty());
+                assert_eq!(tags, &vec!["build", "test"]);
             }
             _ => panic!("expected TagsChanged, got: {ev:?}"),
         }
@@ -1597,10 +1612,11 @@ mod tests {
         registry.remove_tags("s1", &["build".into()]).unwrap();
         let ev = rx.recv().await.expect("should receive TagsChanged event");
         match ev {
-            SessionEvent::TagsChanged { ref name, ref added, ref removed } => {
+            SessionEvent::TagsChanged { ref name, ref tags, ref added, ref removed } => {
                 assert_eq!(name, "s1");
                 assert!(added.is_empty());
                 assert_eq!(removed, &vec!["build".to_string()]);
+                assert_eq!(tags, &vec!["test"]);
             }
             _ => panic!("expected TagsChanged, got: {ev:?}"),
         }

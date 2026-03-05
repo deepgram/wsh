@@ -923,7 +923,7 @@ the same as on the per-session `/sessions/:name/ws/json` endpoint.
 ```json
 {"event": "session_created", "params": {"name": "dev"}}
 {"event": "session_renamed", "params": {"old_name": "dev", "new_name": "prod"}}
-{"event": "session_tags_changed", "params": {"name": "dev", "added": ["build"], "removed": []}}
+{"event": "session_tags_changed", "params": {"name": "dev", "tags": ["build"], "added": ["build"], "removed": []}}
 {"event": "session_destroyed", "params": {"name": "dev"}}
 ```
 

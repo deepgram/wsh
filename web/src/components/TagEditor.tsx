@@ -84,24 +84,22 @@ export function TagEditor({ session, client, onClose }: TagEditorProps) {
   }, [client, session]);
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
-    // Read directly from DOM to avoid stale closure over `input` state
-    const value = (e.target as HTMLInputElement).value;
     if (e.key === "Enter") {
       e.preventDefault();
       e.stopPropagation();
-      if (value.trim()) {
-        addTag(value);
+      if (input.trim()) {
+        addTag(input);
       } else {
         // Enter on empty input dismisses
         onClose();
       }
     } else if (e.key === "Tab" || e.key === ",") {
-      if (value.trim()) {
+      if (input.trim()) {
         e.preventDefault();
-        addTag(value);
+        addTag(input);
       }
     }
-  }, [addTag, onClose]);
+  }, [input, addTag, onClose]);
 
   return (
     <div class="tag-editor" ref={containerRef} onClick={(e: MouseEvent) => e.stopPropagation()}>

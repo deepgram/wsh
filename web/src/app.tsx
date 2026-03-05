@@ -403,12 +403,12 @@ function handleLifecycleEvent(client: WshClient, raw: any): void {
     }
 
     case "session_tags_changed": {
-      const taggedName = raw.params?.name;
-      const tags = raw.params?.tags;
-      if (!taggedName || !tags) break;
+      const taggedName = raw.params?.name as string | undefined;
+      if (!taggedName) break;
       const taggedMap = new Map(sessionInfoMap.value);
       const taggedInfo = taggedMap.get(taggedName);
       if (taggedInfo) {
+        const tags = (raw.params?.tags ?? taggedInfo.tags) as string[];
         taggedMap.set(taggedName, { ...taggedInfo, tags });
         sessionInfoMap.value = taggedMap;
       }

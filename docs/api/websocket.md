@@ -1073,7 +1073,7 @@ The server-level WebSocket automatically broadcasts session lifecycle events:
 **Session tags changed:**
 
 ```json
-{"event": "session_tags_changed", "params": {"name": "dev", "added": ["build"], "removed": ["draft"]}}
+{"event": "session_tags_changed", "params": {"name": "dev", "tags": ["build"], "added": ["build"], "removed": ["draft"]}}
 ```
 
 **Session destroyed** (killed via API, or PTY process exited):

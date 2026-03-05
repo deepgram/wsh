@@ -1000,10 +1000,10 @@ fn format_registry_event(
                 "params": { "name": name }
             })
         }
-        crate::session::SessionEvent::TagsChanged { name, added, removed } => {
+        crate::session::SessionEvent::TagsChanged { name, tags, added, removed } => {
             serde_json::json!({
                 "event": "session_tags_changed",
-                "params": { "name": name, "added": added, "removed": removed }
+                "params": { "name": name, "tags": tags, "added": added, "removed": removed }
             })
         }
     }
