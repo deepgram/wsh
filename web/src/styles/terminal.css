@@ -1487,9 +1487,12 @@ html, body, #app {
   pointer-events: none;
 }
 
-/* Tag popover — uses position:fixed via inline style to escape overflow:hidden */
+/* Tag popover — uses position:fixed via inline style to escape overflow:hidden.
+   useLayoutEffect clamps to viewport; max-height is a CSS safety net. */
 .thumb-tag-popover {
   z-index: 10000;
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
 }
 
 .thumb-tag-popover .tag-editor {

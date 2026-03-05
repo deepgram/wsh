@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "preact/hooks";
+import { useState, useRef, useEffect, useCallback, useLayoutEffect } from "preact/hooks";
 import type { WshClient } from "../api/ws";
 import { sessionStatuses, type SessionStatus } from "../state/groups";
 import { focusedSession, sessionInfoMap } from "../state/sessions";
@@ -28,6 +28,7 @@ export function ThumbnailCell({ session, client }: ThumbnailCellProps) {
   const [popoverPos, setPopoverPos] = useState<{ top: number; right: number } | null>(null);
   const renameRef = useRef<HTMLInputElement>(null);
   const tagBtnRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
 
   // Focus rename input when entering rename mode
   useEffect(() => {
@@ -57,6 +58,40 @@ export function ThumbnailCell({ session, client }: ThumbnailCellProps) {
       setRenameValue(session);
     }
   }, [handleRenameSubmit, session]);
+
+  // Clamp popover to viewport after render (before paint)
+  useLayoutEffect(() => {
+    const el = popoverRef.current;
+    if (!showTagEditor || !el || !popoverPos) return;
+
+    const rect = el.getBoundingClientRect();
+    const pad = 8;
+    const vh = window.innerHeight;
+    const vw = window.innerWidth;
+
+    // If popover extends below viewport, move it up
+    if (rect.bottom > vh - pad) {
+      el.style.top = `${Math.max(pad, vh - rect.height - pad)}px`;
+    }
+
+    // If popover extends past left edge (right value too large), pull it back
+    if (rect.left < pad) {
+      el.style.right = `${Math.max(pad, vw - rect.width - pad)}px`;
+    }
+  }, [showTagEditor, popoverPos]);
+
+  // Close popover when sidebar scrolls or window resizes
+  useEffect(() => {
+    if (!showTagEditor) return;
+    const close = () => { setShowTagEditor(false); setPopoverPos(null); };
+    // Capture phase catches scroll on any ancestor (e.g. sidebar-groups)
+    document.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      document.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [showTagEditor]);
 
   const handleThumbClick = useCallback((e: MouseEvent) => {
     // Don't navigate if clicking on name, tag icon, or rename input
@@ -155,12 +190,14 @@ export function ThumbnailCell({ session, client }: ThumbnailCellProps) {
       {/* Tag editor popover — fixed position to escape overflow:hidden */}
       {showTagEditor && popoverPos && (
         <div
+          ref={popoverRef}
           class="thumb-tag-popover"
           style={{
             position: "fixed",
             top: `${popoverPos.top}px`,
             right: `${popoverPos.right}px`,
           }}
+          onClick={(e: MouseEvent) => e.stopPropagation()}
         >
           <TagEditor
             session={session}
