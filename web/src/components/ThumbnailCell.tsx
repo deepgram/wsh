@@ -21,7 +21,6 @@ export function ThumbnailCell({ session, client }: ThumbnailCellProps) {
   const info = sessionInfoMap.value.get(session);
   const serverName = info?.server;
   const tags = info?.tags ?? [];
-  const [hovered, setHovered] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(session);
   const [showTagEditor, setShowTagEditor] = useState(false);
@@ -103,8 +102,7 @@ export function ThumbnailCell({ session, client }: ThumbnailCellProps) {
   return (
     <div
       class={`thumb-cell ${focusedSession.value === session ? "focused" : ""}`}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => { setHovered(false); if (!showTagEditor) setRenaming(false); }}
+      onMouseLeave={() => { if (!showTagEditor) setRenaming(false); }}
       onClick={handleThumbClick}
       draggable
       onDragStart={(e: DragEvent) => startSessionDrag(session, e)}
@@ -115,55 +113,39 @@ export function ThumbnailCell({ session, client }: ThumbnailCellProps) {
       {/* Terminal preview */}
       <div class="thumb-preview">
         <MiniTermContent session={session} />
+
+        {/* Server badge — top-left, shown for remote sessions */}
+        {serverName && (
+          <span class="server-badge" title={`Server: ${serverName}`}>{serverName}</span>
+        )}
       </div>
 
-      {/* Server badge — top-left, shown for remote sessions */}
-      {serverName && (
-        <span class="server-badge" title={`Server: ${serverName}`}>{serverName}</span>
-      )}
-
-      {/* Status dot — always visible in lower-right */}
-      {!hovered && (
-        <span class={`thumb-status-dot ${dotClass}`} aria-label={statusLabel(status)} />
-      )}
-
-      {/* Hover overlay — bottom bar with name + status dot */}
-      {hovered && (
-        <div class="thumb-overlay">
-          {renaming ? (
-            <input
-              ref={renameRef}
-              type="text"
-              class="thumb-rename-input"
-              value={renameValue}
-              onInput={(e) => setRenameValue((e.target as HTMLInputElement).value)}
-              onKeyDown={handleRenameKeyDown}
-              onBlur={handleRenameSubmit}
-              onClick={(e: MouseEvent) => e.stopPropagation()}
-            />
-          ) : (
-            <span
-              class="thumb-name"
-              onClick={(e: MouseEvent) => { e.stopPropagation(); setRenaming(true); setRenameValue(session); }}
-              title="Click to rename"
-            >
-              {session}
-            </span>
-          )}
-          <span class={`mini-status-dot ${dotClass}`} />
-        </div>
-      )}
-
-      {/* Tag count badge — upper-right, visible when has tags and not hovered */}
-      {tags.length > 0 && !hovered && (
-        <span class="thumb-tag-count">{tags.length}</span>
-      )}
-
-      {/* Tag icon — upper-right, visible on hover */}
-      {hovered && (
+      {/* Status bar — always visible below preview */}
+      <div class="thumb-status-bar">
+        <span class={`thumb-bar-dot ${dotClass}`} aria-label={statusLabel(status)} />
+        {renaming ? (
+          <input
+            ref={renameRef}
+            type="text"
+            class="thumb-rename-input"
+            value={renameValue}
+            onInput={(e) => setRenameValue((e.target as HTMLInputElement).value)}
+            onKeyDown={handleRenameKeyDown}
+            onBlur={handleRenameSubmit}
+            onClick={(e: MouseEvent) => e.stopPropagation()}
+          />
+        ) : (
+          <span
+            class="thumb-name"
+            onClick={(e: MouseEvent) => { e.stopPropagation(); setRenaming(true); setRenameValue(session); }}
+            title="Click to rename"
+          >
+            {session}
+          </span>
+        )}
         <button
           ref={tagBtnRef}
-          class="thumb-tag-btn"
+          class={`thumb-tag-btn${tags.length > 0 ? " has-tags" : ""}`}
           onMouseDown={(e: MouseEvent) => e.stopPropagation()}
           onClick={(e: MouseEvent) => {
             e.stopPropagation();
@@ -183,9 +165,15 @@ export function ThumbnailCell({ session, client }: ThumbnailCellProps) {
           }}
           title="Edit tags"
         >
-          &#9868;
+          <svg class="thumb-tag-icon" viewBox="0 0 12 12" width="10" height="10">
+            <path d="M1.5 1.5h4l5 5-4 4-5-5z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" />
+            <circle cx="4.5" cy="4.5" r="0.9" fill="currentColor" />
+          </svg>
+          {tags.length > 0 && (
+            <span class="thumb-tag-count">{tags.length}</span>
+          )}
         </button>
-      )}
+      </div>
 
       {/* Tag editor popover — fixed position to escape overflow:hidden */}
       {showTagEditor && popoverPos && (

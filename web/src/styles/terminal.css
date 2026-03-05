@@ -1372,7 +1372,8 @@ html, body, #app {
 
 .thumb-cell {
   position: relative;
-  height: 80px;
+  display: flex;
+  flex-direction: column;
   border-radius: 4px;
   overflow: hidden;
   background: rgba(0, 0, 0, 0.25);
@@ -1389,34 +1390,27 @@ html, body, #app {
 }
 
 .thumb-preview {
-  position: absolute;
-  inset: 0;
+  position: relative;
+  height: 80px;
   overflow: hidden;
 }
 
-/* Status dot — resting state, lower-right */
-.thumb-status-dot {
-  position: absolute;
-  bottom: 4px;
-  right: 4px;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  z-index: 1;
-}
-
-/* Hover overlay — bottom bar */
-.thumb-overlay {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
+/* Status bar — always visible below preview */
+.thumb-status-bar {
   display: flex;
   align-items: center;
   gap: 4px;
   padding: 2px 6px;
-  background: rgba(0, 0, 0, 0.65);
-  z-index: 2;
+  background: rgba(0, 0, 0, 0.45);
+  min-height: 16px;
+}
+
+/* Status dot in the bar */
+.thumb-bar-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 
 .thumb-name {
@@ -1447,44 +1441,39 @@ html, body, #app {
   font-family: inherit;
 }
 
-/* Tag button — upper-right on hover */
+/* Tag button — right end of status bar */
 .thumb-tag-btn {
-  position: absolute;
-  top: 3px;
-  right: 3px;
-  background: rgba(0, 0, 0, 0.6);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: none;
   border: none;
   color: var(--fg, #ccc);
-  opacity: 0.7;
+  opacity: 0.35;
   cursor: pointer;
-  padding: 1px 4px;
-  font-size: 10px;
+  padding: 0 1px;
   line-height: 1;
-  border-radius: 3px;
-  z-index: 2;
   transition: opacity 0.1s;
+}
+
+.thumb-tag-btn.has-tags {
+  opacity: 0.8;
 }
 
 .thumb-tag-btn:hover {
   opacity: 1;
 }
 
-/* Tag count badge — upper-right when session has tags */
+.thumb-tag-icon {
+  display: block;
+}
+
 .thumb-tag-count {
-  position: absolute;
-  top: 3px;
-  right: 3px;
-  background: var(--accent, #666);
-  color: var(--bg, #000);
   font-size: 8px;
   font-weight: 700;
   line-height: 1;
-  padding: 2px 4px;
-  border-radius: 6px;
-  min-width: 8px;
-  text-align: center;
-  z-index: 2;
-  pointer-events: none;
+  color: var(--fg, #ccc);
 }
 
 /* Tag popover — uses position:fixed via inline style to escape overflow:hidden.
@@ -2543,6 +2532,7 @@ html, body, #app {
 .tile-close:focus-visible,
 .tile-select-circle:focus-visible,
 .tile-action-btn:focus-visible,
+.thumb-tag-btn:focus-visible,
 .thumbnail-close:focus-visible,
 .carousel-thumb:focus-visible,
 .page-dot:focus-visible,
