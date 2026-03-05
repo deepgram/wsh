@@ -29,7 +29,9 @@ export function TagEditor({ session, client, onClose }: TagEditorProps) {
 
   // Focus input on mount
   useEffect(() => {
-    inputRef.current?.focus();
+    // Small delay to ensure the popover is positioned and visible before focusing
+    const timer = setTimeout(() => inputRef.current?.focus(), 16);
+    return () => clearTimeout(timer);
   }, []);
 
   // Close on click outside
@@ -84,13 +86,14 @@ export function TagEditor({ session, client, onClose }: TagEditorProps) {
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (e.key === "Enter") {
       e.preventDefault();
+      e.stopPropagation();
       if (input.trim()) {
         addTag(input);
       } else {
         // Enter on empty input dismisses
         onClose();
       }
-    } else if (e.key === "Tab" || e.key === "," || e.key === " ") {
+    } else if (e.key === "Tab" || e.key === ",") {
       if (input.trim()) {
         e.preventDefault();
         addTag(input);
@@ -100,20 +103,31 @@ export function TagEditor({ session, client, onClose }: TagEditorProps) {
 
   return (
     <div class="tag-editor" ref={containerRef} onClick={(e: MouseEvent) => e.stopPropagation()}>
-      <div class="tag-editor-tags">
-        {currentTags.map((tag) => (
-          <span key={tag} class="tag-editor-tag">
-            {tag}
-            <button class="tag-editor-remove" onClick={() => removeTag(tag)}>×</button>
-          </span>
-        ))}
-      </div>
+      <div class="tag-editor-header">Tags</div>
+      {currentTags.length > 0 ? (
+        <div class="tag-editor-tags">
+          {currentTags.map((tag) => (
+            <span key={tag} class="tag-editor-tag">
+              <span class="tag-editor-tag-label">{tag}</span>
+              <button
+                class="tag-editor-remove"
+                onClick={() => removeTag(tag)}
+                title={`Remove "${tag}"`}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      ) : (
+        <div class="tag-editor-empty">No tags</div>
+      )}
       <div class="tag-editor-input-wrap">
         <input
           ref={inputRef}
           type="text"
           class="tag-editor-input"
-          placeholder="Add tag..."
+          placeholder="Type to add..."
           value={input}
           onInput={(e) => setInput((e.target as HTMLInputElement).value)}
           onKeyDown={handleKeyDown}

@@ -20,11 +20,14 @@ export function ThumbnailCell({ session, client }: ThumbnailCellProps) {
   const dotClass = status === "idle" ? "status-dot-green" : "status-dot-amber";
   const info = sessionInfoMap.value.get(session);
   const serverName = info?.server;
+  const tags = info?.tags ?? [];
   const [hovered, setHovered] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(session);
   const [showTagEditor, setShowTagEditor] = useState(false);
+  const [popoverPos, setPopoverPos] = useState<{ top: number; right: number } | null>(null);
   const renameRef = useRef<HTMLInputElement>(null);
+  const tagBtnRef = useRef<HTMLButtonElement>(null);
 
   // Focus rename input when entering rename mode
   useEffect(() => {
@@ -116,24 +119,53 @@ export function ThumbnailCell({ session, client }: ThumbnailCellProps) {
         </div>
       )}
 
+      {/* Tag count badge — upper-right, visible when has tags and not hovered */}
+      {tags.length > 0 && !hovered && (
+        <span class="thumb-tag-count">{tags.length}</span>
+      )}
+
       {/* Tag icon — upper-right, visible on hover */}
       {hovered && (
         <button
+          ref={tagBtnRef}
           class="thumb-tag-btn"
-          onClick={(e: MouseEvent) => { e.stopPropagation(); setShowTagEditor(!showTagEditor); }}
+          onMouseDown={(e: MouseEvent) => e.stopPropagation()}
+          onClick={(e: MouseEvent) => {
+            e.stopPropagation();
+            if (showTagEditor) {
+              setShowTagEditor(false);
+              setPopoverPos(null);
+            } else {
+              const rect = tagBtnRef.current?.getBoundingClientRect();
+              if (rect) {
+                setPopoverPos({
+                  top: rect.bottom + 4,
+                  right: window.innerWidth - rect.right,
+                });
+              }
+              setShowTagEditor(true);
+            }
+          }}
           title="Edit tags"
         >
           &#9868;
         </button>
       )}
 
-      {/* Tag editor popover */}
-      {showTagEditor && (
-        <div class="thumb-tag-popover">
+      {/* Tag editor popover — fixed position to escape overflow:hidden */}
+      {showTagEditor && popoverPos && (
+        <div
+          class="thumb-tag-popover"
+          style={{
+            position: "fixed",
+            top: `${popoverPos.top}px`,
+            right: `${popoverPos.right}px`,
+          }}
+        >
           <TagEditor
             session={session}
             client={client}
-            onClose={() => setShowTagEditor(false)}
+            onClose={() => { setShowTagEditor(false); setPopoverPos(null); }}
           />
         </div>
       )}
