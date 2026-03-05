@@ -64,7 +64,7 @@ export function handleGroupDrop(targetTag: string, e: DragEvent, client: WshClie
   if (state.shiftHeld) {
     // Add mode: keep existing tags, add new one
     if (!info.tags.includes(targetTag)) {
-      client.updateSession(sessionName, { add_tags: [targetTag] }).catch((err) => {
+      client.updateTags(sessionName, [targetTag]).catch((err) => {
         console.error("Failed to add tag:", err);
       });
     }
@@ -72,10 +72,7 @@ export function handleGroupDrop(targetTag: string, e: DragEvent, client: WshClie
     // Move mode: remove all existing tags, add target tag
     const tagsToRemove = info.tags.filter((t) => t !== targetTag);
     const tagsToAdd = info.tags.includes(targetTag) ? [] : [targetTag];
-    client.updateSession(sessionName, {
-      add_tags: tagsToAdd,
-      remove_tags: tagsToRemove,
-    }).catch((err) => {
+    client.updateTags(sessionName, tagsToAdd, tagsToRemove).catch((err) => {
       console.error("Failed to move session:", err);
     });
   }

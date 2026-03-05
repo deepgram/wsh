@@ -171,7 +171,7 @@ export function CommandPalette({ client, onClose, onShowServers }: CommandPalett
         action: () => {
           const tag = prompt(`Enter tag for session "${name}":`);
           if (tag?.trim()) {
-            client.updateSession(name, { add_tags: [tag.trim()] }).catch(() => {});
+            client.updateTags(name, [tag.trim()]).catch(() => {});
           }
           onClose();
         },

@@ -428,12 +428,16 @@ export class WshClient {
     await this.request("kill_session", { name });
   }
 
-  async updateSession(name: string, updates: {
-    name?: string;
-    add_tags?: string[];
-    remove_tags?: string[];
-  }): Promise<SessionInfo> {
-    const result = await this.request("update_session", updates, name);
+  async renameSession(name: string, newName: string): Promise<SessionInfo> {
+    const result = await this.request("rename_session", { name, new_name: newName });
+    return result as SessionInfo;
+  }
+
+  async updateTags(session: string, addTags?: string[], removeTags?: string[]): Promise<SessionInfo> {
+    const params: Record<string, unknown> = { session };
+    if (addTags && addTags.length > 0) params.add = addTags;
+    if (removeTags && removeTags.length > 0) params.remove = removeTags;
+    const result = await this.request("update_tags", params);
     return result as SessionInfo;
   }
 

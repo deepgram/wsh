@@ -37,7 +37,7 @@ export function ThumbnailCell({ session, client }: ThumbnailCellProps) {
   const handleRenameSubmit = useCallback(() => {
     const trimmed = renameValue.trim();
     if (trimmed && trimmed !== session) {
-      client.updateSession(session, { name: trimmed }).catch((e) => {
+      client.renameSession(session, trimmed).catch((e) => {
         console.error("Failed to rename session:", e);
       });
     }

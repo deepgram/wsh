@@ -68,7 +68,7 @@ export function TagEditor({ session, client, onClose }: TagEditorProps) {
   const addTag = useCallback((tag: string) => {
     const trimmed = tag.trim();
     if (!trimmed || currentTags.includes(trimmed)) return;
-    client.updateSession(session, { add_tags: [trimmed] }).catch((e) => {
+    client.updateTags(session, [trimmed]).catch((e) => {
       console.error("Failed to add tag:", e);
     });
     setInput("");
@@ -76,7 +76,7 @@ export function TagEditor({ session, client, onClose }: TagEditorProps) {
   }, [client, session, currentTags]);
 
   const removeTag = useCallback((tag: string) => {
-    client.updateSession(session, { remove_tags: [tag] }).catch((e) => {
+    client.updateTags(session, undefined, [tag]).catch((e) => {
       console.error("Failed to remove tag:", e);
     });
   }, [client, session]);

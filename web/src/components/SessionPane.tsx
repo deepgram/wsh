@@ -45,7 +45,7 @@ export function SessionPane({ session, client }: SessionPaneProps) {
   const handleRenameSubmit = useCallback(() => {
     const trimmed = renameValue.trim();
     if (trimmed && trimmed !== session) {
-      client.updateSession(session, { name: trimmed }).catch((e) => {
+      client.renameSession(session, trimmed).catch((e) => {
         console.error("Failed to rename session:", e);
       });
     }
@@ -64,7 +64,7 @@ export function SessionPane({ session, client }: SessionPaneProps) {
   }, [handleRenameSubmit, session]);
 
   const removeTag = useCallback((tag: string) => {
-    client.updateSession(session, { remove_tags: [tag] }).catch((e) => {
+    client.updateTags(session, undefined, [tag]).catch((e) => {
       console.error("Failed to remove tag:", e);
     });
   }, [client, session]);
