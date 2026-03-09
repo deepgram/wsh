@@ -1,6 +1,7 @@
 import { useRef, useEffect } from "preact/hooks";
 import { focusedSession, connectionState } from "../state/sessions";
 import { getScreen } from "../state/terminal";
+import { ctrlActive, altActive, clearModifiers } from "../state/modifiers";
 import type { WshClient } from "../api/ws";
 import { keyToSequence, lineToPlainText } from "../utils/keymap";
 
@@ -130,6 +131,27 @@ export function InputBar({ session, client }: InputBarProps) {
 
     if (current === prev) return;
 
+    // If a modifier is active, intercept the newly typed character(s)
+    if (ctrlActive.value || altActive.value) {
+      const added = current.slice(prev.length);
+      if (added.length === 1) {
+        if (ctrlActive.value) {
+          const lower = added.toLowerCase();
+          if (lower >= "a" && lower <= "z") {
+            send(String.fromCharCode(lower.charCodeAt(0) - 96));
+          }
+        } else if (altActive.value) {
+          send("\x1b" + added);
+        }
+        clearModifiers();
+        // Revert the input field — the modified char shouldn't appear
+        input.value = prev;
+        prevValueRef.current = prev;
+        return;
+      }
+    }
+
+    // Normal diff-based input (no modifier active)
     // Find common prefix
     let common = 0;
     while (common < prev.length && common < current.length && prev[common] === current[common]) {
@@ -152,12 +174,20 @@ export function InputBar({ session, client }: InputBarProps) {
   };
 
   return (
-    <div class="input-bar">
+    <div class={`input-bar${ctrlActive.value || altActive.value ? " modifier-active" : ""}`}>
       <input
         ref={inputRef}
         type="text"
         enterkeyhint="send"
-        placeholder={connected ? "Type here..." : "Disconnected"}
+        placeholder={
+          !connected
+            ? "Disconnected"
+            : ctrlActive.value
+              ? "Ctrl + ..."
+              : altActive.value
+                ? "Alt + ..."
+                : "Type here..."
+        }
         disabled={!connected}
         onBeforeInput={handleBeforeInput}
         onKeyDown={handleKeyDown}

@@ -197,6 +197,10 @@ html, body, #app {
   border-color: var(--cursor-color);
 }
 
+.input-bar.modifier-active input {
+  border-color: var(--cursor-color);
+}
+
 /* ==========================================================================
    Modifier Bar
    ========================================================================== */
