@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "preact/hooks";
 import { Terminal } from "./Terminal";
 import { InputBar } from "./InputBar";
+import { ModifierBar } from "./ModifierBar";
 import { TagEditor } from "./TagEditor";
 import type { WshClient } from "../api/ws";
 import { sessionStatuses, type SessionStatus } from "../state/groups";
@@ -122,6 +123,7 @@ export function SessionPane({ session, client }: SessionPaneProps) {
         </div>
       </div>
       <Terminal session={session} client={client} captureInput={!isMobile} />
+      {isMobile && <ModifierBar session={session} client={client} />}
       {isMobile && <InputBar session={session} client={client} />}
     </div>
   );
