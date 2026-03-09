@@ -198,6 +198,91 @@ html, body, #app {
 }
 
 /* ==========================================================================
+   Modifier Bar
+   ========================================================================== */
+
+.modifier-bar-wrap {
+  position: relative;
+  flex-shrink: 0;
+  background: var(--chrome);
+  border-top: 1px solid var(--border);
+}
+
+.modifier-bar-wrap.overflow-left::before,
+.modifier-bar-wrap.overflow-right::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 20px;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.modifier-bar-wrap.overflow-left::before {
+  left: 0;
+  background: linear-gradient(to right, var(--chrome), transparent);
+}
+
+.modifier-bar-wrap.overflow-right::after {
+  right: 0;
+  background: linear-gradient(to left, var(--chrome), transparent);
+}
+
+.modifier-bar {
+  display: flex;
+  gap: 4px;
+  padding: 4px 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.modifier-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.modifier-key {
+  flex-shrink: 0;
+  height: 34px;
+  min-width: 40px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--fg);
+  font-size: 12px;
+  font-family: system-ui, -apple-system, sans-serif;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: background 0.1s, border-color 0.1s;
+}
+
+.modifier-key:active {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.modifier-key.active {
+  border-color: var(--cursor-color);
+  background: rgba(0, 212, 255, 0.15);
+  color: var(--cursor-color);
+}
+
+.modifier-key:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+@media (max-width: 374px) {
+  .modifier-key {
+    min-width: 36px;
+    padding: 0 8px;
+    font-size: 11px;
+  }
+}
+
+/* ==========================================================================
    Session Pane (shared by carousel + tiled)
    ========================================================================== */
 
