@@ -50,6 +50,7 @@ export function ModifierBar({ session, client, onTabSent }: ModifierBarProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const repeatTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const repeatIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const didRepeatRef = useRef(false);
   const connected = connectionState.value === "connected";
 
   useEffect(() => {
@@ -97,6 +98,12 @@ export function ModifierBar({ session, client, onTabSent }: ModifierBarProps) {
         toggleAlt();
         return;
       }
+      // On touch devices, startRepeat fires on touchstart and already
+      // sends the initial key. Suppress the synthetic click that follows.
+      if (key.repeatable && didRepeatRef.current) {
+        didRepeatRef.current = false;
+        return;
+      }
       if (key.seq) {
         send(key.seq);
         if (key.seq === "\t" && onTabSent) onTabSent();
@@ -109,6 +116,10 @@ export function ModifierBar({ session, client, onTabSent }: ModifierBarProps) {
     (key: KeyDef) => {
       if (!key.repeatable || !key.seq) return;
       const seq = key.seq;
+      // Send the initial key immediately and mark that touch handled it,
+      // so the synthetic onClick that follows touchend is suppressed.
+      didRepeatRef.current = true;
+      send(seq);
       repeatTimerRef.current = setTimeout(() => {
         repeatIntervalRef.current = setInterval(() => send(seq), REPEAT_INTERVAL);
       }, REPEAT_DELAY);

@@ -149,6 +149,16 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(
           const lower = added.toLowerCase();
           if (lower >= "a" && lower <= "z") {
             send(String.fromCharCode(lower.charCodeAt(0) - 96));
+          } else if (added === "[") {
+            send("\x1b"); // Ctrl+[ = Escape
+          } else if (added === "\\") {
+            send("\x1c"); // Ctrl+\
+          } else if (added === "]") {
+            send("\x1d"); // Ctrl+]
+          } else if (added === "^" || added === "6") {
+            send("\x1e"); // Ctrl+^
+          } else if (added === "_" || added === "-") {
+            send("\x1f"); // Ctrl+_
           }
         } else if (altActive.value) {
           send("\x1b" + added);
