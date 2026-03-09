@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "preact/hooks";
 import { Terminal } from "./Terminal";
 import { InputBar } from "./InputBar";
+import type { InputBarHandle } from "./InputBar";
 import { ModifierBar } from "./ModifierBar";
 import { TagEditor } from "./TagEditor";
 import type { WshClient } from "../api/ws";
@@ -22,6 +23,7 @@ export function SessionPane({ session, client }: SessionPaneProps) {
   const [renameValue, setRenameValue] = useState(session);
   const [showTagEditor, setShowTagEditor] = useState(false);
   const renameRef = useRef<HTMLInputElement>(null);
+  const inputBarRef = useRef<InputBarHandle>(null);
 
   const status = sessionStatuses.value.get(session);
   const dotClass = status === "idle" ? "status-dot-green" : "status-dot-amber";
@@ -123,8 +125,14 @@ export function SessionPane({ session, client }: SessionPaneProps) {
         </div>
       </div>
       <Terminal session={session} client={client} captureInput={!isMobile} />
-      {isMobile && <ModifierBar session={session} client={client} />}
-      {isMobile && <InputBar session={session} client={client} />}
+      {isMobile && (
+        <ModifierBar
+          session={session}
+          client={client}
+          onTabSent={() => inputBarRef.current?.scheduleSyncFromTerminal()}
+        />
+      )}
+      {isMobile && <InputBar ref={inputBarRef} session={session} client={client} />}
     </div>
   );
 }

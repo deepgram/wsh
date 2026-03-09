@@ -1,16 +1,22 @@
-import { useRef, useEffect } from "preact/hooks";
+import { useRef, useEffect, useImperativeHandle } from "preact/hooks";
+import { forwardRef } from "preact/compat";
 import { focusedSession, connectionState } from "../state/sessions";
 import { getScreen } from "../state/terminal";
 import { ctrlActive, altActive, clearModifiers } from "../state/modifiers";
 import type { WshClient } from "../api/ws";
 import { keyToSequence, lineToPlainText } from "../utils/keymap";
 
+export interface InputBarHandle {
+  scheduleSyncFromTerminal: () => void;
+}
+
 interface InputBarProps {
   session: string;
   client: WshClient;
 }
 
-export function InputBar({ session, client }: InputBarProps) {
+export const InputBar = forwardRef<InputBarHandle, InputBarProps>(
+  function InputBar({ session, client }, ref) {
   const inputRef = useRef<HTMLInputElement>(null);
   const prevValueRef = useRef("");
   const pendingRef = useRef<{ promptLen: number } | null>(null);
@@ -83,6 +89,10 @@ export function InputBar({ session, client }: InputBarProps) {
     if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
     syncTimerRef.current = setTimeout(resolveCompletion, 150);
   };
+
+  useImperativeHandle(ref, () => ({
+    scheduleSyncFromTerminal,
+  }));
 
   // Mobile virtual keyboards often bypass keydown for Enter, firing
   // a beforeinput with inputType "insertLineBreak" instead. Intercept
@@ -199,4 +209,4 @@ export function InputBar({ session, client }: InputBarProps) {
       />
     </div>
   );
-}
+});
