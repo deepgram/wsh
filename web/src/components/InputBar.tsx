@@ -83,6 +83,17 @@ export function InputBar({ session, client }: InputBarProps) {
     syncTimerRef.current = setTimeout(resolveCompletion, 150);
   };
 
+  // Mobile virtual keyboards often bypass keydown for Enter, firing
+  // a beforeinput with inputType "insertLineBreak" instead. Intercept
+  // it here so Enter reliably sends \r to the PTY.
+  const handleBeforeInput = (e: InputEvent) => {
+    if (e.inputType === "insertLineBreak" || e.inputType === "insertParagraph") {
+      e.preventDefault();
+      send("\r");
+      clearInput();
+    }
+  };
+
   const handleKeyDown = (e: KeyboardEvent) => {
     const seq = keyToSequence(e);
     if (seq !== null) {
@@ -145,8 +156,10 @@ export function InputBar({ session, client }: InputBarProps) {
       <input
         ref={inputRef}
         type="text"
+        enterkeyhint="send"
         placeholder={connected ? "Type here..." : "Disconnected"}
         disabled={!connected}
+        onBeforeInput={handleBeforeInput}
         onKeyDown={handleKeyDown}
         onInput={handleInput}
         autocomplete="off"
