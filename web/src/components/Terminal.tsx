@@ -1,4 +1,5 @@
 import { useRef, useEffect, useCallback } from "preact/hooks";
+import { useTerminalGestures } from "../hooks/useTerminalGestures";
 import { getScreenSignal, updateScreen } from "../state/terminal";
 import { connectionState, focusedSession, zoomLevel } from "../state/sessions";
 import { spanStyle } from "../utils/terminal";
@@ -135,6 +136,22 @@ export function Terminal({ session, client, captureInput }: TerminalProps) {
       textareaRef.current.focus({ preventScroll: true });
     }
   }, [captureInput, isFocused]);
+
+  // Two-finger swipe gestures for arrow keys on mobile
+  const handleSwipe = useCallback(
+    (seq: string) => {
+      if (client) {
+        client.sendInput(session, seq).catch(() => {});
+      }
+    },
+    [client, session],
+  );
+
+  useTerminalGestures({
+    containerRef,
+    onSwipe: handleSwipe,
+    enabled: !captureInput && !!client,
+  });
 
   // Handle keyboard input from hidden textarea
   const handleTextareaKeyDown = useCallback((e: KeyboardEvent) => {
