@@ -2627,6 +2627,7 @@ html, body, #app {
 .page-dot:focus-visible,
 .auth-prompt-btn:focus-visible,
 .auth-prompt-clear:focus-visible,
+.modifier-key:focus-visible,
 .error-boundary button:focus-visible {
   outline: 2px solid var(--accent, var(--cursor-color));
   outline-offset: 2px;
