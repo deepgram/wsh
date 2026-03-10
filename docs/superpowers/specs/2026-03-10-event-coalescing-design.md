@@ -8,9 +8,10 @@ channel (capacity 256) overflows, producing `Lagged` errors. The recovery path
 sends a full `Sync` snapshot after each lag, which is expensive to serialize and
 send, causing further lag — a cascade of lag -> sync -> lag -> sync.
 
-The forwarding task between the parser broadcast and the WS handler blocks on
-`mpsc::send().await` when the WS can't flush fast enough. While blocked, the
-broadcast receiver falls behind and eventually hits `Lagged`.
+The per-session forwarding task (in the server-level WS path) blocks on
+`mpsc::send().await` when the WS handler can't flush fast enough. While
+blocked, the forwarding task's broadcast receiver falls behind and eventually
+hits `Lagged`. The blocking point is the mpsc send, not the broadcast receive.
 
 ## Solution
 
@@ -34,11 +35,16 @@ Events are small (`Bytes` / enum variants). 1024 slots is negligible memory.
 
 ### Coalescing: Server-Level WS Forwarding Task
 
-The per-session forwarding task (spawned in `handle_server_ws_json` at
-`src/api/handlers.rs:1925`) currently does:
+The per-session forwarding task is spawned inside `handle_server_ws_request()`
+(called from `handle_ws_json_server()`) at `src/api/handlers.rs:1925`. It reads
+from `parser.subscribe()` (a `BroadcastStream` yielding `SubscriptionEvent`
+values) and writes to a shared mpsc channel (capacity 256) via
+`tx.send(TaggedSessionEvent { ... }).await`.
+
+Current behavior:
 
 ```
-loop { event = broadcast.next() -> mpsc.send(event).await }
+loop { event = parser_stream.next() -> mpsc_tx.send(event).await }
 ```
 
 Replacing with a three-branch `select!`:
@@ -48,15 +54,24 @@ Replacing with a three-branch `select!`:
    (the periodic sync will recover state). If `Closed`, break.
 
 2. **Timer tick** (every `interval_ms`, guarded by `if dirty`) — query the
-   parser for a `Screen` snapshot, send a `Sync` event through the mpsc via
-   `try_send`. On success, clear `dirty` and `timer.reset()`. On `Full`,
-   leave `dirty` set and retry next tick.
+   parser for a `Screen` snapshot using the subscriber's `format` (not
+   `Format::default()`), send a `Sync` event through the mpsc via `try_send`.
+   On success, clear `dirty` and `timer.reset()`. On `Full`, leave `dirty` set
+   and retry next tick.
 
 3. **Cancellation** — exit.
 
-The `interval_ms` comes from `SubscribeParams` (default 100ms, already parsed
-and clamped). It needs to be passed into the spawned task alongside the existing
-`parser` clone and `format`.
+The `interval_ms` comes from `SubscribeParams` (default 100ms). This field is
+already parsed and clamped in the handler but is currently unused — it was
+designed for exactly this purpose. It needs to be passed into the spawned task
+alongside the existing `parser` clone and `format`.
+
+**Per-session dirty flags:** Each session's forwarding task has its own
+independent dirty flag. A burst from one session does not suppress events from
+quiet sessions. This is natural since each session gets its own spawned task.
+
+**Shared mpsc capacity (256):** Stays unchanged. With `try_send`, the 256-slot
+buffer provides reasonable headroom before coalescing kicks in.
 
 Key properties:
 - The broadcast receiver **never blocks**, so it stays current and avoids `Lagged`.
@@ -74,12 +89,26 @@ go directly to `ws_tx.send()`.
 To get backpressure detection (equivalent to `try_send` on the mpsc), introduce
 a **bounded mpsc between the handler loop and the WS sink**:
 
-- Spawn a small drain task that reads from the mpsc and writes to `ws_tx`.
+- Spawn a drain task that reads from the mpsc and writes to `ws_tx`, replicating
+  the existing `WS_SEND_TIMEOUT` behavior from the `ws_send!` macro.
 - The handler loop writes to the mpsc with `try_send`.
 - Same dirty flag + timer pattern as the server-level path.
+- Mpsc capacity: 256 (matching the server-level path).
+
+**Only parser events get coalesced.** Input events, activity state changes
+(Idle/Running), and pending `await_idle` responses continue to go directly
+through the mpsc without coalescing — they are low-frequency and discrete.
 
 This makes both paths structurally identical and gives the per-session path the
 same `try_send` backpressure signal.
+
+### Sync Semantics Change
+
+Previously, `Sync` events appeared only as recovery after a `Lagged` error or
+on initial subscribe. With coalescing, `Sync` events also serve as periodic
+coalesced updates during high-throughput bursts. The wire format is unchanged,
+but clients will see `Sync` events more frequently. Clients that log or count
+`Sync` events should expect this behavioral change.
 
 ### Web Client
 
@@ -95,6 +124,13 @@ fallback for edge cases where the broadcast overflows despite the larger buffer
 (e.g., extremely long pauses in the forwarding task). With coalescing active,
 these should fire rarely or never.
 
+### Latent Bug Fix: Format in Lagged Recovery
+
+The existing `Lagged` recovery path in the server-level handler
+(`handlers.rs:1285`) uses `Format::default()` rather than the subscriber's
+requested format. This is a latent bug — the recovery Sync should use the
+subscriber's format. Fix this alongside the coalescing work.
+
 ## Files Changed
 
 | File | Change |
@@ -103,6 +139,7 @@ these should fire rarely or never.
 | `src/parser/mod.rs` | Parser event broadcast: 256 -> 1024 |
 | `src/api/handlers.rs` | Server WS forwarding task: `try_send` + dirty flag + timer |
 | `src/api/handlers.rs` | Per-session WS handler: bounded mpsc to WS sink + coalescing |
+| `src/api/handlers.rs` | Fix `Format::default()` in Lagged recovery to use subscriber format |
 | `web/src/api/ws.ts` | Subscribe call: add `interval_ms: 16` |
 
 ## Testing
@@ -116,6 +153,9 @@ these should fire rarely or never.
    screen state correct via `Sync`.
 
 3. **Server-level WS burst test** — same through multiplexed server WS.
+
+4. **Per-session WS drain task test** — verify the new mpsc-to-WS-sink drain
+   task replicates existing send timeout behavior and handles closure correctly.
 
 ## Documentation Updates
 
@@ -131,5 +171,10 @@ these should fire rarely or never.
 - `skills/wsh/core-mcp/SKILL.md` — MCP is request/response, no streaming.
 - `skills/wsh/input-capture/SKILL.md` — input events are discrete, unaffected.
 - `src/mcp/tools.rs` — MCP tool parameters unchanged.
+- `src/parser/events.rs` has a separate `Subscribe` struct with its own
+  `interval_ms` field — this is used by the per-session WS `subscribe` method
+  dispatch and is structurally independent from `SubscribeParams` in
+  `ws_methods.rs`. Both already have the field; no changes needed to either
+  struct definition.
 - No protocol changes. No new event types. No breaking changes.
 - Clients that don't send `interval_ms` get the default (100ms).
