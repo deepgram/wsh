@@ -193,6 +193,11 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(
     prevValueRef.current = current;
   };
 
+  const handleSend = () => {
+    send("\r");
+    clearInput();
+  };
+
   return (
     <div class={`input-bar${ctrlActive.value || altActive.value ? " modifier-active" : ""}`}>
       <input
@@ -217,6 +222,23 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(
         autocorrect="off"
         spellcheck={false}
       />
+      <button
+        class="send-btn"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={handleSend}
+        disabled={!connected}
+        aria-label="Send (Enter)"
+      >
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+          <path
+            d="M4 10h12M12 6l4 4-4 4"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </svg>
+      </button>
     </div>
   );
 });

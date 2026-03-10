@@ -184,6 +184,14 @@ export function Terminal({ session, client, captureInput }: TerminalProps) {
     }
   }, [captureInput]);
 
+  // On mobile, prevent mousedown on the terminal from blurring the input bar.
+  // This lets users scroll the terminal without closing the keyboard.
+  const handleMouseDown = useCallback((e: MouseEvent) => {
+    if (!captureInput) {
+      e.preventDefault();
+    }
+  }, [captureInput]);
+
   // Measure character cell size and compute cols/rows for a given container size
   const computeGridSize = useCallback(() => {
     const measure = measureRef.current;
@@ -372,6 +380,7 @@ export function Terminal({ session, client, captureInput }: TerminalProps) {
       class="terminal-wrapper"
       style={{ fontSize: `${fontSize}px` }}
       onClick={handleWrapperClick}
+      onMouseDown={handleMouseDown}
     >
       {captureInput && (
         <textarea

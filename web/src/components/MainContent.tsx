@@ -51,6 +51,23 @@ export function MainContent({ client }: MainContentProps) {
   const mode = getViewModeForGroup(primaryTag);
   const sessions = activeGroupSessions.value;
   const focused = focusedSession.value;
+  const isMobile = window.innerWidth < 640;
+
+  // Mobile: single focused session, no view mode chrome
+  if (isMobile) {
+    const displaySession = focused && sessions.includes(focused) ? focused : sessions[0];
+    return (
+      <div class="main-content">
+        <div class="main-body">
+          {displaySession ? (
+            <SessionPane key={displaySession} session={displaySession} client={client} />
+          ) : (
+            <div class="main-empty">No sessions</div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   const groupLabel = primaryTag === "all" ? "All Sessions" : primaryTag;
 
@@ -139,7 +156,7 @@ export function MainContent({ client }: MainContentProps) {
     <div class="main-content">
       {header}
       <div class="main-body">
-        {displaySession && <SessionPane session={displaySession} client={client} />}
+        {displaySession && <SessionPane key={displaySession} session={displaySession} client={client} />}
       </div>
     </div>
   );

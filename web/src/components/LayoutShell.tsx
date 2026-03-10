@@ -1,9 +1,9 @@
 import { useRef, useCallback, useEffect, useState } from "preact/hooks";
-import { sidebarWidth, sidebarCollapsed } from "../state/sessions";
+import { sidebarWidth, sidebarCollapsed, focusedSession, connectionState } from "../state/sessions";
 import type { WshClient } from "../api/ws";
 import { Sidebar } from "./Sidebar";
 import { MainContent } from "./MainContent";
-import { BottomSheet } from "./BottomSheet";
+import { MobileDrawer } from "./MobileDrawer";
 
 interface LayoutShellProps {
   client: WshClient;
@@ -73,12 +73,25 @@ export function LayoutShell({ client }: LayoutShellProps) {
   }, []);
 
   if (layoutMode === "mobile") {
+    const focused = focusedSession.value;
+    const connState = connectionState.value;
     return (
       <div class="layout-shell layout-mobile">
+        <MobileDrawer client={client} open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+        <div class="mobile-topbar">
+          <button
+            class="mobile-hamburger-btn"
+            onClick={() => setSidebarOpen(true)}
+            aria-label="Open navigation"
+          >
+            &#9776;
+          </button>
+          <span class="mobile-topbar-session">{focused || "wsh"}</span>
+          <span class={`status-dot ${connState}`} />
+        </div>
         <div class="layout-main">
           <MainContent client={client} />
         </div>
-        <BottomSheet client={client} />
       </div>
     );
   }
@@ -86,14 +99,7 @@ export function LayoutShell({ client }: LayoutShellProps) {
   if (layoutMode === "tablet") {
     return (
       <div class="layout-shell layout-tablet">
-        {sidebarOpen && (
-          <>
-            <div class="layout-overlay-backdrop" onClick={() => setSidebarOpen(false)} />
-            <div class="layout-sidebar-overlay">
-              <Sidebar client={client} collapsed={false} onToggleCollapse={() => setSidebarOpen(false)} />
-            </div>
-          </>
-        )}
+        <MobileDrawer client={client} open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
         {!sidebarOpen && (
           <button
             class="layout-tablet-menu-btn"

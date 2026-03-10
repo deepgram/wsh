@@ -22,23 +22,42 @@
   border-top: 1px solid var(--border);
 }
 
-.theme-glass .input-bar {
+.theme-glass .input-bar,
+.theme-glass .input-bar-wrap {
   background: var(--chrome);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border-top: 1px solid var(--border);
 }
 
-.theme-glass .input-bar input {
+.theme-glass .input-bar input,
+.theme-glass .input-row .input-field {
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 8px;
   transition: border-color 0.2s, box-shadow 0.2s;
 }
 
-.theme-glass .input-bar input:focus {
+.theme-glass .input-bar input:focus,
+.theme-glass .input-row .input-field:focus {
   border-color: var(--cursor-color);
   box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.theme-glass .mod-key {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.theme-glass .mod-key:active {
+  background: var(--cursor-color);
+  border-color: var(--cursor-color);
+}
+
+.theme-glass .send-btn {
+  box-shadow: 0 2px 8px rgba(0, 212, 255, 0.25);
 }
 
 .theme-glass .session-grid-backdrop {
@@ -262,27 +281,55 @@
   /* Keep dot color as-is */
 }
 
-.theme-neon .input-bar {
+.theme-neon .input-bar,
+.theme-neon .input-bar-wrap {
   background: var(--chrome);
   border-top: 1px solid rgba(0, 255, 204, 0.08);
 }
 
-.theme-neon .input-bar input {
+.theme-neon .input-bar input,
+.theme-neon .input-row .input-field {
   background: rgba(0, 255, 204, 0.03);
   border: 1px solid rgba(0, 255, 204, 0.1);
   color: var(--neon-green);
   transition: border-color 0.2s, box-shadow 0.2s;
 }
 
-.theme-neon .input-bar input::placeholder {
+.theme-neon .input-bar input::placeholder,
+.theme-neon .input-row .input-field::placeholder {
   color: rgba(0, 255, 204, 0.25);
 }
 
-.theme-neon .input-bar input:focus {
+.theme-neon .input-bar input:focus,
+.theme-neon .input-row .input-field:focus {
   border-color: var(--neon-green);
   box-shadow:
     0 0 0 1px rgba(0, 255, 204, 0.15),
     0 0 20px rgba(0, 255, 204, 0.08);
+}
+
+.theme-neon .mod-key {
+  background: rgba(0, 255, 204, 0.03);
+  border-color: rgba(0, 255, 204, 0.1);
+  color: var(--neon-green);
+  text-shadow: 0 0 6px rgba(0, 255, 204, 0.3);
+}
+
+.theme-neon .mod-key:active,
+.theme-neon .mod-key-active {
+  background: var(--neon-green);
+  color: var(--chrome);
+  text-shadow: none;
+}
+
+.theme-neon .send-btn {
+  background: var(--neon-green);
+  color: var(--chrome);
+  box-shadow: 0 0 12px rgba(0, 255, 204, 0.3);
+}
+
+.theme-neon .mod-separator {
+  color: var(--neon-green);
 }
 
 .theme-neon .session-grid-backdrop {
@@ -504,23 +551,49 @@
   color: #636366;
 }
 
-.theme-minimal .input-bar {
+.theme-minimal .input-bar,
+.theme-minimal .input-bar-wrap {
   background: var(--chrome);
   border-top: 0.5px solid var(--border);
+}
+
+.theme-minimal .input-bar {
   padding: 6px 8px;
 }
 
-.theme-minimal .input-bar input {
+.theme-minimal .input-bar input,
+.theme-minimal .input-row .input-field {
   background: var(--bg);
   border: 0.5px solid var(--border);
   border-radius: 6px;
-  font-size: 13px;
-  height: 32px;
+  font-size: 16px;
+  height: 36px;
   padding: 6px 10px;
 }
 
-.theme-minimal .input-bar input:focus {
+.theme-minimal .input-bar input:focus,
+.theme-minimal .input-row .input-field:focus {
   border-color: #48484a;
+}
+
+.theme-minimal .mod-key {
+  background: var(--bg);
+  border: 0.5px solid var(--border);
+  border-radius: 6px;
+  height: 30px;
+  font-size: 12px;
+}
+
+.theme-minimal .mod-key:active,
+.theme-minimal .mod-key-active {
+  background: var(--accent, #48484a);
+  color: var(--bg);
+}
+
+.theme-minimal .send-btn {
+  background: var(--accent, #48484a);
+  width: 36px;
+  height: 36px;
 }
 
 .theme-minimal .session-grid-backdrop {
@@ -973,6 +1046,10 @@
 html[class*="theme-"] .status-bar,
 html[class*="theme-"] .input-bar,
 html[class*="theme-"] .input-bar input,
+html[class*="theme-"] .input-bar-wrap,
+html[class*="theme-"] .input-row .input-field,
+html[class*="theme-"] .mod-key,
+html[class*="theme-"] .send-btn,
 html[class*="theme-"] .session-thumbnail,
 html[class*="theme-"] .tile-header,
 html[class*="theme-"] .tile-resize-handle,

@@ -104,11 +104,6 @@ export function DepthCarousel({ sessions, client }: DepthCarouselProps) {
         <div class="carousel-main">
           <SessionPane session={sessions[currentIndex]} client={client} />
         </div>
-        <div class="carousel-nav-hints">
-          <button class="carousel-nav-btn" onClick={() => navigate(-1)}>&#9664;</button>
-          <span class="carousel-position">{currentIndex + 1} / {sessions.length}</span>
-          <button class="carousel-nav-btn" onClick={() => navigate(1)}>&#9654;</button>
-        </div>
       </div>
     );
   }
