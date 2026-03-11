@@ -2,7 +2,7 @@ import { useCallback } from "preact/hooks";
 import type { WshClient } from "../api/ws";
 import { dragState, dropTargetTag, handleGroupDragOver, handleGroupDragLeave, handleGroupDrop, endDrag } from "../hooks/useDragDrop";
 import { groups, selectedGroups, collapsedGroups, toggleGroupCollapsed, getGroupStatusCounts, groupBy, setGroupBy } from "../state/groups";
-import { connectionState } from "../state/sessions";
+import { connectionState, focusedSession } from "../state/sessions";
 import { ThumbnailCell } from "./ThumbnailCell";
 import { ThemePicker } from "./ThemePicker";
 
@@ -37,7 +37,9 @@ export function Sidebar({ client, collapsed, onToggleCollapse }: SidebarProps) {
   }, []);
 
   const handleNewSession = useCallback(() => {
-    client.createSession().catch((e) => {
+    client.createSession().then((info) => {
+      focusedSession.value = info.name;
+    }).catch((e) => {
       console.error("Failed to create session:", e);
     });
   }, [client]);

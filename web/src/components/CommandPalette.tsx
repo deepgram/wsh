@@ -108,7 +108,7 @@ export function CommandPalette({ client, onClose, onShowServers }: CommandPalett
       label: "New Session",
       description: "Create a new terminal session",
       shortcut: "Ctrl+Shift+O",
-      action: () => { client.createSession().catch(() => {}); onClose(); },
+      action: () => { client.createSession().then((info) => { focusedSession.value = info.name; }).catch(() => {}); onClose(); },
     });
 
     result.push({

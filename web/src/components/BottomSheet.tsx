@@ -1,7 +1,7 @@
 import { useState, useCallback } from "preact/hooks";
 import type { WshClient } from "../api/ws";
 import { groups, selectedGroups } from "../state/groups";
-import { connectionState } from "../state/sessions";
+import { connectionState, focusedSession } from "../state/sessions";
 
 interface BottomSheetProps {
   client: WshClient;
@@ -21,7 +21,9 @@ export function BottomSheet({ client }: BottomSheetProps) {
   }, []);
 
   const handleNewSession = useCallback(() => {
-    client.createSession().catch(() => {});
+    client.createSession().then((info) => {
+      focusedSession.value = info.name;
+    }).catch(() => {});
     setExpanded(false);
   }, [client]);
 

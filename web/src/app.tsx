@@ -161,7 +161,7 @@ export function App() {
       // New session
       if (key === "o" || key === "O") {
         e.preventDefault();
-        clientRef.current?.createSession().catch(() => {});
+        clientRef.current?.createSession().then((info) => { focusedSession.value = info.name; }).catch(() => {});
         return;
       }
       // Kill focused session
