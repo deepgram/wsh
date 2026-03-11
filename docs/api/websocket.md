@@ -169,7 +169,7 @@ Response:
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
 | `events` | array of strings | (required) | Event types to subscribe to |
-| `interval_ms` | integer | `100` | Minimum interval between events (ms) |
+| `interval_ms` | integer | `100` | Event coalescing interval (ms). When the server can't deliver events fast enough, it switches to sending periodic `sync` snapshots at this interval instead of individual events. Lower values give smoother updates; `16` is recommended for UI clients (~60fps). |
 | `format` | `"plain"` \| `"styled"` | `"styled"` | Line format for events containing lines |
 | `idle_timeout_ms` | integer | `0` | When > 0, emit a `sync` event after this many ms of inactivity |
 
@@ -399,6 +399,34 @@ Each time the terminal goes quiet for 2 seconds, you receive:
 
 The idle sync subscription is reset on re-subscribe. Set `idle_timeout_ms` to `0`
 (or omit it) to disable.
+
+### Event Coalescing
+
+When a terminal session generates output faster than the WebSocket can deliver
+events, the server automatically switches from sending individual events to
+sending periodic `sync` snapshots. This prevents the event buffer from
+overflowing and ensures the client always converges to the correct state.
+
+**How it works:**
+
+1. Under normal throughput, events are delivered individually with no added latency.
+2. When the internal buffer fills up, the server stops forwarding individual events
+   and sets a "dirty" flag.
+3. Every `interval_ms` milliseconds, if the flag is set, the server queries the
+   terminal for a full screen snapshot and sends it as a `sync` event.
+4. Once the buffer drains, individual event delivery resumes automatically.
+
+**Recommended `interval_ms` values:**
+
+| Use case | Value | Notes |
+|----------|-------|-------|
+| UI rendering | `16` | ~60fps, smooth visual updates |
+| Agent monitoring | `100` (default) | Good balance of responsiveness and efficiency |
+| Logging / audit | `500`–`1000` | Lower overhead, periodic snapshots sufficient |
+
+Clients should already handle `sync` events (they're sent on initial subscribe
+and after idle timeouts). No client-side changes are needed to benefit from
+coalescing — it happens transparently on the server.
 
 ### `create_overlay`
 
