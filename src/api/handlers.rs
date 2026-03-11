@@ -377,6 +377,7 @@ async fn handle_ws_json(
 
     // Mutable subscription state (initially no subscription)
     let mut subscribed_types: Vec<crate::parser::events::EventType> = Vec::new();
+    let mut subscribe_format = crate::parser::state::Format::default();
 
     // Subscribe to parser events (stream is always active, filtering is local)
     let mut events = Box::pin(session.parser.subscribe());
@@ -457,7 +458,7 @@ async fn handle_ws_json(
                         if let Ok(Ok(crate::parser::state::QueryResponse::Screen(screen))) = tokio::time::timeout(
                             std::time::Duration::from_secs(10),
                             session.parser.query(crate::parser::state::Query::Screen {
-                                format: crate::parser::state::Format::default(),
+                                format: subscribe_format,
                             }),
                         ).await {
                             let scrollback_lines = screen.total_lines;
@@ -639,6 +640,7 @@ async fn handle_ws_json(
                                     params.interval_ms = params.interval_ms.min(MAX_WAIT_CEILING_MS);
                                     subscribed_types = params.events.clone();
                                     let sub_format = params.format;
+                                    subscribe_format = sub_format;
 
                                     // Set up input subscription if needed
                                     if subscribed_types.contains(&EventType::Input) {
@@ -949,6 +951,7 @@ struct TaggedSessionEvent {
 /// Tracks a per-session subscription's forwarding task.
 struct SubHandle {
     subscribed_types: Vec<EventType>,
+    format: crate::parser::state::Format,
     task: tokio::task::JoinHandle<()>,
     /// Optional background task that monitors activity and produces
     /// synthetic Idle/Running events via the shared mpsc channel.
@@ -1279,10 +1282,15 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
                         // After lag, push a full sync so the client can recover,
                         // matching the per-session ws_json behavior.
                         if let Some(session) = state.sessions.get(&tagged.session) {
+                            // Look up subscriber format
+                            let sub_format = sub_handles
+                                .get(&tagged.session)
+                                .map(|h| h.format)
+                                .unwrap_or_default();
                             if let Ok(Ok(crate::parser::state::QueryResponse::Screen(screen))) = tokio::time::timeout(
                                 std::time::Duration::from_secs(10),
                                 session.parser.query(crate::parser::state::Query::Screen {
-                                    format: crate::parser::state::Format::default(),
+                                    format: sub_format,
                                 }),
                             ).await {
                                 let scrollback_lines = screen.total_lines;
@@ -2146,6 +2154,7 @@ async fn handle_server_ws_request(
                     session_name.clone(),
                     SubHandle {
                         subscribed_types: subscribed_types.clone(),
+                        format: params.format,
                         task,
                         activity_task,
                         _client_guard: session.connect(),
