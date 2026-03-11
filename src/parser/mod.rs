@@ -60,7 +60,7 @@ impl Parser {
     /// the full rationale.
     pub fn spawn(mut raw_rx: mpsc::Receiver<Bytes>, cols: usize, rows: usize, scrollback_limit: usize) -> Self {
         let (query_tx, query_rx) = mpsc::channel(32);
-        let (event_tx, _) = broadcast::channel(256);
+        let (event_tx, _) = broadcast::channel(1024);
 
         let event_tx_clone = event_tx.clone();
 

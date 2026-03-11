@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use tokio::sync::broadcast;
 
-pub const BROADCAST_CAPACITY: usize = 64;
+pub const BROADCAST_CAPACITY: usize = 1024;
 
 /// Distributes PTY output to streaming API clients via a broadcast channel.
 ///
