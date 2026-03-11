@@ -1922,27 +1922,84 @@ async fn handle_server_ws_request(
                 let shared_name = std::sync::Arc::new(parking_lot::Mutex::new(session_name.clone()));
                 let task_name = shared_name.clone();
                 let cancelled = session.cancelled.clone();
+                let task_parser = session.parser.clone();
+                let task_format = params.format;
+                let task_interval = std::time::Duration::from_millis(params.interval_ms.max(1));
                 let task = tokio::spawn(async move {
+                    let mut dirty = false;
+                    let mut coalesce_timer = tokio::time::interval(task_interval);
+                    coalesce_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                    // Don't fire immediately — only after dirty is set
+                    coalesce_timer.tick().await;
+
                     loop {
                         tokio::select! {
+                            // Bias towards draining the broadcast to prevent lagged
+                            biased;
+
                             event = events.next() => {
                                 match event {
                                     Some(e) => {
+                                        // If we receive a Lagged event, treat it like being backed up
+                                        if matches!(e, crate::parser::SubscriptionEvent::Lagged(_)) {
+                                            dirty = true;
+                                            continue;
+                                        }
+                                        if dirty {
+                                            // Draining broadcast to stay current; will sync on timer
+                                            continue;
+                                        }
                                         let current_name = task_name.lock().clone();
-                                        if tx
-                                            .send(TaggedSessionEvent {
-                                                session: current_name,
-                                                event: e,
-                                            })
-                                            .await
-                                            .is_err()
-                                        {
-                                            break;
+                                        match tx.try_send(TaggedSessionEvent {
+                                            session: current_name,
+                                            event: e,
+                                        }) {
+                                            Ok(()) => {}
+                                            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                                                dirty = true;
+                                            }
+                                            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => break,
                                         }
                                     }
                                     None => break,
                                 }
                             }
+
+                            _ = coalesce_timer.tick(), if dirty => {
+                                // Query parser for current screen snapshot
+                                if let Ok(Ok(crate::parser::state::QueryResponse::Screen(screen))) =
+                                    tokio::time::timeout(
+                                        std::time::Duration::from_secs(10),
+                                        task_parser.query(crate::parser::state::Query::Screen {
+                                            format: task_format,
+                                        }),
+                                    ).await
+                                {
+                                    let scrollback_lines = screen.total_lines;
+                                    let sync_event = crate::parser::SubscriptionEvent::Event(
+                                        crate::parser::events::Event::Sync {
+                                            seq: 0,
+                                            screen,
+                                            scrollback_lines,
+                                        },
+                                    );
+                                    let current_name = task_name.lock().clone();
+                                    match tx.try_send(TaggedSessionEvent {
+                                        session: current_name,
+                                        event: sync_event,
+                                    }) {
+                                        Ok(()) => {
+                                            dirty = false;
+                                            coalesce_timer.reset();
+                                        }
+                                        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                                            // Still backed up, retry next tick
+                                        }
+                                        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => break,
+                                    }
+                                }
+                            }
+
                             _ = cancelled.cancelled() => break,
                         }
                     }
