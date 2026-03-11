@@ -149,3 +149,77 @@ async fn test_server_ws_coalescing_under_burst() {
         "expected no lagged notifications with coalescing, got {lagged_count}"
     );
 }
+
+/// Blast events through the parser and verify that the per-session WS
+/// coalesces into Sync events rather than producing lagged notifications.
+#[tokio::test]
+async fn test_per_session_ws_coalescing_under_burst() {
+    let (state, _input_rx, _output_tx, parser_tx) = create_burst_test_state();
+    let app = wsh::api::router(state, wsh::api::RouterConfig::default());
+    let addr = start_server(app).await;
+
+    // Connect to the per-session WS
+    let (ws, _) = connect_async(format!("ws://{}/sessions/test/ws/json", addr))
+        .await
+        .unwrap();
+    let (mut tx, mut rx) = ws.split();
+
+    let _ = recv_json(&mut rx).await; // connected
+
+    // Subscribe with short interval
+    tx.send(Message::Text(
+        serde_json::json!({
+            "method": "subscribe",
+            "params": {
+                "events": ["lines", "diffs"],
+                "format": "plain",
+                "interval_ms": 50
+            }
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+
+    let resp = recv_json(&mut rx).await;
+    assert_eq!(resp["method"], "subscribe");
+    let sync = recv_json(&mut rx).await;
+    assert_eq!(sync["event"], "sync");
+
+    // Blast 5000 lines
+    for i in 0..5000 {
+        let line = format!("line {}\r\n", i);
+        let _ = parser_tx.send(Bytes::from(line)).await;
+    }
+
+    // Collect events for 2 seconds
+    let mut sync_count = 0u32;
+    let mut lagged_count = 0u32;
+    let mut event_count = 0u32;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    while tokio::time::Instant::now() < deadline {
+        match tokio::time::timeout(Duration::from_millis(100), rx.next()).await {
+            Ok(Some(Ok(Message::Text(text)))) => {
+                let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+                event_count += 1;
+                if json.get("event") == Some(&serde_json::json!("sync")) {
+                    sync_count += 1;
+                }
+                if json.get("type") == Some(&serde_json::json!("lagged")) {
+                    lagged_count += 1;
+                }
+            }
+            _ => break,
+        }
+    }
+
+    assert!(
+        sync_count >= 1,
+        "expected at least 1 coalesced sync event, got {sync_count} (total events: {event_count})"
+    );
+    assert!(
+        lagged_count == 0,
+        "expected no lagged notifications with coalescing, got {lagged_count}"
+    );
+}

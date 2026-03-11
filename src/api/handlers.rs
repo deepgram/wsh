@@ -365,9 +365,36 @@ async fn handle_ws_json(
     }
     let (mut ws_tx, mut ws_rx) = socket.split();
 
+    // Bounded mpsc for backpressure-aware sending. The handler loop writes
+    // to ws_mpsc_tx; a drain task reads from ws_mpsc_rx and writes to ws_tx.
+    // The drain task owns ws_tx — when ws_mpsc_tx is dropped, the drain task
+    // will flush remaining messages and send the close frame.
+    let (ws_mpsc_tx, mut ws_mpsc_rx) = tokio::sync::mpsc::channel::<Message>(256);
+    let drain_task = tokio::spawn(async move {
+        while let Some(msg) = ws_mpsc_rx.recv().await {
+            match tokio::time::timeout(WS_SEND_TIMEOUT, ws_tx.send(msg)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(_)) => break,
+                Err(_) => {
+                    tracing::debug!("ws_json drain task: send timed out, closing");
+                    break;
+                }
+            }
+        }
+        // Send close frame before exiting (with timeout to avoid blocking on dead connections)
+        let close_frame = axum::extract::ws::CloseFrame {
+            code: axum::extract::ws::close_code::NORMAL,
+            reason: "session ended".into(),
+        };
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            ws_tx.send(Message::Close(Some(close_frame))),
+        ).await;
+    });
+
     // Send connected message
     let connected_msg = serde_json::json!({ "connected": true });
-    if ws_tx
+    if ws_mpsc_tx
         .send(Message::Text(connected_msg.to_string().into()))
         .await
         .is_err()
@@ -378,6 +405,12 @@ async fn handle_ws_json(
     // Mutable subscription state (initially no subscription)
     let mut subscribed_types: Vec<crate::parser::events::EventType> = Vec::new();
     let mut subscribe_format = crate::parser::state::Format::default();
+
+    // Coalescing state for backpressure handling
+    let mut coalesce_dirty = false;
+    let mut coalesce_timer = tokio::time::interval(std::time::Duration::from_millis(100));
+    coalesce_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    coalesce_timer.tick().await; // consume initial tick
 
     // Subscribe to parser events (stream is always active, filtering is local)
     let mut events = Box::pin(session.parser.subscribe());
@@ -399,15 +432,15 @@ async fn handle_ws_json(
     let mut ping_sent = false;
     const PONG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-    /// Send a WebSocket message with a timeout. Returns false if the send
-    /// failed or timed out (caller should break out of the loop).
+    /// Send a WebSocket message via the drain channel with timeout.
+    /// Breaks out of the enclosing loop on closed channel or timeout.
     macro_rules! ws_send {
         ($tx:expr, $msg:expr) => {
             match tokio::time::timeout(WS_SEND_TIMEOUT, $tx.send($msg)).await {
                 Ok(Ok(())) => {}
                 Ok(Err(_)) => break,
                 Err(_) => {
-                    tracing::debug!("ws_json send timed out, closing");
+                    tracing::debug!("ws_json mpsc send timed out, closing");
                     break;
                 }
             }
@@ -420,6 +453,10 @@ async fn handle_ws_json(
             sub_event = events.next() => {
                 match sub_event {
                     Some(crate::parser::SubscriptionEvent::Event(event)) if !subscribed_types.is_empty() => {
+                        if coalesce_dirty {
+                            // Draining broadcast to stay current; will sync on timer
+                            continue;
+                        }
                         let should_send = match &event {
                             crate::parser::events::Event::Line { .. } => {
                                 subscribed_types.contains(&EventType::Lines)
@@ -443,34 +480,20 @@ async fn handle_ws_json(
 
                         if should_send {
                             if let Ok(json) = serde_json::to_string(&event) {
-                                ws_send!(ws_tx, Message::Text(json.into()));
+                                match ws_mpsc_tx.try_send(Message::Text(json.into())) {
+                                    Ok(()) => {}
+                                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                                        coalesce_dirty = true;
+                                    }
+                                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => break,
+                                }
                             }
                         }
                     }
                     Some(crate::parser::SubscriptionEvent::Lagged(n)) => {
-                        tracing::warn!(skipped = n, "parser event subscriber lagged");
-                        let lag_msg = serde_json::json!({"type": "lagged", "skipped": n});
-                        if let Ok(json) = serde_json::to_string(&lag_msg) {
-                            ws_send!(ws_tx, Message::Text(json.into()));
-                        }
-                        // After lag, push a full sync so the client can recover.
-                        // Without this, the client has an incomplete view of state.
-                        if let Ok(Ok(crate::parser::state::QueryResponse::Screen(screen))) = tokio::time::timeout(
-                            std::time::Duration::from_secs(10),
-                            session.parser.query(crate::parser::state::Query::Screen {
-                                format: subscribe_format,
-                            }),
-                        ).await {
-                            let scrollback_lines = screen.total_lines;
-                            let sync_event = crate::parser::events::Event::Sync {
-                                seq: 0,
-                                screen,
-                                scrollback_lines,
-                            };
-                            if let Ok(json) = serde_json::to_string(&sync_event) {
-                                ws_send!(ws_tx, Message::Text(json.into()));
-                            }
-                        }
+                        tracing::warn!(skipped = n, "parser event subscriber lagged, switching to coalescing mode");
+                        // Treat lagged like backpressure: set dirty and let timer send Sync
+                        coalesce_dirty = true;
                     }
                     None => break,
                     _ => {} // No subscription active, discard
@@ -486,7 +509,7 @@ async fn handle_ws_json(
                 match input_event {
                     Ok(event) => {
                         if let Ok(json) = serde_json::to_string(&event) {
-                            ws_send!(ws_tx, Message::Text(json.into()));
+                            ws_send!(ws_mpsc_tx, Message::Text(json.into()));
                         }
                     }
                     Err(broadcast::error::RecvError::Closed) => {
@@ -496,7 +519,7 @@ async fn handle_ws_json(
                         tracing::warn!(skipped = n, "input event subscriber lagged");
                         let lag_msg = serde_json::json!({"type": "input_lagged", "skipped": n});
                         if let Ok(json) = serde_json::to_string(&lag_msg) {
-                            ws_send!(ws_tx, Message::Text(json.into()));
+                            ws_send!(ws_mpsc_tx, Message::Text(json.into()));
                         }
                     }
                 }
@@ -528,7 +551,7 @@ async fn handle_ws_json(
                                 }),
                             );
                             if let Ok(json) = serde_json::to_string(&resp) {
-                                ws_send!(ws_tx, Message::Text(json.into()));
+                                ws_send!(ws_mpsc_tx, Message::Text(json.into()));
                             }
                         }
                         _ => {
@@ -539,7 +562,7 @@ async fn handle_ws_json(
                                 "Terminal is idle but screen query failed.",
                             );
                             if let Ok(json) = serde_json::to_string(&resp) {
-                                ws_send!(ws_tx, Message::Text(json.into()));
+                                ws_send!(ws_mpsc_tx, Message::Text(json.into()));
                             }
                         }
                     }
@@ -552,7 +575,7 @@ async fn handle_ws_json(
                         "Terminal did not become idle within the deadline.",
                     );
                     if let Ok(json) = serde_json::to_string(&resp) {
-                        ws_send!(ws_tx, Message::Text(json.into()));
+                        ws_send!(ws_mpsc_tx, Message::Text(json.into()));
                     }
                 }
             }
@@ -579,7 +602,7 @@ async fn handle_ws_json(
                                 scrollback_lines,
                             };
                             if let Ok(json) = serde_json::to_string(&idle_event) {
-                                ws_send!(ws_tx, Message::Text(json.into()));
+                                ws_send!(ws_mpsc_tx, Message::Text(json.into()));
                             }
                         }
                     }
@@ -589,7 +612,7 @@ async fn handle_ws_json(
                             generation,
                         };
                         if let Ok(json) = serde_json::to_string(&running_event) {
-                            ws_send!(ws_tx, Message::Text(json.into()));
+                            ws_send!(ws_mpsc_tx, Message::Text(json.into()));
                         }
                     }
                     None => {
@@ -605,8 +628,39 @@ async fn handle_ws_json(
                     tracing::debug!("ws_json client unresponsive (no pong), closing");
                     break;
                 }
-                ws_send!(ws_tx, Message::Ping(Bytes::new()));
+                ws_send!(ws_mpsc_tx, Message::Ping(Bytes::new()));
                 ping_sent = true;
+            }
+
+            // Coalescing timer: send Sync snapshot when dirty
+            _ = coalesce_timer.tick(), if coalesce_dirty => {
+                if let Ok(Ok(crate::parser::state::QueryResponse::Screen(screen))) =
+                    tokio::time::timeout(
+                        std::time::Duration::from_secs(10),
+                        session.parser.query(crate::parser::state::Query::Screen {
+                            format: subscribe_format,
+                        }),
+                    ).await
+                {
+                    let scrollback_lines = screen.total_lines;
+                    let sync_event = crate::parser::events::Event::Sync {
+                        seq: 0,
+                        screen,
+                        scrollback_lines,
+                    };
+                    if let Ok(json) = serde_json::to_string(&sync_event) {
+                        match ws_mpsc_tx.try_send(Message::Text(json.into())) {
+                            Ok(()) => {
+                                coalesce_dirty = false;
+                                coalesce_timer.reset();
+                            }
+                            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                                // Still backed up, retry next tick
+                            }
+                            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => break,
+                        }
+                    }
+                }
             }
 
             msg = ws_rx.next() => {
@@ -625,7 +679,7 @@ async fn handle_ws_json(
                                     "Invalid JSON or missing 'method' field.",
                                 );
                                 if let Ok(json) = serde_json::to_string(&err) {
-                                    ws_send!(ws_tx, Message::Text(json.into()));
+                                    ws_send!(ws_mpsc_tx, Message::Text(json.into()));
                                 }
                                 continue;
                             }
@@ -641,6 +695,16 @@ async fn handle_ws_json(
                                     subscribed_types = params.events.clone();
                                     let sub_format = params.format;
                                     subscribe_format = sub_format;
+
+                                    // Reset coalescing state for the new subscription
+                                    coalesce_timer = tokio::time::interval(
+                                        std::time::Duration::from_millis(params.interval_ms.max(1)),
+                                    );
+                                    coalesce_timer.set_missed_tick_behavior(
+                                        tokio::time::MissedTickBehavior::Skip,
+                                    );
+                                    coalesce_timer.tick().await;
+                                    coalesce_dirty = false;
 
                                     // Set up input subscription if needed
                                     if subscribed_types.contains(&EventType::Input) {
@@ -735,7 +799,7 @@ async fn handle_ws_json(
                                         serde_json::json!({"events": event_names}),
                                     );
                                     if let Ok(json) = serde_json::to_string(&resp) {
-                                        ws_send!(ws_tx, Message::Text(json.into()));
+                                        ws_send!(ws_mpsc_tx, Message::Text(json.into()));
                                     }
 
                                     // Send sync event (with timeout to avoid blocking the loop)
@@ -750,7 +814,7 @@ async fn handle_ws_json(
                                             scrollback_lines,
                                         };
                                         if let Ok(json) = serde_json::to_string(&sync_event) {
-                                            ws_send!(ws_tx, Message::Text(json.into()));
+                                            ws_send!(ws_mpsc_tx, Message::Text(json.into()));
                                         }
                                     }
 
@@ -771,7 +835,7 @@ async fn handle_ws_json(
                                                     scrollback_lines,
                                                 };
                                                 if let Ok(json) = serde_json::to_string(&idle_event) {
-                                                    ws_send!(ws_tx, Message::Text(json.into()));
+                                                    ws_send!(ws_mpsc_tx, Message::Text(json.into()));
                                                 }
                                             }
                                         } else {
@@ -780,7 +844,7 @@ async fn handle_ws_json(
                                                 generation,
                                             };
                                             if let Ok(json) = serde_json::to_string(&running_event) {
-                                                ws_send!(ws_tx, Message::Text(json.into()));
+                                                ws_send!(ws_mpsc_tx, Message::Text(json.into()));
                                             }
                                         }
                                     }
@@ -793,7 +857,7 @@ async fn handle_ws_json(
                                         "Invalid parameters for this method.",
                                     );
                                     if let Ok(json) = serde_json::to_string(&resp) {
-                                        ws_send!(ws_tx, Message::Text(json.into()));
+                                        ws_send!(ws_mpsc_tx, Message::Text(json.into()));
                                     }
                                 }
                             }
@@ -831,7 +895,7 @@ async fn handle_ws_json(
                                             "A new await_idle request superseded this one.",
                                         );
                                         if let Ok(json) = serde_json::to_string(&resp) {
-                                            ws_send!(ws_tx, Message::Text(json.into()));
+                                            ws_send!(ws_mpsc_tx, Message::Text(json.into()));
                                         }
                                     }
                                     pending_idle = Some((req.id.clone(), req.method.clone(), format, fut));
@@ -844,7 +908,7 @@ async fn handle_ws_json(
                                         "Invalid parameters for this method.",
                                     );
                                     if let Ok(json) = serde_json::to_string(&resp) {
-                                        ws_send!(ws_tx, Message::Text(json.into()));
+                                        ws_send!(ws_mpsc_tx, Message::Text(json.into()));
                                     }
                                 }
                             }
@@ -853,7 +917,7 @@ async fn handle_ws_json(
                             let resp = super::ws_methods::dispatch(&req, &session).await;
 
                             if let Ok(json) = serde_json::to_string(&resp) {
-                                ws_send!(ws_tx, Message::Text(json.into()));
+                                ws_send!(ws_mpsc_tx, Message::Text(json.into()));
                             }
                         }
                     }
@@ -877,15 +941,10 @@ async fn handle_ws_json(
         }
     }
 
-    // Send close frame on any exit path (with timeout to avoid blocking on dead connections)
-    let close_frame = CloseFrame {
-        code: axum::extract::ws::close_code::NORMAL,
-        reason: "session ended".into(),
-    };
-    let _ = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        ws_tx.send(Message::Close(Some(close_frame))),
-    ).await;
+    // Drop the mpsc sender to signal the drain task to flush and close.
+    drop(ws_mpsc_tx);
+    // Wait for drain task to finish sending close frame (with timeout).
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), drain_task).await;
 
     // Clean up activity subscription task
     if let Some(handle) = activity_sub_handle {
