@@ -148,6 +148,12 @@ The server pushes events as they happen. It also sends
 periodic `sync` snapshots when the terminal goes idle
 (controlled by `idle_timeout_ms`).
 
+Under high output, the server coalesces events automatically:
+instead of individual updates, you get periodic `sync`
+snapshots at `interval_ms` intervals (default 100ms). This
+is transparent — handle `sync` events the same way you
+handle the initial sync after subscribing.
+
 For a different session, replace `default` with the session name:
 
     websocat ws://localhost:8080/sessions/build/ws/json

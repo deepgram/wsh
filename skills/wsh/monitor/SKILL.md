@@ -39,6 +39,12 @@ You also get periodic `sync` snapshots when the terminal
 goes quiet, giving you a natural checkpoint to analyze
 the current state.
 
+Under heavy output (e.g. build logs, test runners), the
+server may coalesce events — delivering periodic `sync`
+snapshots instead of individual line updates. Your code
+should handle `sync` events to stay in sync regardless
+of output volume.
+
 For most monitoring tasks, **start with polling**. Move to
 event subscription when you need immediate reaction time.
 
