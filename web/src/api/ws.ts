@@ -513,7 +513,7 @@ export class WshClient {
     set.add(callback);
 
     // Build subscribe params
-    const params: Record<string, unknown> = { events, format: "styled" };
+    const params: Record<string, unknown> = { events, format: "styled", interval_ms: 16 };
     if (idleTimeoutMs !== undefined && idleTimeoutMs > 0) {
       params.idle_timeout_ms = idleTimeoutMs;
       // Auto-include activity in events if not already present
