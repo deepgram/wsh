@@ -21,6 +21,7 @@ const KEYS: KeyDef[] = [
   { label: "Esc", seq: "\x1b" },
   { label: "Ctrl", seq: null, modifier: "ctrl" },
   { label: "Alt", seq: null, modifier: "alt" },
+  { label: "Enter", seq: "\r" },
   { label: "\u2190", seq: "\x1b[D", repeatable: true },
   { label: "\u2192", seq: "\x1b[C", repeatable: true },
   { label: "\u2191", seq: "\x1b[A", repeatable: true },
