@@ -106,6 +106,46 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(
   };
 
   const handleKeyDown = (e: KeyboardEvent) => {
+    // If a sticky modifier is active, synthesize the modified sequence
+    // instead of relying on the DOM event's native modifier flags.
+    if (ctrlActive.value || altActive.value) {
+      const key = e.key;
+      let modSeq: string | null = null;
+
+      if (ctrlActive.value) {
+        const lower = key.toLowerCase();
+        if (lower.length === 1 && lower >= "a" && lower <= "z") {
+          modSeq = String.fromCharCode(lower.charCodeAt(0) - 96);
+        } else if (key === "[") {
+          modSeq = "\x1b";
+        } else if (key === "\\") {
+          modSeq = "\x1c";
+        } else if (key === "]") {
+          modSeq = "\x1d";
+        } else if (key === "^" || key === "6") {
+          modSeq = "\x1e";
+        } else if (key === "_" || key === "-") {
+          modSeq = "\x1f";
+        }
+      } else if (altActive.value) {
+        if (key.length === 1) {
+          modSeq = "\x1b" + key;
+        }
+      }
+
+      if (modSeq !== null) {
+        e.preventDefault();
+        send(modSeq);
+        clearModifiers();
+        return;
+      }
+
+      // Modifier was active but key didn't produce a modified sequence
+      // (e.g., Ctrl + Enter). Clear the modifier and fall through to
+      // normal handling.
+      clearModifiers();
+    }
+
     const seq = keyToSequence(e);
     if (seq !== null) {
       e.preventDefault();

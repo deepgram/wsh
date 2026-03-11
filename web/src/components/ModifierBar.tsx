@@ -112,8 +112,13 @@ export function ModifierBar({ session, client, onTabSent }: ModifierBarProps) {
     [send, onTabSent],
   );
 
+  const preventFocusSteal = useCallback((e: Event) => {
+    e.preventDefault();
+  }, []);
+
   const startRepeat = useCallback(
-    (key: KeyDef) => {
+    (key: KeyDef, e: TouchEvent) => {
+      e.preventDefault(); // prevent focus steal from input
       if (!key.repeatable || !key.seq) return;
       const seq = key.seq;
       // Send the initial key immediately and mark that touch handled it,
@@ -155,8 +160,9 @@ export function ModifierBar({ session, client, onTabSent }: ModifierBarProps) {
               key={key.label}
               class={`modifier-key${isActive ? " active" : ""}`}
               disabled={!connected}
+              onMouseDown={preventFocusSteal}
+              onTouchStart={key.repeatable ? (e: TouchEvent) => startRepeat(key, e) : preventFocusSteal}
               onClick={() => handleTap(key)}
-              onTouchStart={key.repeatable ? () => startRepeat(key) : undefined}
               onTouchEnd={key.repeatable ? stopRepeat : undefined}
               onTouchCancel={key.repeatable ? stopRepeat : undefined}
             >
