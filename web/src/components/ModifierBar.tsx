@@ -91,18 +91,18 @@ export function ModifierBar({ session, client, onTabSent }: ModifierBarProps) {
 
   const handleTap = useCallback(
     (key: KeyDef) => {
+      // On touch devices, touchstart handlers already performed the
+      // action. Suppress the synthetic click that follows.
+      if (didRepeatRef.current) {
+        didRepeatRef.current = false;
+        return;
+      }
       if (key.modifier === "ctrl") {
         toggleCtrl();
         return;
       }
       if (key.modifier === "alt") {
         toggleAlt();
-        return;
-      }
-      // On touch devices, startRepeat fires on touchstart and already
-      // sends the initial key. Suppress the synthetic click that follows.
-      if (key.repeatable && didRepeatRef.current) {
-        didRepeatRef.current = false;
         return;
       }
       if (key.seq) {
@@ -116,6 +116,22 @@ export function ModifierBar({ session, client, onTabSent }: ModifierBarProps) {
   const preventFocusSteal = useCallback((e: Event) => {
     e.preventDefault();
   }, []);
+
+  const handleTouchStart = useCallback(
+    (key: KeyDef, e: TouchEvent) => {
+      e.preventDefault(); // prevent focus steal from input
+      didRepeatRef.current = true;
+      if (key.modifier === "ctrl") {
+        toggleCtrl();
+      } else if (key.modifier === "alt") {
+        toggleAlt();
+      } else if (key.seq) {
+        send(key.seq);
+        if (key.seq === "\t" && onTabSent) onTabSent();
+      }
+    },
+    [send, onTabSent],
+  );
 
   const startRepeat = useCallback(
     (key: KeyDef, e: TouchEvent) => {
@@ -162,7 +178,7 @@ export function ModifierBar({ session, client, onTabSent }: ModifierBarProps) {
               class={`modifier-key${isActive ? " active" : ""}`}
               disabled={!connected}
               onMouseDown={preventFocusSteal}
-              onTouchStart={key.repeatable ? (e: TouchEvent) => startRepeat(key, e) : preventFocusSteal}
+              onTouchStart={key.repeatable ? (e: TouchEvent) => startRepeat(key, e) : (e: TouchEvent) => handleTouchStart(key, e)}
               onClick={() => handleTap(key)}
               onTouchEnd={key.repeatable ? stopRepeat : undefined}
               onTouchCancel={key.repeatable ? stopRepeat : undefined}
