@@ -29,6 +29,41 @@ synchronized — input you send appears on their screen, output they
 generate appears in your tool responses. All tools take a `session`
 parameter to specify which session to operate on (e.g., `"default"`).
 
+## Getting Started
+
+Before using the tools, make sure a wsh server is reachable.
+
+**Step 1: Check for an existing server.** A wsh server may already be
+running — try listing sessions:
+
+    wsh_list_sessions()
+
+If this returns a result (even an empty list), you're connected. Skip
+to step 3.
+
+**Step 2: Start a server (only if needed).** If the tool call fails
+because no server is reachable, the `wsh mcp` bridge couldn't connect.
+You may need to start a server manually via Bash:
+
+    wsh server -L agent-$RANDOM &
+
+Wait a moment, then retry `wsh_list_sessions()`.
+
+**Step 3: Create a session.** Sessions are where commands run:
+
+    wsh_create_session(name="work")
+
+Returns the session name and terminal dimensions on success.
+
+**Step 4: Use the send/wait/read loop.** Now interact with your session
+using the tools described below. The primary tool for the loop:
+
+    wsh_run_command(session="work", input="ls -la\n", format="plain")
+
+This sends input, waits for idle, and returns the screen in one call.
+For more control, use `wsh_send_input`, `wsh_await_idle`, and
+`wsh_get_screen` separately.
+
 ## Authentication
 
 When wsh binds to localhost (default), no authentication is needed.

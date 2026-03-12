@@ -33,6 +33,45 @@ API calls. All endpoints are scoped to a session via
 > 3 resources, 9 prompts) via Streamable HTTP at `/mcp` or the `wsh mcp` stdio
 > bridge. See the `wsh:core-mcp` prompt for MCP-specific guidance.
 
+## Getting Started
+
+Before using the API, make sure a wsh server is reachable.
+
+**Step 1: Check for an existing server.** A wsh server may already be
+running — try the health endpoint first:
+
+    curl -sf http://localhost:8080/health
+
+If this returns `200 OK`, you're ready. Skip to step 3.
+
+**Step 2: Start a server (only if needed).** If no server is running,
+start one in the background with a unique name to avoid collisions
+with other sessions:
+
+    wsh server -L agent-$RANDOM &
+
+Wait a moment, then retry the health check to confirm it's up. The
+server defaults to `127.0.0.1:8080`.
+
+**Step 3: Create a session.** Sessions are where commands run. Create
+one via the API:
+
+    curl -s -X POST http://localhost:8080/sessions \
+      -H "Content-Type: application/json" \
+      -d '{"name": "work"}'
+
+Returns `{"name": "work", ...}` on success.
+
+**Step 4: Use the send/wait/read loop.** Now interact with your session
+using the API primitives described below. The fundamental loop:
+
+    # Send a command
+    curl -s -X POST http://localhost:8080/sessions/work/input -d $'ls -la\n'
+    # Wait for idle
+    curl -s http://localhost:8080/sessions/work/idle?timeout_ms=2000
+    # Read the screen
+    curl -s http://localhost:8080/sessions/work/screen?format=plain
+
 ## Authentication
 
 When wsh binds to localhost (default), no authentication is needed —
