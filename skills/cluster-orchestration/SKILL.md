@@ -1,5 +1,5 @@
 ---
-name: wsh:cluster-orchestration
+name: cluster-orchestration
 description: >
   Use when you need to manage sessions across multiple wsh servers
   in a federated cluster. Examples: "distribute builds across several

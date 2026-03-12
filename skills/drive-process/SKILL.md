@@ -1,5 +1,5 @@
 ---
-name: wsh:drive-process
+name: drive-process
 description: >
   Use when you need to drive a CLI program through command-and-response
   interaction via wsh. Examples: "run a build command and check the output",

@@ -1,6 +1,5 @@
 .worktrees/
 .claude/
-.claude-plugin/
 /target/
 /web/node_modules/
 /web-dist/

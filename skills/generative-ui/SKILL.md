@@ -1,5 +1,5 @@
 ---
-name: wsh:generative-ui
+name: generative-ui
 description: >
   Use when you need to build dynamic, interactive terminal experiences on the
   fly. Examples: "create a live dashboard in the terminal", "build an

@@ -1,5 +1,5 @@
 ---
-name: wsh:core
+name: core
 description: >
   Background knowledge about the wsh terminal API. Loaded automatically
   when wsh is available. Teaches how to interact with terminal sessions

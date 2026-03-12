@@ -1,5 +1,5 @@
 ---
-name: wsh:agent-orchestration
+name: agent-orchestration
 description: >
   Use when you need to launch and drive other AI agents (Claude Code, Aider,
   Codex, etc.) through their terminal interfaces via wsh. Examples: "run

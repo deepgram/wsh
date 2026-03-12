@@ -1,5 +1,5 @@
 ---
-name: wsh:input-capture
+name: input-capture
 description: >
   Use when you need to intercept keyboard input from the human temporarily.
   Examples: "ask the user for approval before running a command", "build a

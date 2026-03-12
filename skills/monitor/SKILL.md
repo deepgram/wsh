@@ -1,5 +1,5 @@
 ---
-name: wsh:monitor
+name: monitor
 description: >
   Use when you need to watch, observe, or react to human terminal activity.
   Examples: "monitor the terminal for errors", "watch what the user is doing

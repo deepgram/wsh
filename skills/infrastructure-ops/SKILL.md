@@ -1,5 +1,5 @@
 ---
-name: wsh:infrastructure-ops
+name: infrastructure-ops
 description: >
   Use when you need to manage infrastructure across multiple servers
   interactively via wsh — deploying applications, configuring services,

@@ -1,5 +1,5 @@
 ---
-name: wsh:tui
+name: tui
 description: >
   Use when you need to operate a full-screen terminal application (TUI)
   via wsh. Examples: "navigate vim to edit a file", "use lazygit to stage

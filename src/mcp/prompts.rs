@@ -15,57 +15,57 @@ const SKILLS: &[SkillDef] = &[
     SkillDef {
         name: "wsh:core",
         description: "API primitives and the send/wait/read/decide loop (MCP-adapted)",
-        content: include_str!("../../skills/wsh/core-mcp/SKILL.md"),
+        content: include_str!("../../skills/core-mcp/SKILL.md"),
     },
     SkillDef {
         name: "wsh:drive-process",
         description: "Running CLI commands, handling prompts, command-response workflows",
-        content: include_str!("../../skills/wsh/drive-process/SKILL.md"),
+        content: include_str!("../../skills/drive-process/SKILL.md"),
     },
     SkillDef {
         name: "wsh:tui",
         description: "Operating full-screen terminal applications (vim, htop, lazygit)",
-        content: include_str!("../../skills/wsh/tui/SKILL.md"),
+        content: include_str!("../../skills/tui/SKILL.md"),
     },
     SkillDef {
         name: "wsh:multi-session",
         description: "Parallel session orchestration",
-        content: include_str!("../../skills/wsh/multi-session/SKILL.md"),
+        content: include_str!("../../skills/multi-session/SKILL.md"),
     },
     SkillDef {
         name: "wsh:agent-orchestration",
         description: "Driving other AI agents through terminal interfaces",
-        content: include_str!("../../skills/wsh/agent-orchestration/SKILL.md"),
+        content: include_str!("../../skills/agent-orchestration/SKILL.md"),
     },
     SkillDef {
         name: "wsh:monitor",
         description: "Watching and reacting to terminal activity",
-        content: include_str!("../../skills/wsh/monitor/SKILL.md"),
+        content: include_str!("../../skills/monitor/SKILL.md"),
     },
     SkillDef {
         name: "wsh:visual-feedback",
         description: "Using overlays and panels to communicate with users",
-        content: include_str!("../../skills/wsh/visual-feedback/SKILL.md"),
+        content: include_str!("../../skills/visual-feedback/SKILL.md"),
     },
     SkillDef {
         name: "wsh:input-capture",
         description: "Capturing keyboard input for dialogs and approvals",
-        content: include_str!("../../skills/wsh/input-capture/SKILL.md"),
+        content: include_str!("../../skills/input-capture/SKILL.md"),
     },
     SkillDef {
         name: "wsh:generative-ui",
         description: "Building dynamic interactive terminal experiences",
-        content: include_str!("../../skills/wsh/generative-ui/SKILL.md"),
+        content: include_str!("../../skills/generative-ui/SKILL.md"),
     },
     SkillDef {
         name: "wsh:cluster-orchestration",
         description: "Managing sessions across multiple federated wsh servers",
-        content: include_str!("../../skills/wsh/cluster-orchestration/SKILL.md"),
+        content: include_str!("../../skills/cluster-orchestration/SKILL.md"),
     },
     SkillDef {
         name: "wsh:infrastructure-ops",
         description: "Fleet management: rolling deploys, package upgrades, config management, and interactive operations across servers",
-        content: include_str!("../../skills/wsh/infrastructure-ops/SKILL.md"),
+        content: include_str!("../../skills/infrastructure-ops/SKILL.md"),
     },
 ];
 
@@ -153,8 +153,8 @@ mod tests {
         match &msg.content {
             PromptMessageContent::Text { text } => {
                 assert!(
-                    text.contains("wsh:core-mcp"),
-                    "core prompt should contain 'wsh:core-mcp' (from frontmatter)"
+                    text.contains("core-mcp"),
+                    "core prompt should contain 'core-mcp' (from frontmatter)"
                 );
                 assert!(
                     text.contains("wsh_run_command"),

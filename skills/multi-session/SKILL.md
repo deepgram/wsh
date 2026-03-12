@@ -1,5 +1,5 @@
 ---
-name: wsh:multi-session
+name: multi-session
 description: >
   Use when you need to orchestrate multiple parallel terminal sessions
   via wsh server mode. Examples: "run builds in parallel across several

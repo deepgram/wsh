@@ -1,5 +1,5 @@
 ---
-name: wsh:core-mcp
+name: core-mcp
 description: >
   Background knowledge about the wsh terminal API for MCP clients. Loaded
   automatically when wsh is available as an MCP server. Teaches how to

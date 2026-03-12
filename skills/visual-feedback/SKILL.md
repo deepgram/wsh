@@ -1,5 +1,5 @@
 ---
-name: wsh:visual-feedback
+name: visual-feedback
 description: >
   Use when you need to communicate with the human visually through the terminal.
   Examples: "show a status panel", "display an overlay notification",
