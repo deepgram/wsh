@@ -31,32 +31,23 @@ parameter to specify which session to operate on (e.g., `"default"`).
 
 ## Getting Started
 
-Before using the tools, make sure a wsh server is reachable.
+**Step 1: Verify you have MCP tools.** Check your toolkit for tools
+starting with `wsh_` (e.g., `wsh_send_input`, `wsh_get_screen`,
+`wsh_create_session`). If you have them, proceed to step 2.
 
-**Step 1: Check for an existing server.** A wsh server may already be
-running — try listing sessions:
+**If you do NOT have `wsh_*` tools**, the MCP bridge is not running.
+Do NOT try to start a server manually — that won't give you MCP tools.
+Instead, fall back to the HTTP API: search your workspace for
+`skills/core/` and read `SKILL.md`. It has every endpoint with working
+curl examples and a bootstrap sequence.
 
-    wsh_list_sessions()
-
-If this returns a result (even an empty list), you're connected. Skip
-to step 3.
-
-**Step 2: Start a server (only if needed).** If the tool call fails
-because no server is reachable, the `wsh mcp` bridge couldn't connect.
-You may need to start a server manually via Bash:
-
-    wsh server -L agent-$RANDOM &
-
-Wait a moment, then retry `wsh_list_sessions()`.
-
-**Step 3: Create a session.** Sessions are where commands run:
+**Step 2: Create a session.** Sessions are where commands run:
 
     wsh_create_session(name="work")
 
 Returns the session name and terminal dimensions on success.
 
-**Step 4: Use the send/wait/read loop.** Now interact with your session
-using the tools described below. The primary tool for the loop:
+**Step 3: Use the send/wait/read loop.** The primary tool:
 
     wsh_run_command(session="work", input="ls -la\n", format="plain")
 

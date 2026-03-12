@@ -22,7 +22,7 @@ description: >
 >    with working curl examples and a bootstrap sequence.
 > 3. **Quick bootstrap**: `curl -sf http://localhost:8080/health`
 >    — if that fails and you need a server:
->    `wsh server -L agent-$RANDOM &` then retry the health check.
+>    `wsh server &` then retry the health check.
 
 # wsh:cluster-orchestration — Distributed Terminal Sessions
 

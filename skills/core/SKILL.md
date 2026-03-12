@@ -46,13 +46,12 @@ running — try the health endpoint first:
 If this returns `200 OK`, you're ready. Skip to step 3.
 
 **Step 2: Start a server (only if needed).** If no server is running,
-start one in the background with a unique name to avoid collisions
-with other sessions:
+start one in the background:
 
-    wsh server -L agent-$RANDOM &
+    wsh server &
 
 Wait a moment, then retry the health check to confirm it's up. The
-server defaults to `127.0.0.1:8080`.
+server binds to `127.0.0.1:8080` by default.
 
 **Step 3: Create a session.** Sessions are where commands run. Create
 one via the API:
