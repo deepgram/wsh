@@ -39,24 +39,28 @@ API calls. All endpoints are scoped to a session via
 Before using the API, make sure a wsh server is reachable.
 
 **Step 1: Check for an existing server.** A wsh server may already be
-running — try the health endpoint first:
+running — try the default endpoint:
 
     curl -sf http://localhost:8080/health
 
-If this returns `200 OK`, you're ready. Skip to step 3.
+If this returns `200 OK`, the server is at `localhost:8080`. Skip to
+step 3.
 
-**Step 2: Start a server (only if needed).** If no server is running,
-start one in the background:
+**Step 2: Start a server (only if needed).** Bind to port `0` so the
+OS picks an available port, and use `-L` with a unique name to avoid
+colliding with any existing wsh instance:
 
-    wsh server &
+    wsh server -L agent-$$ --bind 127.0.0.1:0 2>/tmp/wsh-$$.log &
+    sleep 1
+    cat /tmp/wsh-$$.log
 
-Wait a moment, then retry the health check to confirm it's up. The
-server binds to `127.0.0.1:8080` by default.
+Look for the log line `server listening addr=127.0.0.1:<port>`. Use
+that address for all subsequent API calls (not `localhost:8080`).
 
 **Step 3: Create a session.** Sessions are where commands run. Create
-one via the API:
+one via the API (substitute your actual port for `PORT`):
 
-    curl -s -X POST http://localhost:8080/sessions \
+    curl -s -X POST http://127.0.0.1:PORT/sessions \
       -H "Content-Type: application/json" \
       -d '{"name": "work"}'
 
@@ -66,11 +70,11 @@ Returns `{"name": "work", ...}` on success.
 using the API primitives described below. The fundamental loop:
 
     # Send a command
-    curl -s -X POST http://localhost:8080/sessions/work/input -d $'ls -la\n'
+    curl -s -X POST http://127.0.0.1:PORT/sessions/work/input -d $'ls -la\n'
     # Wait for idle
-    curl -s http://localhost:8080/sessions/work/idle?timeout_ms=2000
+    curl -s http://127.0.0.1:PORT/sessions/work/idle?timeout_ms=2000
     # Read the screen
-    curl -s http://localhost:8080/sessions/work/screen?format=plain
+    curl -s http://127.0.0.1:PORT/sessions/work/screen?format=plain
 
 ## Authentication
 

@@ -26,7 +26,8 @@ description: >
 >    with working curl examples and a bootstrap sequence.
 > 3. **Quick bootstrap**: `curl -sf http://localhost:8080/health`
 >    — if that fails and you need a server:
->    `wsh server &` then retry the health check.
+>    `wsh server -L agent-$$ --bind 127.0.0.1:0 &` and read the
+>    bound port from the log output (`server listening addr=...`).
 
 # wsh:infrastructure-ops -- Fleet Management
 
