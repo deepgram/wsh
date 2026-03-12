@@ -6,6 +6,23 @@ description: >
   and commit changes", "interact with htop or k9s".
 ---
 
+> **IMPORTANT: EXECUTION CONTEXT**
+> This skill describes *what to do* — domain patterns and decision-making.
+> It does NOT describe *how* to call the API.
+>
+> 1. **If you have `wsh_*` tools** (check your toolkit for `wsh_send_input`,
+>    `wsh_get_screen`, etc.): use them directly. Operation names in this
+>    skill generally map to tool names (e.g., "send input" → `wsh_send_input`).
+>    When in doubt, list your available `wsh_*` tools.
+> 2. **If you do NOT have `wsh_*` tools**: you are in HTTP/curl fallback mode.
+>    **DO NOT GUESS endpoints or CLI subcommands.**
+>    Load the full API reference first: search your workspace for
+>    `skills/core/` and read `SKILL.md`. It contains every endpoint
+>    with working curl examples and a bootstrap sequence.
+> 3. **Quick bootstrap**: `curl -sf http://localhost:8080/health`
+>    — if that fails and you need a server:
+>    `wsh server -L agent-$RANDOM &` then retry the health check.
+
 # wsh:tui — Operating Full-Screen Terminal Applications
 
 Some programs take over the entire terminal — vim, htop, lazygit,
