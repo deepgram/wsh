@@ -1,10 +1,11 @@
 ---
 name: core
 description: >
-  Background knowledge about the wsh terminal API. Loaded automatically
-  when wsh is available. Teaches how to interact with terminal sessions
-  programmatically — sending input, reading screen output, waiting for
-  idle detection, creating overlays and panels, managing sessions.
+  REQUIRED before any wsh terminal operation when you do NOT have wsh_*
+  MCP tools. Contains the complete HTTP API reference with working curl
+  examples, bootstrap sequence, and authentication guide. wsh has no CLI
+  subcommands for programmatic use — do NOT run 'wsh <verb>' commands or
+  guess endpoints. Load this skill first.
 user-invocable: false
 ---
 

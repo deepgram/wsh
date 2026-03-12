@@ -1,11 +1,11 @@
 ---
 name: core-mcp
 description: >
-  Background knowledge about the wsh terminal API for MCP clients. Loaded
-  automatically when wsh is available as an MCP server. Teaches how to
-  interact with terminal sessions programmatically using MCP tools —
-  sending input, reading screen output, waiting for idle, creating
-  overlays and panels, managing sessions.
+  REQUIRED before any wsh terminal operation. Contains the complete MCP
+  tool reference and bootstrap sequence for wsh_create_session,
+  wsh_send_input, wsh_get_screen, wsh_run_command, and all wsh_* tools.
+  Do NOT guess wsh CLI commands or HTTP endpoints — use MCP tools or load
+  this skill first.
 user-invocable: false
 ---
 
