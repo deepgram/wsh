@@ -706,10 +706,10 @@ async fn test_mcp_get_prompt() {
         .as_str()
         .expect("Expected text content in message");
 
-    // Verify this is the MCP-adapted core skill
+    // Verify this is the MCP-adapted core skill (frontmatter has name: core-mcp)
     assert!(
-        content_text.contains("wsh:core-mcp"),
-        "Core prompt content should contain 'wsh:core-mcp'"
+        content_text.contains("core-mcp"),
+        "Core prompt content should contain 'core-mcp' (from frontmatter)"
     );
     assert!(
         content_text.contains("wsh_run_command"),
