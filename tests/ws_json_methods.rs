@@ -63,6 +63,7 @@ fn create_test_state() -> (api::AppState, mpsc::Receiver<Bytes>, mpsc::Sender<By
             local_token: None,
             default_backend_token: None,
             server_id: "test-server-id".to_string(),
+            shutdown_notify: tokio_util::sync::CancellationToken::new(),
     };
     (state, input_rx, parser_tx)
 }
@@ -228,6 +229,7 @@ async fn test_ws_subscribe_then_events() {
             local_token: None,
             default_backend_token: None,
             server_id: "test-server-id".to_string(),
+            shutdown_notify: tokio_util::sync::CancellationToken::new(),
     };
     let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
@@ -374,6 +376,7 @@ async fn test_ws_methods_interleaved_with_events() {
             local_token: None,
             default_backend_token: None,
             server_id: "test-server-id".to_string(),
+            shutdown_notify: tokio_util::sync::CancellationToken::new(),
     };
     let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;

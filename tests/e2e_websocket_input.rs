@@ -110,6 +110,7 @@ async fn test_websocket_input_reaches_pty_and_output_returns() {
             local_token: None,
             default_backend_token: None,
             server_id: "test-server-id".to_string(),
+            shutdown_notify: tokio_util::sync::CancellationToken::new(),
     };
     let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
@@ -266,6 +267,7 @@ async fn test_websocket_text_input_reaches_pty() {
             local_token: None,
             default_backend_token: None,
             server_id: "test-server-id".to_string(),
+            shutdown_notify: tokio_util::sync::CancellationToken::new(),
     };
     let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;

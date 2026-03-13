@@ -116,6 +116,7 @@ async fn test_http_post_input_reaches_pty_and_produces_output() {
             local_token: None,
             default_backend_token: None,
             server_id: "test-server-id".to_string(),
+            shutdown_notify: tokio_util::sync::CancellationToken::new(),
     };
     let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
@@ -286,6 +287,7 @@ async fn test_scrollback_endpoint_with_real_pty() {
             local_token: None,
             default_backend_token: None,
             server_id: "test-server-id".to_string(),
+            shutdown_notify: tokio_util::sync::CancellationToken::new(),
     };
     let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;

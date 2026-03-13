@@ -67,6 +67,7 @@ fn create_burst_test_state() -> (wsh::api::AppState, mpsc::Receiver<Bytes>, toki
         local_token: None,
         default_backend_token: None,
         server_id: "test-server-id".to_string(),
+        shutdown_notify: tokio_util::sync::CancellationToken::new(),
     };
     (state, ts.input_rx, output_tx, large_parser_tx)
 }

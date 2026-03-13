@@ -382,6 +382,7 @@ async fn federation_e2e_cross_server_proxy() {
         local_token: None,
         default_backend_token: None,
         server_id: "test-server-id".to_string(),
+        shutdown_notify: tokio_util::sync::CancellationToken::new(),
     };
 
     // Start the in-process hub.

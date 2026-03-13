@@ -15,6 +15,8 @@ pub enum ApiError {
     AuthRequired,
     /// 403 - Credentials provided but invalid.
     AuthInvalid,
+    /// 403 - Access denied (e.g., endpoint only available over UDS).
+    Forbidden(String),
     /// 404 - Generic not-found.
     NotFound,
     /// 404 - A specific overlay ID was not found.
@@ -79,6 +81,7 @@ impl ApiError {
         match self {
             ApiError::AuthRequired => StatusCode::UNAUTHORIZED,
             ApiError::AuthInvalid => StatusCode::FORBIDDEN,
+            ApiError::Forbidden(_) => StatusCode::FORBIDDEN,
             ApiError::NotFound => StatusCode::NOT_FOUND,
             ApiError::OverlayNotFound(_) => StatusCode::NOT_FOUND,
             ApiError::PanelNotFound(_) => StatusCode::NOT_FOUND,
@@ -115,6 +118,7 @@ impl ApiError {
         match self {
             ApiError::AuthRequired => "auth_required",
             ApiError::AuthInvalid => "auth_invalid",
+            ApiError::Forbidden(_) => "forbidden",
             ApiError::NotFound => "not_found",
             ApiError::OverlayNotFound(_) => "overlay_not_found",
             ApiError::PanelNotFound(_) => "panel_not_found",
@@ -153,6 +157,7 @@ impl ApiError {
                 "Authentication required. Provide a token via the Authorization header.".to_string()
             }
             ApiError::AuthInvalid => "Invalid authentication token.".to_string(),
+            ApiError::Forbidden(detail) => format!("Forbidden: {}.", detail),
             ApiError::NotFound => "Not found.".to_string(),
             ApiError::OverlayNotFound(id) => format!("No overlay exists with id '{}'.", id),
             ApiError::PanelNotFound(id) => format!("No panel exists with id '{}'.", id),

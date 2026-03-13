@@ -35,6 +35,7 @@ fn create_empty_test_app() -> axum::Router {
             local_token: None,
             default_backend_token: None,
             server_id: "test-server-id".to_string(),
+            shutdown_notify: tokio_util::sync::CancellationToken::new(),
     };
     router(state, RouterConfig::default())
 }

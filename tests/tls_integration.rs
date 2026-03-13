@@ -31,6 +31,7 @@ fn create_test_app_with_config(config: RouterConfig) -> axum::Router {
         local_token: None,
         default_backend_token: None,
         server_id: "test-server-id".to_string(),
+        shutdown_notify: tokio_util::sync::CancellationToken::new(),
     };
     router(state, config)
 }
@@ -262,6 +263,7 @@ async fn tls_federation_servers_endpoint() {
         local_token: None,
         default_backend_token: None,
         server_id: "test-server-id".to_string(),
+        shutdown_notify: tokio_util::sync::CancellationToken::new(),
     };
     let app = router(state, RouterConfig::default());
 
@@ -330,6 +332,7 @@ async fn tls_base_prefix_federation_combined() {
         local_token: None,
         default_backend_token: None,
         server_id: "test-server-id".to_string(),
+        shutdown_notify: tokio_util::sync::CancellationToken::new(),
     };
     let app = router(
         state,

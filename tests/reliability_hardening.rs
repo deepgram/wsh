@@ -125,6 +125,7 @@ async fn test_max_sessions_http_503() {
             local_token: None,
             default_backend_token: None,
             server_id: "test-server-id".to_string(),
+            shutdown_notify: tokio_util::sync::CancellationToken::new(),
     };
     let app = router(state, RouterConfig::default());
 

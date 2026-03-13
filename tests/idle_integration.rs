@@ -73,6 +73,7 @@ fn create_test_state() -> (api::AppState, mpsc::Receiver<Bytes>, ActivityTracker
             local_token: None,
             default_backend_token: None,
             server_id: "test-server-id".to_string(),
+            shutdown_notify: tokio_util::sync::CancellationToken::new(),
     };
     (state, input_rx, activity, parser_tx)
 }
@@ -840,6 +841,7 @@ fn create_multi_session_state() -> (api::AppState, ActivityTracker, ActivityTrac
             local_token: None,
             default_backend_token: None,
             server_id: "test-server-id".to_string(),
+            shutdown_notify: tokio_util::sync::CancellationToken::new(),
     };
     (state, activity_a, activity_b, parser_tx_a, parser_tx_b)
 }
@@ -999,6 +1001,7 @@ async fn test_http_idle_any_no_sessions_returns_404() {
             local_token: None,
             default_backend_token: None,
             server_id: "test-server-id".to_string(),
+            shutdown_notify: tokio_util::sync::CancellationToken::new(),
     };
     let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
