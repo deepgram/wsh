@@ -16,3 +16,4 @@ pub mod session;
 pub mod shutdown;
 pub mod terminal;
 pub mod tls;
+pub mod uds_client;

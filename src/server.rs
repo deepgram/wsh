@@ -158,11 +158,19 @@ pub fn instance_dir() -> PathBuf {
     PathBuf::from(runtime_dir).join("wsh")
 }
 
-/// Compute the Unix socket path for a named server instance.
+/// Compute the Unix socket path for a named server instance (legacy binary protocol).
 ///
 /// Returns `<instance_dir>/<name>.sock`.
 pub fn socket_path_for_instance(name: &str) -> PathBuf {
     instance_dir().join(format!("{}.sock", name))
+}
+
+/// Compute the HTTP Unix socket path for a named server instance.
+///
+/// Returns `<instance_dir>/<name>.http.sock`. This socket serves the full
+/// HTTP/WS/MCP API over UDS and is the primary transport for local access.
+pub fn http_socket_path_for_instance(name: &str) -> PathBuf {
+    instance_dir().join(format!("{}.http.sock", name))
 }
 
 /// Compute the server lock path for a named server instance.

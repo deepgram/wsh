@@ -8,10 +8,10 @@
 //! Protocol: rmcp's stdio transport uses newline-delimited JSON.
 //! Each message is a single JSON object on one line, terminated by `\n`.
 //!
-//! Test architecture: each test starts a `wsh server --ephemeral` daemon on a
-//! random port, then starts `wsh mcp --bind <addr> --socket <path>` pointing at
-//! that server.  Both processes share a unique Unix socket path so the MCP bridge
-//! connects to the pre-started server rather than spawning its own.
+//! Test architecture: each test starts a `wsh server --ephemeral --bind <addr>`
+//! daemon, then starts `wsh mcp --socket <path>` pointing at that server. Both
+//! processes share a unique Unix socket path so the MCP bridge connects to the
+//! pre-started server via UDS rather than spawning its own.
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::SocketAddr;
@@ -39,6 +39,7 @@ impl Drop for McpTestHarness {
         let _ = self.server.kill();
         let _ = self.server.wait();
         let _ = std::fs::remove_file(&self.socket_path);
+        let _ = std::fs::remove_file(self.socket_path.with_extension("http.sock"));
     }
 }
 
@@ -79,7 +80,7 @@ fn setup_mcp_test(test_name: &str) -> McpTestHarness {
         .spawn()
         .expect("failed to spawn wsh server");
 
-    // 4. Wait for the server socket to appear and become connectable.
+    // 4. Wait for the server's binary socket to appear and become connectable.
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {
         if std::time::Instant::now() > deadline {
@@ -94,26 +95,27 @@ fn setup_mcp_test(test_name: &str) -> McpTestHarness {
         std::thread::sleep(Duration::from_millis(50));
     }
 
-    // 5. Also confirm HTTP is up (the MCP bridge needs /mcp).
+    // 5. Wait for the HTTP UDS socket (the MCP bridge needs /mcp via UDS).
+    let http_socket_path = socket_path.with_extension("http.sock");
     let http_deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {
         if std::time::Instant::now() > http_deadline {
             panic!(
-                "timed out waiting for wsh server HTTP at {}",
-                addr
+                "timed out waiting for wsh server HTTP UDS socket at {}",
+                http_socket_path.display()
             );
         }
-        if std::net::TcpStream::connect(addr).is_ok() {
+        if http_socket_path.exists()
+            && std::os::unix::net::UnixStream::connect(&http_socket_path).is_ok()
+        {
             break;
         }
         std::thread::sleep(Duration::from_millis(50));
     }
 
-    // 6. Start the MCP bridge pointing at the existing server.
+    // 6. Start the MCP bridge pointing at the existing server via UDS.
     let mcp = Command::new(env!("CARGO_BIN_EXE_wsh"))
         .arg("mcp")
-        .arg("--bind")
-        .arg(addr.to_string())
         .arg("--socket")
         .arg(&socket_path)
         .stdin(Stdio::piped())

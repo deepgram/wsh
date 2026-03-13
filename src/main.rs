@@ -38,10 +38,6 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
 
-    /// Address to bind the HTTP/WebSocket API server
-    #[arg(long, default_value = "127.0.0.1:8080")]
-    bind: SocketAddr,
-
     /// Command string to execute (like sh -c)
     #[arg(short = 'c')]
     cmd: Option<String>,
@@ -49,10 +45,6 @@ struct Cli {
     /// Force interactive mode
     #[arg(short = 'i')]
     interactive: bool,
-
-    /// Authentication token for non-localhost bindings
-    #[arg(long, env = "WSH_TOKEN")]
-    token: Option<String>,
 
     /// Shell to spawn (overrides $SHELL)
     #[arg(long)]
@@ -84,11 +76,11 @@ struct Cli {
 enum Commands {
     /// Start the wsh server daemon (headless, no local terminal)
     Server {
-        /// Address to bind the HTTP/WebSocket API server
-        #[arg(long, default_value = "127.0.0.1:8080")]
-        bind: SocketAddr,
+        /// Address to bind TCP HTTP/WebSocket listener (optional; UDS always available)
+        #[arg(long)]
+        bind: Option<SocketAddr>,
 
-        /// Authentication token for non-localhost bindings
+        /// Authentication token for non-localhost TCP bindings
         #[arg(long, env = "WSH_TOKEN")]
         token: Option<String>,
 
@@ -186,14 +178,6 @@ enum Commands {
     Persist {
         /// "on" or "off". Omit to query without changing.
         value: Option<String>,
-
-        /// Address of the HTTP/WebSocket API server
-        #[arg(long, default_value = "127.0.0.1:8080")]
-        bind: SocketAddr,
-
-        /// Authentication token
-        #[arg(long, env = "WSH_TOKEN")]
-        token: Option<String>,
     },
 
     /// Print the server's auth token (retrieved via Unix socket)
@@ -228,15 +212,7 @@ enum Commands {
     },
 
     /// Start an MCP server over stdio (for AI hosts like Claude Desktop)
-    Mcp {
-        /// Address to bind the HTTP/WebSocket API server (for auto-spawn)
-        #[arg(long, default_value = "127.0.0.1:8080")]
-        bind: SocketAddr,
-
-        /// Authentication token
-        #[arg(long, env = "WSH_TOKEN")]
-        token: Option<String>,
-    },
+    Mcp {},
 
     /// Generate shell completions for bash, zsh, or fish
     Completions {
@@ -343,7 +319,7 @@ async fn main() -> Result<(), WshError> {
     let cli = Cli::parse();
 
     // MCP mode: tracing must use stderr since stdout is for MCP protocol
-    let is_mcp = matches!(cli.command, Some(Commands::Mcp { .. }));
+    let is_mcp = matches!(cli.command, Some(Commands::Mcp {}));
     if is_mcp {
         init_tracing_stderr();
     } else {
@@ -374,8 +350,8 @@ async fn main() -> Result<(), WshError> {
         Some(Commands::Token {}) => {
             run_token(socket, server_name).await
         }
-        Some(Commands::Persist { value, bind, token }) => {
-            run_persist(value, bind, token).await
+        Some(Commands::Persist { value }) => {
+            run_persist(value, socket.clone(), server_name.clone()).await
         }
         Some(Commands::Tag { name, add, remove, server }) => {
             run_tag(name, add, remove, server, socket, server_name).await
@@ -386,8 +362,8 @@ async fn main() -> Result<(), WshError> {
         Some(Commands::Servers { action }) => {
             run_servers(action, socket, server_name).await
         }
-        Some(Commands::Mcp { bind, token }) => {
-            run_mcp(bind, socket, token, server_name).await
+        Some(Commands::Mcp {}) => {
+            run_mcp(socket, server_name).await
         }
         Some(Commands::Completions { shell }) => {
             let mut cmd = Cli::command();
@@ -426,7 +402,7 @@ fn init_tracing_stderr() {
 
 /// Run the wsh server daemon: HTTP/WS + Unix socket, no local terminal.
 async fn run_server(
-    bind: SocketAddr,
+    bind: Option<SocketAddr>,
     token: Option<String>,
     no_auth: bool,
     socket: Option<PathBuf>,
@@ -453,39 +429,47 @@ async fn run_server(
         }
     }
 
-    // Load TLS configuration if cert + key are provided.
-    let tls_acceptor = match (tls_cert, tls_key) {
-        (Some(cert), Some(key)) => {
+    // Load TLS configuration if cert + key are provided and TCP is active.
+    let tls_acceptor = match (&bind, tls_cert, tls_key) {
+        (Some(_addr), Some(cert), Some(key)) => {
             let acceptor = wsh::tls::load_tls_config(&cert, &key)
                 .map_err(|e| WshError::Config(e.to_string()))?;
             tracing::info!(cert = %cert.display(), key = %key.display(), "TLS configured");
             Some(acceptor)
         }
-        _ => {
-            if !is_loopback(&bind) {
+        (Some(addr), _, _) => {
+            if !is_loopback(addr) {
                 tracing::warn!(
                     "Binding to non-loopback address {} without TLS. \
                      Bearer tokens and terminal data will be transmitted in cleartext. \
                      Consider using --tls-cert and --tls-key, or a TLS-terminating reverse proxy.",
-                    bind
+                    addr
                 );
             }
             None
         }
+        _ => None,
     };
 
-    let token = resolve_token(&bind, &token, no_auth)?;
-    if token.is_some() {
-        tracing::info!("auth token configured");
-    }
+    // Token and rate limiting are only relevant for TCP listeners.
+    let token = match &bind {
+        Some(addr) => {
+            let t = resolve_token(addr, &token, no_auth)?;
+            if t.is_some() {
+                tracing::info!("auth token configured");
+            }
+            t
+        }
+        None => None,
+    };
 
-    let rate_limit = match rate_limit {
-        Some(rps) => Some(rps),
-        None if !is_loopback(&bind) => {
+    let rate_limit = match (&bind, rate_limit) {
+        (_, Some(rps)) => Some(rps),
+        (Some(addr), None) if !is_loopback(addr) => {
             tracing::info!("applying default rate limit (100 req/s per IP) for non-localhost binding");
             Some(100)
         }
-        None => None,
+        _ => None,
     };
 
     // Resolve config path: CLI arg, else platform config dir
@@ -520,6 +504,7 @@ async fn run_server(
     let fed_default_token = fed_config.default_token.clone();
 
     // Build IP access control from config (if configured).
+    let is_remote_bind = bind.as_ref().map_or(false, |a| !is_loopback(a));
     let ip_access_control = fed_config.ip_access.as_ref().map(|cfg| {
         let ctrl = wsh::federation::ip_access::IpAccessControl::from_config(cfg);
         if ctrl.is_unconfigured() {
@@ -527,7 +512,7 @@ async fn run_server(
         } else {
             tracing::info!("IP access control configured");
         }
-        if !is_loopback(&bind) && ctrl.is_unconfigured() {
+        if is_remote_bind && ctrl.is_unconfigured() {
             tracing::warn!(
                 "Binding to non-loopback address without IP access control. \
                  Consider configuring [ip_access] blocklist/allowlist in the config file."
@@ -537,7 +522,7 @@ async fn run_server(
     });
 
     // Warn if non-loopback with no ip_access config at all.
-    if !is_loopback(&bind) && ip_access_control.is_none() {
+    if is_remote_bind && ip_access_control.is_none() {
         tracing::warn!(
             "Binding to non-loopback address without IP access control. \
              Consider adding [ip_access] to your federation config file."
@@ -570,6 +555,7 @@ async fn run_server(
     };
     let shutdown = ShutdownCoordinator::new();
     let server_config = std::sync::Arc::new(api::ServerConfig::new(persistent));
+    let shutdown_request = tokio_util::sync::CancellationToken::new();
     let state = api::AppState {
         sessions: sessions.clone(),
         shutdown: shutdown.clone(),
@@ -585,6 +571,7 @@ async fn run_server(
         local_token: token.clone(),
         default_backend_token: fed_default_token,
         server_id: server_id.clone(),
+        shutdown_notify: shutdown_request.clone(),
     };
 
     if !cors_origins.is_empty() {
@@ -608,91 +595,136 @@ async fn run_server(
     if let Some(ref prefix) = base_prefix {
         tracing::info!(prefix = %prefix, "base path prefix configured");
     }
-    let app = api::router(state, api::RouterConfig { token, bind, cors_origins, rate_limit, base_prefix: base_prefix.clone() });
+    let router_bind = bind.unwrap_or_else(|| "127.0.0.1:0".parse().unwrap());
+    let app = api::router(state, api::RouterConfig { token: token.clone(), bind: router_bind, cors_origins, rate_limit, base_prefix: base_prefix.clone() });
 
     // Cancellation token for HTTP server shutdown (supports multiple listeners)
     let http_cancel = tokio_util::sync::CancellationToken::new();
 
-    let listener = tokio::net::TcpListener::bind(bind)
-        .await
-        .map_err(WshError::Io)?;
-    let actual_addr = listener.local_addr().map_err(WshError::Io)?;
-    let scheme = if tls_acceptor.is_some() { "HTTPS/WSS" } else { "HTTP/WS" };
-    tracing::info!(addr = %actual_addr, scheme, "server listening");
+    // ── HTTP-over-UDS listener (always active) ─────────────────────
+    let http_socket_path = socket.as_ref()
+        .map(|p| p.with_extension("http.sock"))
+        .unwrap_or_else(|| server::http_socket_path_for_instance(&server_name));
 
-    // When binding to IPv4 loopback, also listen on IPv6 loopback.
-    // Browsers (especially Firefox) may resolve "localhost" to ::1 and
-    // wait ~30-60s for a TCP timeout before falling back to 127.0.0.1.
-    // Use the actual IPv4 port (important when --bind uses port 0).
-    let ipv6_listener = if bind.ip() == std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST) {
-        let v6_addr = std::net::SocketAddr::new(
-            std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST),
-            actual_addr.port(),
-        );
-        match tokio::net::TcpListener::bind(v6_addr).await {
-            Ok(l) => {
-                tracing::info!(addr = %v6_addr, scheme, "server listening (IPv6 loopback)");
-                Some(l)
+    // Remove stale socket file. The instance lock guarantees we own this name.
+    if http_socket_path.exists() {
+        std::fs::remove_file(&http_socket_path).map_err(WshError::Io)?;
+    }
+    if let Some(parent) = http_socket_path.parent() {
+        std::fs::create_dir_all(parent).map_err(WshError::Io)?;
+    }
+
+    let uds_listener = tokio::net::UnixListener::bind(&http_socket_path)
+        .map_err(WshError::Io)?;
+
+    // Restrict socket permissions to owner only (0600)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&http_socket_path, std::fs::Permissions::from_mode(0o600))
+            .map_err(WshError::Io)?;
+    }
+
+    let uds_app = app.clone()
+        .layer(axum::middleware::from_fn(api::transport::uds_transport_middleware));
+
+    let uds_cancel = http_cancel.clone();
+    let http_socket_path_for_cleanup = http_socket_path.clone();
+    let uds_handle = tokio::spawn(async move {
+        if let Err(e) = axum::serve(
+            uds_listener,
+            uds_app.into_make_service_with_connect_info::<api::transport::UdsConnectInfo>(),
+        )
+            .with_graceful_shutdown(uds_cancel.cancelled_owned())
+            .await
+        {
+            tracing::error!(?e, "HTTP-over-UDS server error");
+        }
+    });
+
+    tracing::info!(path = %http_socket_path.display(), "HTTP API available via Unix socket");
+
+    // ── TCP listener (opt-in via --bind) ───────────────────────────
+    let mut tcp_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+    let _actual_tcp_addr: Option<SocketAddr>;
+
+    if let Some(bind_addr) = bind {
+        let tcp_app = app.clone()
+            .layer(axum::middleware::from_fn(api::transport::tcp_transport_middleware));
+
+        let listener = tokio::net::TcpListener::bind(bind_addr)
+            .await
+            .map_err(WshError::Io)?;
+        let actual_addr = listener.local_addr().map_err(WshError::Io)?;
+        _actual_tcp_addr = Some(actual_addr);
+        let scheme = if tls_acceptor.is_some() { "HTTPS/WSS" } else { "HTTP/WS" };
+        tracing::info!(addr = %actual_addr, scheme, "TCP server listening");
+
+        // When binding to IPv4 loopback, also listen on IPv6 loopback.
+        let ipv6_listener = if bind_addr.ip() == std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST) {
+            let v6_addr = std::net::SocketAddr::new(
+                std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST),
+                actual_addr.port(),
+            );
+            match tokio::net::TcpListener::bind(v6_addr).await {
+                Ok(l) => {
+                    tracing::info!(addr = %v6_addr, scheme, "TCP server listening (IPv6 loopback)");
+                    Some(l)
+                }
+                Err(e) => {
+                    tracing::debug!(?e, addr = %v6_addr, "IPv6 loopback bind failed (non-fatal)");
+                    None
+                }
             }
-            Err(e) => {
-                tracing::debug!(?e, addr = %v6_addr, "IPv6 loopback bind failed (non-fatal)");
-                None
+        } else {
+            None
+        };
+
+        if let Some(acceptor) = tls_acceptor {
+            let cancel4 = http_cancel.clone();
+            let app4 = tcp_app.clone();
+            let acceptor4 = acceptor.clone();
+            tcp_handles.push(tokio::spawn(serve_tls(listener, acceptor4, app4, cancel4)));
+
+            if let Some(l) = ipv6_listener {
+                let cancel6 = http_cancel.clone();
+                let app6 = tcp_app.clone();
+                let acceptor6 = acceptor.clone();
+                tcp_handles.push(tokio::spawn(serve_tls(l, acceptor6, app6, cancel6)));
+            }
+        } else {
+            let cancel4 = http_cancel.clone();
+            let tcp_app_v6 = tcp_app.clone();
+            tcp_handles.push(tokio::spawn(async move {
+                if let Err(e) = axum::serve(
+                    listener,
+                    tcp_app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+                )
+                    .with_graceful_shutdown(cancel4.cancelled_owned())
+                    .await
+                {
+                    tracing::error!(?e, "TCP HTTP server error");
+                }
+            }));
+
+            if let Some(l) = ipv6_listener {
+                let cancel6 = http_cancel.clone();
+                tcp_handles.push(tokio::spawn(async move {
+                    if let Err(e) = axum::serve(
+                        l,
+                        tcp_app_v6.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+                    )
+                        .with_graceful_shutdown(cancel6.cancelled_owned())
+                        .await
+                    {
+                        tracing::error!(?e, "TCP HTTP server error (IPv6)");
+                    }
+                }));
             }
         }
     } else {
-        None
-    };
-
-    // Spawn the HTTP(S) server task(s).
-    //
-    // Without TLS: use axum::serve() (simple, well-tested).
-    // With TLS: manual accept loop → TlsAcceptor → hyper-util serve_connection.
-    // axum::serve()'s `Listener` trait is sealed and only accepts TcpListener,
-    // so TLS requires the manual approach.
-    let http_handle;
-    let http6_handle;
-
-    if let Some(acceptor) = tls_acceptor {
-        let cancel4 = http_cancel.clone();
-        let app4 = app.clone();
-        let acceptor4 = acceptor.clone();
-        http_handle = tokio::spawn(serve_tls(listener, acceptor4, app4, cancel4));
-
-        http6_handle = ipv6_listener.map(|l| {
-            let cancel6 = http_cancel.clone();
-            let app6 = app.clone();
-            let acceptor6 = acceptor.clone();
-            tokio::spawn(serve_tls(l, acceptor6, app6, cancel6))
-        });
-    } else {
-        let cancel4 = http_cancel.clone();
-        let app_v6 = app.clone();
-        http_handle = tokio::spawn(async move {
-            if let Err(e) = axum::serve(
-                listener,
-                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-            )
-                .with_graceful_shutdown(cancel4.cancelled_owned())
-                .await
-            {
-                tracing::error!(?e, "HTTP server error");
-            }
-        });
-
-        http6_handle = ipv6_listener.map(|l| {
-            let cancel6 = http_cancel.clone();
-            tokio::spawn(async move {
-                if let Err(e) = axum::serve(
-                    l,
-                    app_v6.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-                )
-                    .with_graceful_shutdown(cancel6.cancelled_owned())
-                    .await
-                {
-                    tracing::error!(?e, "HTTP server error (IPv6)");
-                }
-            })
-        });
+        _actual_tcp_addr = None;
+        tracing::info!("HTTP API available via Unix socket only (use --bind for TCP)");
     };
 
     // Acquire instance lock (flock) before binding the socket.
@@ -706,7 +738,6 @@ async fn run_server(
     let socket_sessions = sessions.clone();
     let socket_cancel = tokio_util::sync::CancellationToken::new();
     let socket_cancel_clone = socket_cancel.clone();
-    let shutdown_request = tokio_util::sync::CancellationToken::new();
     let shutdown_request_clone = shutdown_request.clone();
     let socket_handle = tokio::spawn(async move {
         if let Err(e) = server::serve(socket_sessions, &socket_path, socket_cancel_clone, socket_token, shutdown_request_clone, socket_hostname, socket_fed_state).await {
@@ -817,14 +848,15 @@ async fn run_server(
     http_cancel.cancel();
     socket_cancel.cancel();
 
-    // Remove the socket file immediately. Once the socket listener is
-    // cancelled it will never accept again, so the file is just a stale
-    // marker. Removing it early prevents a new spawn attempt from seeing
-    // the file, deleting it, failing to bind TCP (still held), and
-    // orphaning this server in an unreachable zombie state.
+    // Remove socket files immediately. Once listeners are cancelled they
+    // will never accept again, so the files are just stale markers.
     if socket_path_for_cleanup.exists() {
         let _ = std::fs::remove_file(&socket_path_for_cleanup);
-        tracing::debug!(path = %socket_path_for_cleanup.display(), "removed socket file");
+        tracing::debug!(path = %socket_path_for_cleanup.display(), "removed binary socket file");
+    }
+    if http_socket_path_for_cleanup.exists() {
+        let _ = std::fs::remove_file(&http_socket_path_for_cleanup);
+        tracing::debug!(path = %http_socket_path_for_cleanup.display(), "removed HTTP socket file");
     }
 
     // 2. Signal existing WS handlers to close
@@ -859,14 +891,14 @@ async fn run_server(
         std::time::Duration::from_secs(5),
         async {
             if let Err(e) = socket_handle.await {
-                tracing::warn!(?e, "socket server task panicked");
+                tracing::warn!(?e, "binary socket server task panicked");
             }
-            if let Err(e) = http_handle.await {
-                tracing::warn!(?e, "HTTP server task panicked");
+            if let Err(e) = uds_handle.await {
+                tracing::warn!(?e, "HTTP-over-UDS server task panicked");
             }
-            if let Some(h) = http6_handle {
+            for h in tcp_handles {
                 if let Err(e) = h.await {
-                    tracing::warn!(?e, "HTTP server task (IPv6) panicked");
+                    tracing::warn!(?e, "TCP HTTP server task panicked");
                 }
             }
         },
@@ -948,16 +980,14 @@ async fn serve_tls(
 // ── MCP stdio mode ─────────────────────────────────────────────────
 
 /// Run the MCP stdio bridge: connect to (or spawn) a server, then bridge
-/// stdin/stdout JSON-RPC ↔ the server's `/mcp` Streamable HTTP endpoint.
+/// stdin/stdout JSON-RPC ↔ the server's `/mcp` Streamable HTTP endpoint via UDS.
 async fn run_mcp(
-    bind: SocketAddr,
     socket: Option<PathBuf>,
-    token: Option<String>,
     server_name: String,
 ) -> Result<(), WshError> {
     tracing::info!("wsh mcp stdio bridge starting");
 
-    let socket_path = resolve_socket_path(socket, &server_name);
+    let socket_path = resolve_socket_path(socket.clone(), &server_name);
 
     // Connect to existing server or spawn one (with file lock to prevent races)
     match client::Client::connect(&socket_path).await {
@@ -977,28 +1007,36 @@ async fn run_mcp(
                 }
                 Err(_) => {
                     tracing::debug!("no server running, spawning daemon");
-                    spawn_server_daemon(&socket_path, &bind, token.as_deref(), &server_name)?;
+                    spawn_server_daemon(&socket_path, &server_name)?;
                     wait_for_socket(&socket_path).await?;
                 }
             }
         }
     }
 
-    let mcp_url = format!("http://{}/mcp", bind);
-    // ── Design decision: no total HTTP timeout ────────────────────────
-    //
-    // The reqwest client has NO per-request timeout here. MCP tools can
-    // run for up to MAX_WAIT_CEILING_MS (5 minutes), so any fixed HTTP
-    // timeout shorter than that would cause spurious failures for long
-    // tool calls. Server-side tools already enforce their own bounded
-    // timeouts, so the bridge does not need an additional one.
-    //
-    // connect_timeout remains at 10s to fail fast if the server is down.
-    // ──────────────────────────────────────────────────────────────────
-    let http_client = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(10))
-        .build()
-        .expect("failed to build HTTP client");
+    // Resolve the HTTP UDS socket path for the MCP endpoint
+    let http_socket_path = socket.as_ref()
+        .map(|p| p.with_extension("http.sock"))
+        .unwrap_or_else(|| server::http_socket_path_for_instance(&server_name));
+
+    // Wait for the HTTP UDS socket to appear
+    {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if http_socket_path.exists() {
+                break;
+            }
+            if tokio::time::Instant::now() > deadline {
+                return Err(WshError::Io(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!("timed out waiting for HTTP socket at {}", http_socket_path.display()),
+                )));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+
+    let uds_http = Arc::new(wsh::uds_client::UdsHttpClient::new(&http_socket_path));
     let session_id: Arc<tokio::sync::Mutex<Option<String>>> =
         Arc::new(tokio::sync::Mutex::new(None));
 
@@ -1042,17 +1080,15 @@ async fn run_mcp(
         }
 
         let body_str = trimmed.to_string();
-        let client = http_client.clone();
-        let url = mcp_url.clone();
+        let client = uds_http.clone();
         let sid = session_id.clone();
-        let tok = token.clone();
         let out = stdout.clone();
         let sem = concurrency.clone();
 
         in_flight.spawn(async move {
             // Acquire permit before dispatching; dropped when the task completes.
             let _permit = sem.acquire().await;
-            mcp_bridge_dispatch(body_str, client, url, sid, tok, out).await;
+            mcp_bridge_dispatch_uds(body_str, client, sid, out).await;
         });
     }
 
@@ -1081,13 +1117,10 @@ async fn run_mcp(
     // ─────────────────────────────────────────────────────────────────
     let sid_guard = session_id.lock().await;
     if let Some(ref sid) = *sid_guard {
-        let mut req = http_client
-            .delete(&mcp_url)
-            .header("Mcp-Session-Id", sid.as_str());
-        if let Some(ref t) = token {
-            req = req.bearer_auth(t);
-        }
-        let _ = req.send().await;
+        let _ = uds_http.delete_with_headers(
+            "/mcp",
+            &[("Mcp-Session-Id", sid.as_str())],
+        ).await;
         tracing::debug!("sent MCP session cleanup DELETE");
     }
     drop(sid_guard);
@@ -1096,14 +1129,12 @@ async fn run_mcp(
     Ok(())
 }
 
-/// Dispatch a single MCP JSON-RPC request to the server and write the
-/// response to stdout. Called from a spawned task for concurrency.
-async fn mcp_bridge_dispatch(
+/// Dispatch a single MCP JSON-RPC request to the server over UDS and write
+/// the response to stdout. Called from a spawned task for concurrency.
+async fn mcp_bridge_dispatch_uds(
     body_str: String,
-    http_client: reqwest::Client,
-    mcp_url: String,
+    client: Arc<wsh::uds_client::UdsHttpClient>,
     session_id: Arc<tokio::sync::Mutex<Option<String>>>,
-    token: Option<String>,
     stdout: Arc<tokio::sync::Mutex<tokio::io::Stdout>>,
 ) {
     // Extract the JSON-RPC request ID so we can echo it in error responses
@@ -1112,25 +1143,29 @@ async fn mcp_bridge_dispatch(
         .and_then(|v| v.get("id").cloned())
         .unwrap_or(serde_json::Value::Null);
 
-    // Build HTTP request
-    let mut req = http_client
-        .post(&mcp_url)
-        .header("Content-Type", "application/json")
-        .header("Accept", "application/json, text/event-stream");
-
+    // Build extra headers
+    let sid_val;
+    let mut headers = vec![
+        ("Accept", "application/json, text/event-stream"),
+    ];
     {
         let sid = session_id.lock().await;
         if let Some(ref s) = *sid {
-            req = req.header("Mcp-Session-Id", s.as_str());
+            sid_val = s.clone();
+        } else {
+            sid_val = String::new();
         }
     }
-    if let Some(ref t) = token {
-        req = req.bearer_auth(t);
+    if !sid_val.is_empty() {
+        headers.push(("Mcp-Session-Id", &sid_val));
     }
 
-    req = req.body(body_str);
-
-    let resp = match req.send().await {
+    let resp = match client.post_raw(
+        "/mcp",
+        "application/json",
+        bytes::Bytes::from(body_str),
+        &headers,
+    ).await {
         Ok(r) => r,
         Err(e) => {
             tracing::error!(?e, "HTTP request to /mcp failed");
@@ -1146,42 +1181,29 @@ async fn mcp_bridge_dispatch(
             let mut out = stdout.lock().await;
             let _ = tokio::io::AsyncWriteExt::write_all(&mut *out, err_line.as_bytes()).await;
             let _ = tokio::io::AsyncWriteExt::flush(&mut *out).await;
-
-            // ── Stale session recovery ────────────────────────────────
-            //
-            // If the server restarted, our session ID is stale. On any
-            // connection/transport error, clear the session ID so the
-            // next request re-initializes.
-            // ──────────────────────────────────────────────────────────
             *session_id.lock().await = None;
             return;
         }
     };
 
     // Capture headers before consuming the body
-    let content_type = resp
-        .headers()
+    let content_type = resp.headers
         .get("content-type")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_string();
 
     // Capture mcp-session-id from response headers
-    if let Some(sid) = resp.headers().get("mcp-session-id") {
+    if let Some(sid) = resp.headers.get("mcp-session-id") {
         if let Ok(s) = sid.to_str() {
             *session_id.lock().await = Some(s.to_string());
         }
     }
 
-    let status = resp.status();
+    let status = resp.status;
 
-    // ── Stale session recovery ────────────────────────────────────────
-    //
-    // If the server returns 404 or another 4xx with our session ID, the
-    // session has expired or the server restarted. Clear the session ID
-    // so the next request starts a fresh MCP session.
-    // ──────────────────────────────────────────────────────────────────
-    if status.as_u16() == 404 || status.as_u16() == 400 {
+    // Stale session recovery
+    if status == hyper::StatusCode::NOT_FOUND || status == hyper::StatusCode::BAD_REQUEST {
         let mut sid = session_id.lock().await;
         if sid.is_some() {
             tracing::warn!(status = %status, "server rejected session ID, clearing for re-init");
@@ -1189,7 +1211,7 @@ async fn mcp_bridge_dispatch(
         }
     }
 
-    let body = resp.text().await.unwrap_or_default();
+    let body = resp.text().await.unwrap_or_else(|_| String::new());
 
     if !status.is_success() && !status.is_informational() {
         tracing::warn!(status = %status, "MCP endpoint returned error");
@@ -1274,30 +1296,19 @@ fn acquire_spawn_lock(lock_path: &std::path::Path) -> Result<std::fs::File, WshE
 /// Spawn a wsh server daemon as a background process.
 ///
 /// The spawned server runs in ephemeral mode (exits when last session ends).
+/// Auto-spawned servers are UDS-only (no TCP listener).
 fn spawn_server_daemon(
     socket_path: &std::path::Path,
-    bind: &SocketAddr,
-    token: Option<&str>,
     server_name: &str,
 ) -> Result<(), WshError> {
     let exe = std::env::current_exe().map_err(WshError::Io)?;
     let mut cmd = std::process::Command::new(exe);
     cmd.arg("server")
         .arg("--ephemeral")
-        .arg("--bind")
-        .arg(bind.to_string())
         .arg("--socket")
         .arg(socket_path)
         .arg("--server-name")
         .arg(server_name);
-
-    if let Some(t) = token {
-        cmd.arg("--token").arg(t);
-    }
-
-    // Note: --base-prefix and --tls-* flags are NOT forwarded to the spawned
-    // daemon because auto-spawned servers are ephemeral local instances that
-    // only serve via Unix socket. TLS and prefix are for explicit server mode.
 
     // Detach from parent: redirect stdio, start new session
     cmd.stdin(std::process::Stdio::null())
@@ -1377,18 +1388,8 @@ async fn run_default(cli: Cli) -> Result<(), WshError> {
                 }
                 Err(_) => {
                     tracing::debug!("spawning daemon");
-                    spawn_server_daemon(&socket_path, &cli.bind, cli.token.as_deref(), server_name)?;
+                    spawn_server_daemon(&socket_path, server_name)?;
                     wait_for_socket(&socket_path).await?;
-
-                    // If binding to a non-loopback address, retrieve and print the token
-                    // so the user knows it before we enter the terminal session.
-                    if !is_loopback(&cli.bind) {
-                        if let Ok(mut token_client) = client::Client::connect(&socket_path).await {
-                            if let Ok(Some(token)) = token_client.get_token().await {
-                                eprintln!("wsh: API token: {}", token);
-                            }
-                        }
-                    }
 
                     client::Client::connect(&socket_path).await.map_err(|e| {
                         eprintln!("wsh: failed to connect to server after spawn: {}", e);
@@ -1841,11 +1842,14 @@ async fn run_token(socket: Option<PathBuf>, server_name: String) -> Result<(), W
 
 async fn run_persist(
     value: Option<String>,
-    bind: SocketAddr,
-    token: Option<String>,
+    socket: Option<PathBuf>,
+    server_name: String,
 ) -> Result<(), WshError> {
-    let url = format!("http://{}/server/persist", bind);
-    let client = reqwest::Client::new();
+    let http_socket_path = socket.as_ref()
+        .map(|p| p.with_extension("http.sock"))
+        .unwrap_or_else(|| server::http_socket_path_for_instance(&server_name));
+
+    let client = wsh::uds_client::UdsHttpClient::new(&http_socket_path);
 
     // Determine whether to GET (query) or PUT (set)
     let persistent_value = match value.as_deref() {
@@ -1858,51 +1862,44 @@ async fn run_persist(
         }
     };
 
-    let resp = match persistent_value {
+    let (status, body) = match persistent_value {
         None => {
             // Query current state
-            let mut req = client.get(&url);
-            if let Some(t) = &token {
-                req = req.bearer_auth(t);
-            }
-            match req.send().await {
-                Ok(r) => r,
+            match client.get("/server/persist").await {
+                Ok(resp) => {
+                    let status = resp.status;
+                    let body = resp.text().await.unwrap_or_default();
+                    (status, body)
+                }
                 Err(e) => {
-                    if e.is_connect() {
-                        eprintln!("wsh persist: could not connect to wsh server at {} — is the server running?", bind);
-                    } else {
-                        eprintln!("wsh persist: {}", e);
-                    }
+                    eprintln!("wsh persist: could not connect to wsh server — is the server running? ({})", e);
                     std::process::exit(1);
                 }
             }
         }
         Some(val) => {
             // Set new state
-            let mut req = client.put(&url).json(&serde_json::json!({"persistent": val}));
-            if let Some(t) = &token {
-                req = req.bearer_auth(t);
-            }
-            match req.send().await {
-                Ok(r) => r,
+            let body_json = serde_json::json!({"persistent": val});
+            match client.put_json("/server/persist", &body_json).await {
+                Ok(resp) => {
+                    let status = resp.status;
+                    let body = resp.text().await.unwrap_or_default();
+                    (status, body)
+                }
                 Err(e) => {
-                    if e.is_connect() {
-                        eprintln!("wsh persist: could not connect to wsh server at {} — is the server running?", bind);
-                    } else {
-                        eprintln!("wsh persist: {}", e);
-                    }
+                    eprintln!("wsh persist: could not connect to wsh server — is the server running? ({})", e);
                     std::process::exit(1);
                 }
             }
         }
     };
 
-    if !resp.status().is_success() {
-        eprintln!("wsh persist: server returned status {}", resp.status());
+    if !status.is_success() {
+        eprintln!("wsh persist: server returned status {}", status);
         std::process::exit(1);
     }
 
-    let body: serde_json::Value = resp.json().await.unwrap_or_default();
+    let body: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
     let is_persistent = body["persistent"].as_bool().unwrap_or(false);
     if is_persistent {
         println!("Server is in persistent mode (will stay alive when sessions end).");
