@@ -20,12 +20,13 @@ use std::sync::Arc;
 use thiserror::Error;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use wsh::{
-    api, client, protocol,
-    protocol::{AttachSessionMsg, ScrollbackRequest},
+    api, client,
     server,
     session::SessionRegistry,
     shutdown::ShutdownCoordinator,
     terminal,
+    uds_client::UdsHttpClient,
+    ws_client,
 };
 
 /// wsh - The Web Shell
@@ -1366,49 +1367,59 @@ async fn wait_for_socket(socket_path: &std::path::Path) -> Result<(), WshError> 
     }
 }
 
+/// Wait for the HTTP-over-UDS socket to become connectable and healthy.
+async fn wait_for_http_socket(http_socket_path: &std::path::Path) -> Result<(), WshError> {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    let client = UdsHttpClient::new(http_socket_path);
+    loop {
+        if tokio::time::Instant::now() > deadline {
+            return Err(WshError::Io(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!(
+                    "timed out waiting for HTTP socket at {}",
+                    http_socket_path.display()
+                ),
+            )));
+        }
+        if client.health_check().await {
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
 /// Run the default mode (no subcommand): connect to (or spawn) a server, then attach.
 async fn run_default(cli: Cli) -> Result<(), WshError> {
     tracing::info!("wsh starting");
 
     let server_name = &cli.server_name;
     let socket_path = resolve_socket_path(cli.socket.clone(), server_name);
+    let http_socket_path = resolve_http_socket_path(cli.socket.clone(), server_name);
 
-    // Try connecting to an existing server; if none, spawn one.
+    // Try connecting to an existing server via HTTP health check; if none, spawn one.
     // Uses an advisory file lock to prevent two clients from racing to spawn
     // duplicate daemons (TOCTOU between connect-fail and spawn).
-    let mut c = match client::Client::connect(&socket_path).await {
-        Ok(c) => {
-            tracing::debug!("connected to existing server");
-            c
-        }
-        Err(_) => {
-            tracing::debug!("no server running, acquiring spawn lock");
-            let lock_path = server::spawn_lock_path_for_instance(server_name);
-            let lp = lock_path.clone();
-            let _lock = tokio::task::spawn_blocking(move || acquire_spawn_lock(&lp))
-                .await
-                .map_err(WshError::TaskJoin)??;
+    let http_client = UdsHttpClient::new(&http_socket_path);
+    if !http_client.health_check().await {
+        tracing::debug!("no server running, acquiring spawn lock");
+        let lock_path = server::spawn_lock_path_for_instance(server_name);
+        let lp = lock_path.clone();
+        let _lock = tokio::task::spawn_blocking(move || acquire_spawn_lock(&lp))
+            .await
+            .map_err(WshError::TaskJoin)??;
 
-            // Re-check after acquiring the lock — another client may have
-            // spawned the server while we waited.
-            match client::Client::connect(&socket_path).await {
-                Ok(c) => {
-                    tracing::debug!("connected to server (spawned by another client)");
-                    c
-                }
-                Err(_) => {
-                    tracing::debug!("spawning daemon");
-                    spawn_server_daemon(&socket_path, server_name)?;
-                    wait_for_socket(&socket_path).await?;
-
-                    client::Client::connect(&socket_path).await.map_err(|e| {
-                        eprintln!("wsh: failed to connect to server after spawn: {}", e);
-                        WshError::Io(e)
-                    })?
-                }
-            }
+        // Re-check after acquiring the lock — another client may have
+        // spawned the server while we waited.
+        if !http_client.health_check().await {
+            tracing::debug!("spawning daemon");
+            spawn_server_daemon(&socket_path, server_name)?;
+            wait_for_http_socket(&http_socket_path).await?;
+        } else {
+            tracing::debug!("connected to server (spawned by another client)");
         }
-    };
+    } else {
+        tracing::debug!("connected to existing server");
+    }
 
     let (rows, cols) = terminal::terminal_size().unwrap_or((24, 80));
     tracing::debug!(rows, cols, "terminal size");
@@ -1419,23 +1430,47 @@ async fn run_default(cli: Cli) -> Result<(), WshError> {
         None => cli.shell.clone(),
     };
 
-    let msg = protocol::CreateSessionMsg {
-        name: cli.name.clone(),
-        command,
-        cwd: None,
-        env: None,
-        rows,
-        cols,
-        tags: cli.tags.clone(),
-        server: None,
-    };
+    // Create session via REST API
+    let create_body = serde_json::json!({
+        "name": cli.name,
+        "command": command,
+        "rows": rows,
+        "cols": cols,
+        "tags": cli.tags,
+    });
 
-    let resp = c.create_session(msg).await.map_err(|e| {
+    let resp = http_client.post_json("/sessions", &create_body).await.map_err(|e| {
         eprintln!("wsh: failed to create session: {}", e);
-        WshError::Io(e)
+        WshError::Io(std::io::Error::new(std::io::ErrorKind::ConnectionRefused, e))
     })?;
 
-    tracing::info!(session = %resp.name, "session created");
+    if !resp.status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        eprintln!("wsh: failed to create session: {}", body);
+        return Err(WshError::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("session creation failed: {}", body),
+        )));
+    }
+
+    let session_info: serde_json::Value = resp.json().await.map_err(|e| {
+        WshError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    })?;
+    let session_name = session_info["name"]
+        .as_str()
+        .ok_or_else(|| WshError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "missing session name in response",
+        )))?
+        .to_string();
+
+    tracing::info!(session = %session_name, "session created");
+
+    // Connect WebSocket for streaming I/O
+    let ws = ws_client::connect_ws_uds(&http_socket_path, &session_name).await.map_err(|e| {
+        eprintln!("wsh: failed to connect WebSocket: {}", e);
+        WshError::Io(e)
+    })?;
 
     // Enter raw mode for the local terminal
     let raw_guard = terminal::RawModeGuard::new()?;
@@ -1449,8 +1484,8 @@ async fn run_default(cli: Cli) -> Result<(), WshError> {
     };
     let screen_guard = terminal::ScreenGuard::new(screen_mode)?;
 
-    // Enter the streaming I/O loop
-    let result = c.run_streaming().await;
+    // Enter the WebSocket streaming I/O loop (no initial resize for new sessions)
+    let result = ws_client::run_ws_streaming(ws, None).await;
 
     // Restore terminal
     drop(screen_guard);
@@ -1461,7 +1496,7 @@ async fn run_default(cli: Cli) -> Result<(), WshError> {
         return Err(WshError::Io(e));
     }
 
-    eprintln!("[detached from session '{}']", resp.name);
+    eprintln!("[detached from session '{}']", session_name);
     tracing::info!("wsh exiting");
     Ok(())
 }
@@ -1475,13 +1510,14 @@ async fn run_attach(
     alt_screen: bool,
     server_name: String,
 ) -> Result<(), WshError> {
-    let socket_path = resolve_socket_path(socket, &server_name);
+    let http_socket_path = resolve_http_socket_path(socket, &server_name);
+    let http_client = UdsHttpClient::new(&http_socket_path);
 
-    let scrollback_req = match scrollback.as_str() {
-        "none" => ScrollbackRequest::None,
-        "all" => ScrollbackRequest::All,
+    let scrollback_limit: Option<usize> = match scrollback.as_str() {
+        "none" => None,
+        "all" => Some(usize::MAX),
         s => match s.parse::<usize>() {
-            Ok(n) => ScrollbackRequest::Lines(n),
+            Ok(n) => Some(n),
             Err(_) => {
                 eprintln!("wsh attach: invalid scrollback value: {}", s);
                 std::process::exit(1);
@@ -1491,20 +1527,92 @@ async fn run_attach(
 
     let (rows, cols) = terminal::terminal_size().unwrap_or((24, 80));
 
-    let mut c = client::Client::connect(&socket_path).await.map_err(|e| {
-        eprintln!("wsh attach: failed to connect to server at {}: {}", socket_path.display(), e);
-        WshError::Io(e)
+    // Verify session exists via REST
+    let resp = http_client.get(&format!("/sessions/{}", name)).await.map_err(|e| {
+        eprintln!("wsh attach: failed to connect to server: {}", e);
+        WshError::Io(std::io::Error::new(std::io::ErrorKind::ConnectionRefused, e))
     })?;
 
-    let msg = AttachSessionMsg {
-        name: name.clone(),
-        scrollback: scrollback_req,
-        rows,
-        cols,
-    };
+    if !resp.status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        eprintln!("wsh attach: session '{}' not found: {}", name, body);
+        return Err(WshError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("session '{}' not found", name),
+        )));
+    }
 
-    let resp = c.attach(msg).await.map_err(|e| {
-        eprintln!("wsh attach: {}", e);
+    // Fetch scrollback and screen data for replay using the parser's
+    // line_to_ansi to convert styled lines to raw ANSI sequences.
+    use wsh::parser::ansi::line_to_ansi;
+    use wsh::parser::state::FormattedLine;
+
+    let mut scrollback_bytes: Vec<u8> = Vec::new();
+    if let Some(limit) = scrollback_limit {
+        let limit = limit.min(10_000);
+        let path = format!(
+            "/sessions/{}/scrollback?format=styled&offset=0&limit={}",
+            name, limit
+        );
+        if let Ok(sb_resp) = http_client.get(&path).await {
+            if sb_resp.status.is_success() {
+                if let Ok(body) = sb_resp.text().await {
+                    if let Ok(sb) = serde_json::from_str::<serde_json::Value>(&body) {
+                        if let Some(lines) = sb.get("lines").and_then(|l| l.as_array()) {
+                            let mut buf = String::new();
+                            for line_val in lines {
+                                if let Ok(line) = serde_json::from_value::<FormattedLine>(line_val.clone()) {
+                                    buf.push_str(&line_to_ansi(&line));
+                                    buf.push_str("\r\n");
+                                }
+                            }
+                            scrollback_bytes = buf.into_bytes();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut screen_bytes: Vec<u8> = Vec::new();
+    {
+        let path = format!("/sessions/{}/screen?format=styled", name);
+        if let Ok(scr_resp) = http_client.get(&path).await {
+            if scr_resp.status.is_success() {
+                if let Ok(body) = scr_resp.text().await {
+                    if let Ok(scr) = serde_json::from_str::<serde_json::Value>(&body) {
+                        // The screen endpoint returns EnrichedScreen with flattened
+                        // QueryResponse::Screen fields (lines, cursor, etc.)
+                        // alongside last_activity_ms.
+                        if let Some(lines) = scr.get("lines").and_then(|l| l.as_array()) {
+                            let mut buf = String::new();
+                            // Clear screen and home cursor before replaying
+                            buf.push_str("\x1b[H\x1b[2J");
+                            for (i, line_val) in lines.iter().enumerate() {
+                                if let Ok(line) = serde_json::from_value::<FormattedLine>(line_val.clone()) {
+                                    buf.push_str(&line_to_ansi(&line));
+                                    if i + 1 < lines.len() {
+                                        buf.push_str("\r\n");
+                                    }
+                                }
+                            }
+                            // Restore cursor position
+                            if let Some(cursor) = scr.get("cursor") {
+                                let row = cursor.get("row").and_then(|r| r.as_u64()).unwrap_or(0) + 1;
+                                let col = cursor.get("col").and_then(|c| c.as_u64()).unwrap_or(0) + 1;
+                                buf.push_str(&format!("\x1b[{};{}H", row, col));
+                            }
+                            screen_bytes = buf.into_bytes();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Connect WebSocket for streaming I/O
+    let ws = ws_client::connect_ws_uds(&http_socket_path, &name).await.map_err(|e| {
+        eprintln!("wsh attach: failed to connect WebSocket: {}", e);
         WshError::Io(e)
     })?;
 
@@ -1524,17 +1632,17 @@ async fn run_attach(
     {
         use std::io::Write;
         let mut stdout = std::io::stdout().lock();
-        if !resp.scrollback.is_empty() {
-            let _ = stdout.write_all(&resp.scrollback);
+        if !scrollback_bytes.is_empty() {
+            let _ = stdout.write_all(&scrollback_bytes);
         }
-        if !resp.screen.is_empty() {
-            let _ = stdout.write_all(&resp.screen);
+        if !screen_bytes.is_empty() {
+            let _ = stdout.write_all(&screen_bytes);
         }
         let _ = stdout.flush();
     }
 
-    // Enter the streaming I/O loop
-    let result = c.run_streaming().await;
+    // Enter the WebSocket streaming I/O loop with initial resize
+    let result = ws_client::run_ws_streaming(ws, Some((rows, cols))).await;
 
     // Restore terminal
     drop(screen_guard);
@@ -1545,7 +1653,7 @@ async fn run_attach(
         return Err(WshError::Io(e));
     }
 
-    eprintln!("[detached from session '{}']", resp.name);
+    eprintln!("[detached from session '{}']", name);
     Ok(())
 }
 

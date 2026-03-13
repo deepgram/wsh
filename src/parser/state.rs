@@ -58,21 +58,22 @@ pub struct Cursor {
     pub visible: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum FormattedLine {
     Plain(String),
     Styled(Vec<Span>),
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Span {
     pub text: String,
     #[serde(flatten)]
     pub style: Style,
 }
 
-#[derive(Debug, Clone, Default, Serialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
 pub struct Style {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fg: Option<Color>,
@@ -109,7 +110,7 @@ impl Style {
     }
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum Color {
     Indexed(u8),

@@ -26,7 +26,7 @@ use crate::protocol::*;
 /// - no panels → has panels: set scroll region
 /// - has panels → has panels: update scroll region
 /// - has panels → no panels: reset scroll region
-fn render_panel_sync(
+pub(crate) fn render_panel_sync(
     w: &mut impl std::io::Write,
     new_panels: &[Panel],
     cached_panels: &[Panel],
