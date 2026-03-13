@@ -92,6 +92,12 @@ pub struct AppState {
     pub server_id: String,
     /// Cancellation token for triggering server shutdown from HTTP handlers (UDS-only).
     pub shutdown_notify: tokio_util::sync::CancellationToken,
+    /// TCP address the server is listening on (None if UDS-only).
+    pub tcp_addr: Option<std::net::SocketAddr>,
+    /// Server instance name (from -L / --server-name flag).
+    pub instance_name: String,
+    /// Path to the HTTP UDS socket.
+    pub http_socket_path: std::path::PathBuf,
 }
 
 pub(crate) fn get_session(
@@ -406,6 +412,9 @@ mod tests {
             default_backend_token: None,
             server_id: "test-server-id".to_string(),
             shutdown_notify: tokio_util::sync::CancellationToken::new(),
+            tcp_addr: None,
+            instance_name: "test".to_string(),
+            http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
         };
         (state, input_rx, "test".to_string())
     }
@@ -998,6 +1007,9 @@ mod tests {
             default_backend_token: None,
             server_id: "test-server-id".to_string(),
             shutdown_notify: tokio_util::sync::CancellationToken::new(),
+            tcp_addr: None,
+            instance_name: "test".to_string(),
+            http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
         }
     }
 
@@ -1507,6 +1519,9 @@ mod tests {
                 default_backend_token: None,
                 server_id: "test-server-id".to_string(),
                 shutdown_notify: tokio_util::sync::CancellationToken::new(),
+                tcp_addr: None,
+                instance_name: "test".to_string(),
+                http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
             },
             RouterConfig::default(),
         );
@@ -1575,6 +1590,9 @@ mod tests {
                 default_backend_token: None,
                 server_id: "test-server-id".to_string(),
                 shutdown_notify: tokio_util::sync::CancellationToken::new(),
+                tcp_addr: None,
+                instance_name: "test".to_string(),
+                http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
             },
             RouterConfig::default(),
         );
@@ -1640,6 +1658,9 @@ mod tests {
                 default_backend_token: None,
                 server_id: "test-server-id".to_string(),
                 shutdown_notify: tokio_util::sync::CancellationToken::new(),
+                tcp_addr: None,
+                instance_name: "test".to_string(),
+                http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
             },
             RouterConfig::default(),
         );

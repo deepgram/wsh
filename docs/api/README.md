@@ -76,7 +76,7 @@ Per-session endpoints are nested under `/sessions/:name`.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/server/info` | Server identity (hostname, version) |
+| `GET` | `/server/info` | Server identity and status (hostname, version, instance, sessions) |
 | `GET` | `/servers` | List all servers in the cluster (includes self) |
 | `POST` | `/servers` | Register a new backend server |
 | `GET` | `/servers/{hostname}` | Get status for a specific server |
@@ -1115,7 +1115,7 @@ This applies to: `GET /sessions`, `POST /sessions`, `GET /sessions/:name`,
 GET /server/info
 ```
 
-Returns this server's identity.
+Returns this server's identity and status.
 
 **Response:** `200 OK`
 
@@ -1123,12 +1123,25 @@ Returns this server's identity.
 {
   "hostname": "hub-host",
   "version": "0.1.0",
-  "server_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+  "server_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "instance_name": "default",
+  "socket_path": "/run/user/1000/wsh/default.http.sock",
+  "tcp_addr": "127.0.0.1:8080",
+  "persistent": true,
+  "session_count": 3
 }
 ```
 
-The `server_id` is a UUID v4 generated fresh on each server start. It uniquely
-identifies this server instance and is used for federation self-loop detection.
+| Field | Type | Description |
+|-------|------|-------------|
+| `hostname` | string | System hostname or configured override |
+| `version` | string | Server version |
+| `server_id` | string | UUID v4 generated fresh on each start; used for federation self-loop detection |
+| `instance_name` | string | Named server instance (from `-L`/`--server-name`, default `"default"`) |
+| `socket_path` | string | Path to the HTTP Unix domain socket |
+| `tcp_addr` | string \| null | TCP address if the server is bound to a network address; `null` if UDS-only |
+| `persistent` | boolean | `true` if the server persists after last session ends; `false` if `--ephemeral` |
+| `session_count` | integer | Number of active sessions on this server |
 
 ### List Servers
 

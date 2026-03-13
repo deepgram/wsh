@@ -74,6 +74,9 @@ fn create_test_state() -> (api::AppState, mpsc::Receiver<Bytes>, ActivityTracker
             default_backend_token: None,
             server_id: "test-server-id".to_string(),
             shutdown_notify: tokio_util::sync::CancellationToken::new(),
+            tcp_addr: None,
+            instance_name: "test".to_string(),
+            http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
     };
     (state, input_rx, activity, parser_tx)
 }
@@ -842,6 +845,9 @@ fn create_multi_session_state() -> (api::AppState, ActivityTracker, ActivityTrac
             default_backend_token: None,
             server_id: "test-server-id".to_string(),
             shutdown_notify: tokio_util::sync::CancellationToken::new(),
+            tcp_addr: None,
+            instance_name: "test".to_string(),
+            http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
     };
     (state, activity_a, activity_b, parser_tx_a, parser_tx_b)
 }
@@ -1002,6 +1008,9 @@ async fn test_http_idle_any_no_sessions_returns_404() {
             default_backend_token: None,
             server_id: "test-server-id".to_string(),
             shutdown_notify: tokio_util::sync::CancellationToken::new(),
+            tcp_addr: None,
+            instance_name: "test".to_string(),
+            http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
     };
     let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;

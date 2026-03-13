@@ -68,6 +68,9 @@ fn create_burst_test_state() -> (wsh::api::AppState, mpsc::Receiver<Bytes>, toki
         default_backend_token: None,
         server_id: "test-server-id".to_string(),
         shutdown_notify: tokio_util::sync::CancellationToken::new(),
+        tcp_addr: None,
+        instance_name: "test".to_string(),
+        http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
     };
     (state, ts.input_rx, output_tx, large_parser_tx)
 }

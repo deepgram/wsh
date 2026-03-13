@@ -35,6 +35,9 @@ fn make_state() -> AppState {
         default_backend_token: None,
         server_id: "test-server-id".to_string(),
         shutdown_notify: tokio_util::sync::CancellationToken::new(),
+        tcp_addr: None,
+        instance_name: "test".to_string(),
+        http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
     }
 }
 

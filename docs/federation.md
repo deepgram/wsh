@@ -34,20 +34,20 @@ wsh server --config ~/.config/wsh/config.toml
 
 # Or start and add backends at runtime via CLI
 wsh server --bind 127.0.0.1:8080
-wsh servers add http://10.0.1.10:8080
-wsh servers add https://10.0.1.11:8443 --token per-server-token
+wsh hub add http://10.0.1.10:8080
+wsh hub add https://10.0.1.11:8443 --token per-server-token
 
 # List all servers in the cluster
-wsh servers list
+wsh hub list
 
-# Check a specific server's status
-wsh servers info
+# Check this server's status
+wsh info
 
 # Remove a backend
-wsh servers remove backend-1
+wsh hub remove backend-1
 
 # Reload config from file (picks up new backends)
-wsh servers reload
+wsh hub reload
 
 # Create a session on a specific backend
 wsh list --server backend-1

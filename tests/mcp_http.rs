@@ -33,6 +33,9 @@ fn create_test_app() -> axum::Router {
             default_backend_token: None,
             server_id: "test-server-id".to_string(),
             shutdown_notify: tokio_util::sync::CancellationToken::new(),
+            tcp_addr: None,
+            instance_name: "test".to_string(),
+            http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
     };
     router(state, RouterConfig::default())
 }
@@ -289,6 +292,9 @@ async fn test_mcp_endpoint_exempt_from_auth() {
             default_backend_token: None,
             server_id: "test-server-id".to_string(),
             shutdown_notify: tokio_util::sync::CancellationToken::new(),
+            tcp_addr: None,
+            instance_name: "test".to_string(),
+            http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
     };
     // Create router WITH auth token
     let app = router(state, RouterConfig { token: Some("secret-token".to_string()), ..Default::default() });
@@ -1567,6 +1573,9 @@ async fn test_http_and_mcp_coexist() {
             default_backend_token: None,
             server_id: "test-server-id".to_string(),
             shutdown_notify: tokio_util::sync::CancellationToken::new(),
+            tcp_addr: None,
+            instance_name: "test".to_string(),
+            http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
     };
     let app = router(state, RouterConfig::default());
     let addr = start_test_server(app).await;

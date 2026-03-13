@@ -205,12 +205,15 @@ enum Commands {
     /// Stop the running wsh server
     Stop {},
 
-    /// Manage federated backend servers
-    Servers {
+    /// Manage federation hub
+    Hub {
         /// Action to perform
         #[command(subcommand)]
-        action: ServersAction,
+        action: HubAction,
     },
+
+    /// Show server information (hostname, version, socket, sessions)
+    Info,
 
     /// Start an MCP server over stdio (for AI hosts like Claude Desktop)
     Mcp {},
@@ -223,7 +226,7 @@ enum Commands {
 }
 
 #[derive(Subcommand, Debug)]
-enum ServersAction {
+enum HubAction {
     /// List all servers (local + federated backends)
     List,
 
@@ -242,9 +245,6 @@ enum ServersAction {
         /// Hostname of the backend to remove
         hostname: String,
     },
-
-    /// Show server info (hostname and version)
-    Info,
 
     /// Reload federation config from file
     Reload,
@@ -372,8 +372,11 @@ async fn main() -> Result<(), WshError> {
         Some(Commands::Stop {}) => {
             run_stop(socket, server_name).await
         }
-        Some(Commands::Servers { action }) => {
-            run_servers(action, socket, server_name).await
+        Some(Commands::Hub { action }) => {
+            run_hub(action, socket, server_name).await
+        }
+        Some(Commands::Info) => {
+            run_info(socket, server_name).await
         }
         Some(Commands::Mcp {}) => {
             run_mcp(socket, server_name).await
@@ -585,6 +588,11 @@ async fn run_server(
         default_backend_token: fed_default_token,
         server_id: server_id.clone(),
         shutdown_notify: shutdown_request.clone(),
+        tcp_addr: bind,
+        instance_name: server_name.clone(),
+        http_socket_path: socket.as_ref()
+            .map(|p| p.with_extension("http.sock"))
+            .unwrap_or_else(|| server::http_socket_path_for_instance(&server_name)),
     };
 
     if !cors_origins.is_empty() {
@@ -1769,8 +1777,8 @@ async fn run_tag(
     Ok(())
 }
 
-async fn run_servers(
-    action: ServersAction,
+async fn run_hub(
+    action: HubAction,
     socket: Option<PathBuf>,
     server_name: String,
 ) -> Result<(), WshError> {
@@ -1778,25 +1786,25 @@ async fn run_servers(
     let client = wsh::uds_client::UdsHttpClient::new(&http_socket_path);
 
     match action {
-        ServersAction::List => {
+        HubAction::List => {
             let resp = match client.get("/servers").await {
                 Ok(r) => r,
                 Err(e) => {
-                    eprintln!("wsh servers list: could not connect to wsh server — is the server running? ({})", e);
+                    eprintln!("wsh hub list: could not connect to wsh server — is the server running? ({})", e);
                     std::process::exit(1);
                 }
             };
 
             if !resp.status.is_success() {
                 let body = resp.text().await.unwrap_or_default();
-                eprintln!("wsh servers list: {}", body);
+                eprintln!("wsh hub list: {}", body);
                 std::process::exit(1);
             }
 
             let servers: Vec<serde_json::Value> = match resp.json() .await {
                 Ok(s) => s,
                 Err(e) => {
-                    eprintln!("wsh servers list: failed to parse response: {}", e);
+                    eprintln!("wsh hub list: failed to parse response: {}", e);
                     std::process::exit(1);
                 }
             };
@@ -1824,7 +1832,7 @@ async fn run_servers(
                 }
             }
         }
-        ServersAction::Add { address, token } => {
+        HubAction::Add { address, token } => {
             let body = serde_json::json!({
                 "address": address,
                 "token": token,
@@ -1833,21 +1841,21 @@ async fn run_servers(
             let resp = match client.post_json("/servers", &body).await {
                 Ok(r) => r,
                 Err(e) => {
-                    eprintln!("wsh servers add: could not connect to wsh server — is the server running? ({})", e);
+                    eprintln!("wsh hub add: could not connect to wsh server — is the server running? ({})", e);
                     std::process::exit(1);
                 }
             };
 
             if !resp.status.is_success() {
                 let body = resp.text().await.unwrap_or_default();
-                eprintln!("wsh servers add: {}", body);
+                eprintln!("wsh hub add: {}", body);
                 std::process::exit(1);
             }
 
             let result: serde_json::Value = match resp.json().await {
                 Ok(v) => v,
                 Err(e) => {
-                    eprintln!("wsh servers add: failed to parse response: {}", e);
+                    eprintln!("wsh hub add: failed to parse response: {}", e);
                     std::process::exit(1);
                 }
             };
@@ -1858,68 +1866,42 @@ async fn run_servers(
                 result["health"].as_str().unwrap_or("unknown")
             );
         }
-        ServersAction::Remove { hostname } => {
+        HubAction::Remove { hostname } => {
             let resp = match client.delete(&format!("/servers/{}", hostname)).await {
                 Ok(r) => r,
                 Err(e) => {
-                    eprintln!("wsh servers remove: could not connect to wsh server — is the server running? ({})", e);
+                    eprintln!("wsh hub remove: could not connect to wsh server — is the server running? ({})", e);
                     std::process::exit(1);
                 }
             };
 
             if !resp.status.is_success() {
                 let body = resp.text().await.unwrap_or_default();
-                eprintln!("wsh servers remove: {}", body);
+                eprintln!("wsh hub remove: {}", body);
                 std::process::exit(1);
             }
 
             println!("Server '{}' removed.", hostname);
         }
-        ServersAction::Info => {
-            let resp = match client.get("/server/info").await {
-                Ok(r) => r,
-                Err(e) => {
-                    eprintln!("wsh servers info: could not connect to wsh server — is the server running? ({})", e);
-                    std::process::exit(1);
-                }
-            };
-
-            if !resp.status.is_success() {
-                let body = resp.text().await.unwrap_or_default();
-                eprintln!("wsh servers info: {}", body);
-                std::process::exit(1);
-            }
-
-            let info: serde_json::Value = match resp.json().await {
-                Ok(v) => v,
-                Err(e) => {
-                    eprintln!("wsh servers info: failed to parse response: {}", e);
-                    std::process::exit(1);
-                }
-            };
-
-            println!("Hostname: {}", info["hostname"].as_str().unwrap_or("-"));
-            println!("Version:  {}", info["version"].as_str().unwrap_or("-"));
-        }
-        ServersAction::Reload => {
+        HubAction::Reload => {
             let resp = match client.post_json("/server/reload-config", &serde_json::json!({})).await {
                 Ok(r) => r,
                 Err(e) => {
-                    eprintln!("wsh servers reload: could not connect to wsh server — is the server running? ({})", e);
+                    eprintln!("wsh hub reload: could not connect to wsh server — is the server running? ({})", e);
                     std::process::exit(1);
                 }
             };
 
             if !resp.status.is_success() {
                 let body = resp.text().await.unwrap_or_default();
-                eprintln!("wsh servers reload: {}", body);
+                eprintln!("wsh hub reload: {}", body);
                 std::process::exit(1);
             }
 
             let result: serde_json::Value = match resp.json().await {
                 Ok(v) => v,
                 Err(e) => {
-                    eprintln!("wsh servers reload: failed to parse response: {}", e);
+                    eprintln!("wsh hub reload: failed to parse response: {}", e);
                     std::process::exit(1);
                 }
             };
@@ -1932,6 +1914,47 @@ async fn run_servers(
         }
     }
 
+    Ok(())
+}
+
+async fn run_info(socket: Option<PathBuf>, server_name: String) -> Result<(), WshError> {
+    let http_socket_path = resolve_http_socket_path(socket, &server_name);
+    let client = wsh::uds_client::UdsHttpClient::new(&http_socket_path);
+
+    let resp = match client.get("/server/info").await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!(
+                "wsh info: could not connect to wsh server — is the server running? ({})",
+                e
+            );
+            std::process::exit(1);
+        }
+    };
+
+    if !resp.status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        eprintln!("wsh info: {}", body);
+        std::process::exit(1);
+    }
+
+    let info: serde_json::Value = match resp.json().await {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("wsh info: failed to parse response: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    println!("Server:     {}", info["instance_name"].as_str().unwrap_or("unknown"));
+    println!("Hostname:   {}", info["hostname"].as_str().unwrap_or("unknown"));
+    println!("Version:    {}", info["version"].as_str().unwrap_or("unknown"));
+    println!("Socket:     {}", info["socket_path"].as_str().unwrap_or("unknown"));
+    if let Some(addr) = info["tcp_addr"].as_str() {
+        println!("TCP:        {}", addr);
+    }
+    println!("Persistent: {}", if info["persistent"].as_bool().unwrap_or(false) { "yes" } else { "no" });
+    println!("Sessions:   {}", info["session_count"].as_u64().unwrap_or(0));
     Ok(())
 }
 

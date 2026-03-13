@@ -3534,6 +3534,11 @@ pub(super) async fn server_info(
         "hostname": state.hostname,
         "version": env!("CARGO_PKG_VERSION"),
         "server_id": state.server_id,
+        "instance_name": state.instance_name,
+        "socket_path": state.http_socket_path.to_string_lossy(),
+        "tcp_addr": state.tcp_addr.map(|a| a.to_string()),
+        "persistent": state.server_config.is_persistent(),
+        "session_count": state.sessions.list().len(),
     }))
 }
 
