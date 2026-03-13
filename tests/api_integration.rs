@@ -53,7 +53,7 @@ fn create_test_app() -> (axum::Router, mpsc::Receiver<Bytes>, broadcast::Sender<
         activity: wsh::activity::ActivityTracker::new(),
         focus: FocusTracker::new(),
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
-        visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
+        visual_update_tx: tokio::sync::broadcast::channel::<wsh::session::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
         cancelled: tokio_util::sync::CancellationToken::new(),
     };
@@ -167,7 +167,7 @@ async fn test_api_input_multiple_requests() {
         activity: wsh::activity::ActivityTracker::new(),
         focus: FocusTracker::new(),
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
-        visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
+        visual_update_tx: tokio::sync::broadcast::channel::<wsh::session::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
         cancelled: tokio_util::sync::CancellationToken::new(),
     };
@@ -262,7 +262,7 @@ async fn test_websocket_receives_pty_output() {
         activity: wsh::activity::ActivityTracker::new(),
         focus: FocusTracker::new(),
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
-        visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
+        visual_update_tx: tokio::sync::broadcast::channel::<wsh::session::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
         cancelled: tokio_util::sync::CancellationToken::new(),
     };
@@ -329,7 +329,7 @@ async fn test_websocket_sends_input_to_pty() {
         activity: wsh::activity::ActivityTracker::new(),
         focus: FocusTracker::new(),
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
-        visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
+        visual_update_tx: tokio::sync::broadcast::channel::<wsh::session::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
         cancelled: tokio_util::sync::CancellationToken::new(),
     };
@@ -392,7 +392,7 @@ async fn test_websocket_text_input_to_pty() {
         activity: wsh::activity::ActivityTracker::new(),
         focus: FocusTracker::new(),
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
-        visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
+        visual_update_tx: tokio::sync::broadcast::channel::<wsh::session::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
         cancelled: tokio_util::sync::CancellationToken::new(),
     };
@@ -454,7 +454,7 @@ async fn test_websocket_bidirectional_communication() {
         activity: wsh::activity::ActivityTracker::new(),
         focus: FocusTracker::new(),
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
-        visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
+        visual_update_tx: tokio::sync::broadcast::channel::<wsh::session::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
         cancelled: tokio_util::sync::CancellationToken::new(),
     };
@@ -535,7 +535,7 @@ async fn test_websocket_multiple_outputs() {
         activity: wsh::activity::ActivityTracker::new(),
         focus: FocusTracker::new(),
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
-        visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
+        visual_update_tx: tokio::sync::broadcast::channel::<wsh::session::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
         cancelled: tokio_util::sync::CancellationToken::new(),
     };
@@ -700,7 +700,7 @@ async fn test_websocket_line_event_includes_total_lines() {
         activity: wsh::activity::ActivityTracker::new(),
         focus: FocusTracker::new(),
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
-        visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
+        visual_update_tx: tokio::sync::broadcast::channel::<wsh::session::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
         cancelled: tokio_util::sync::CancellationToken::new(),
     };
@@ -792,7 +792,7 @@ async fn test_scrollback_endpoint() {
         activity: wsh::activity::ActivityTracker::new(),
         focus: FocusTracker::new(),
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
-        visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
+        visual_update_tx: tokio::sync::broadcast::channel::<wsh::session::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
         cancelled: tokio_util::sync::CancellationToken::new(),
     };
@@ -863,7 +863,7 @@ async fn test_scrollback_initial_state() {
         activity: wsh::activity::ActivityTracker::new(),
         focus: FocusTracker::new(),
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
-        visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
+        visual_update_tx: tokio::sync::broadcast::channel::<wsh::session::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
         cancelled: tokio_util::sync::CancellationToken::new(),
     };

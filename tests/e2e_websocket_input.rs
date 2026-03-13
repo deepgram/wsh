@@ -89,7 +89,7 @@ async fn test_websocket_input_reaches_pty_and_output_returns() {
         activity: wsh::activity::ActivityTracker::new(),
         focus: FocusTracker::new(),
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
-        visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
+        visual_update_tx: tokio::sync::broadcast::channel::<wsh::session::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
         cancelled: tokio_util::sync::CancellationToken::new(),
     };
@@ -246,7 +246,7 @@ async fn test_websocket_text_input_reaches_pty() {
         activity: wsh::activity::ActivityTracker::new(),
         focus: FocusTracker::new(),
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
-        visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
+        visual_update_tx: tokio::sync::broadcast::channel::<wsh::session::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
         cancelled: tokio_util::sync::CancellationToken::new(),
     };

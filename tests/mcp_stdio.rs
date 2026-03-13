@@ -80,22 +80,7 @@ fn setup_mcp_test(test_name: &str) -> McpTestHarness {
         .spawn()
         .expect("failed to spawn wsh server");
 
-    // 4. Wait for the server's binary socket to appear and become connectable.
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        if std::time::Instant::now() > deadline {
-            panic!(
-                "timed out waiting for wsh server socket at {}",
-                socket_path.display()
-            );
-        }
-        if socket_path.exists() && std::os::unix::net::UnixStream::connect(&socket_path).is_ok() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-
-    // 5. Wait for the HTTP UDS socket (the MCP bridge needs /mcp via UDS).
+    // 4. Wait for the HTTP UDS socket (the MCP bridge needs /mcp via UDS).
     let http_socket_path = socket_path.with_extension("http.sock");
     let http_deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {

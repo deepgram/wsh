@@ -42,7 +42,7 @@ fn create_test_state() -> (api::AppState, mpsc::Receiver<Bytes>, mpsc::Sender<By
         activity: wsh::activity::ActivityTracker::new(),
         focus: FocusTracker::new(),
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
-        visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
+        visual_update_tx: tokio::sync::broadcast::channel::<wsh::session::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
         cancelled: tokio_util::sync::CancellationToken::new(),
     };
@@ -208,7 +208,7 @@ async fn test_ws_subscribe_then_events() {
         activity: wsh::activity::ActivityTracker::new(),
         focus: FocusTracker::new(),
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
-        visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
+        visual_update_tx: tokio::sync::broadcast::channel::<wsh::session::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
         cancelled: tokio_util::sync::CancellationToken::new(),
     };
@@ -355,7 +355,7 @@ async fn test_ws_methods_interleaved_with_events() {
         activity: wsh::activity::ActivityTracker::new(),
         focus: FocusTracker::new(),
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
-        visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
+        visual_update_tx: tokio::sync::broadcast::channel::<wsh::session::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
         cancelled: tokio_util::sync::CancellationToken::new(),
     };

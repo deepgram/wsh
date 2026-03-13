@@ -111,10 +111,11 @@ async fn test_wsh_stop_shuts_down_server() {
         std::thread::sleep(Duration::from_millis(50));
     }
 
-    // Socket file should be gone
+    // HTTP socket file should be gone
+    let http_socket_path = socket_path.with_extension("http.sock");
     assert!(
-        !socket_path.exists(),
-        "socket file should be removed after stop"
+        !http_socket_path.exists(),
+        "HTTP socket file should be removed after stop"
     );
 }
 

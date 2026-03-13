@@ -421,7 +421,7 @@ async fn handle_ws_json(
     let mut pending_idle: Option<PendingIdle> = None;
 
     // Visual update subscription (overlays/panels) — lazily created when EventType::Overlay is subscribed
-    let mut visual_update_rx: Option<tokio::sync::broadcast::Receiver<crate::protocol::VisualUpdate>> = None;
+    let mut visual_update_rx: Option<tokio::sync::broadcast::Receiver<crate::session::VisualUpdate>> = None;
 
     // Raw PTY output subscription — lazily created when EventType::Output is subscribed
     let mut raw_output_rx: Option<tokio::sync::broadcast::Receiver<Bytes>> = None;
@@ -636,7 +636,7 @@ async fn handle_ws_json(
                 }
             } => {
                 match visual_event {
-                    Ok(crate::protocol::VisualUpdate::OverlaysChanged) => {
+                    Ok(crate::session::VisualUpdate::OverlaysChanged) => {
                         let mode = *session.screen_mode.read();
                         let overlays = session.overlays.list_by_mode(mode);
                         let event = serde_json::json!({"type": "overlay_sync", "overlays": overlays});
@@ -644,7 +644,7 @@ async fn handle_ws_json(
                             ws_send!(ws_mpsc_tx, Message::Text(json.into()));
                         }
                     }
-                    Ok(crate::protocol::VisualUpdate::PanelsChanged) => {
+                    Ok(crate::session::VisualUpdate::PanelsChanged) => {
                         let panels = session.panels.list();
                         let event = serde_json::json!({"type": "panel_sync", "panels": panels});
                         if let Ok(json) = serde_json::to_string(&event) {
@@ -2698,7 +2698,7 @@ pub(super) async fn overlay_create(
     let current_mode = *session.screen_mode.read();
     let id = session.overlays.create(req.x, req.y, req.z, req.width, req.height, req.background, req.spans, req.focusable, current_mode)
         .map_err(|e| ApiError::ResourceLimitReached(e.to_string()))?;
-    let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
+    let _ = session.visual_update_tx.send(crate::session::VisualUpdate::OverlaysChanged);
     Ok((StatusCode::CREATED, Json(CreateOverlayResponse { id })))
 }
 
@@ -2730,7 +2730,7 @@ pub(super) async fn overlay_update(
 ) -> Result<StatusCode, ApiError> {
     let session = get_session(&state.sessions, &name)?;
     if session.overlays.update(&id, req.spans).map_err(|e| ApiError::InvalidOverlay(e.into()))? {
-        let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
+        let _ = session.visual_update_tx.send(crate::session::VisualUpdate::OverlaysChanged);
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::OverlayNotFound(id))
@@ -2744,7 +2744,7 @@ pub(super) async fn overlay_patch(
 ) -> Result<StatusCode, ApiError> {
     let session = get_session(&state.sessions, &name)?;
     if session.overlays.move_to(&id, req.x, req.y, req.z, req.width, req.height, req.background) {
-        let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
+        let _ = session.visual_update_tx.send(crate::session::VisualUpdate::OverlaysChanged);
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::OverlayNotFound(id))
@@ -2758,7 +2758,7 @@ pub(super) async fn overlay_delete(
     let session = get_session(&state.sessions, &name)?;
     if session.overlays.delete(&id) {
         session.focus.clear_if_focused(&id);
-        let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
+        let _ = session.visual_update_tx.send(crate::session::VisualUpdate::OverlaysChanged);
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::OverlayNotFound(id))
@@ -2772,7 +2772,7 @@ pub(super) async fn overlay_clear(
     let session = get_session(&state.sessions, &name)?;
     session.overlays.clear();
     session.focus.unfocus();
-    let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
+    let _ = session.visual_update_tx.send(crate::session::VisualUpdate::OverlaysChanged);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -2783,7 +2783,7 @@ pub(super) async fn overlay_update_spans(
 ) -> Result<StatusCode, ApiError> {
     let session = get_session(&state.sessions, &name)?;
     if session.overlays.update_spans(&id, &req.spans).map_err(|e| ApiError::InvalidOverlay(e.into()))? {
-        let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
+        let _ = session.visual_update_tx.send(crate::session::VisualUpdate::OverlaysChanged);
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::OverlayNotFound(id))
@@ -2797,7 +2797,7 @@ pub(super) async fn overlay_region_write(
 ) -> Result<StatusCode, ApiError> {
     let session = get_session(&state.sessions, &name)?;
     if session.overlays.region_write(&id, req.writes).map_err(|e| ApiError::InvalidOverlay(e.into()))? {
-        let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
+        let _ = session.visual_update_tx.send(crate::session::VisualUpdate::OverlaysChanged);
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::OverlayNotFound(id))
@@ -2857,7 +2857,7 @@ pub(super) async fn panel_create(
         .map_err(|e| ApiError::ResourceLimitReached(e.to_string()))?;
     panel::reconfigure_layout(&session.panels, &session.terminal_size, &session.pty, &session.parser)
         .await;
-    let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::PanelsChanged);
+    let _ = session.visual_update_tx.send(crate::session::VisualUpdate::PanelsChanged);
     Ok((StatusCode::CREATED, Json(CreatePanelResponse { id })))
 }
 
@@ -2913,7 +2913,7 @@ pub(super) async fn panel_update(
         panel::flush_panel_content(&session.panels, &id, &session.terminal_size);
     }
 
-    let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::PanelsChanged);
+    let _ = session.visual_update_tx.send(crate::session::VisualUpdate::PanelsChanged);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -2948,7 +2948,7 @@ pub(super) async fn panel_patch(
         panel::flush_panel_content(&session.panels, &id, &session.terminal_size);
     }
 
-    let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::PanelsChanged);
+    let _ = session.visual_update_tx.send(crate::session::VisualUpdate::PanelsChanged);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -2963,7 +2963,7 @@ pub(super) async fn panel_delete(
     session.focus.clear_if_focused(&id);
     panel::reconfigure_layout(&session.panels, &session.terminal_size, &session.pty, &session.parser)
         .await;
-    let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::PanelsChanged);
+    let _ = session.visual_update_tx.send(crate::session::VisualUpdate::PanelsChanged);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -2976,7 +2976,7 @@ pub(super) async fn panel_clear(
     session.focus.unfocus();
     panel::reconfigure_layout(&session.panels, &session.terminal_size, &session.pty, &session.parser)
         .await;
-    let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::PanelsChanged);
+    let _ = session.visual_update_tx.send(crate::session::VisualUpdate::PanelsChanged);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -2988,7 +2988,7 @@ pub(super) async fn panel_update_spans(
     let session = get_session(&state.sessions, &name)?;
     if session.panels.update_spans(&id, &req.spans).map_err(|e| ApiError::InvalidOverlay(e.into()))? {
         panel::flush_panel_content(&session.panels, &id, &session.terminal_size);
-        let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::PanelsChanged);
+        let _ = session.visual_update_tx.send(crate::session::VisualUpdate::PanelsChanged);
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::PanelNotFound(id))
@@ -3003,7 +3003,7 @@ pub(super) async fn panel_region_write(
     let session = get_session(&state.sessions, &name)?;
     if session.panels.region_write(&id, req.writes).map_err(|e| ApiError::InvalidOverlay(e.into()))? {
         panel::flush_panel_content(&session.panels, &id, &session.terminal_size);
-        let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::PanelsChanged);
+        let _ = session.visual_update_tx.send(crate::session::VisualUpdate::PanelsChanged);
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::PanelNotFound(id))
@@ -3522,8 +3522,8 @@ pub(super) async fn exit_alt_screen(
         &session.parser,
     )
     .await;
-    let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
-    let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::PanelsChanged);
+    let _ = session.visual_update_tx.send(crate::session::VisualUpdate::OverlaysChanged);
+    let _ = session.visual_update_tx.send(crate::session::VisualUpdate::PanelsChanged);
     Ok(StatusCode::NO_CONTENT)
 }
 

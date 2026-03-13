@@ -95,7 +95,7 @@ async fn test_http_post_input_reaches_pty_and_produces_output() {
         activity: wsh::activity::ActivityTracker::new(),
         focus: FocusTracker::new(),
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
-        visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
+        visual_update_tx: tokio::sync::broadcast::channel::<wsh::session::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
         cancelled: tokio_util::sync::CancellationToken::new(),
     };
@@ -266,7 +266,7 @@ async fn test_scrollback_endpoint_with_real_pty() {
         activity: wsh::activity::ActivityTracker::new(),
         focus: FocusTracker::new(),
         detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
-        visual_update_tx: tokio::sync::broadcast::channel::<wsh::protocol::VisualUpdate>(16).0,
+        visual_update_tx: tokio::sync::broadcast::channel::<wsh::session::VisualUpdate>(16).0,
         screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
         cancelled: tokio_util::sync::CancellationToken::new(),
     };

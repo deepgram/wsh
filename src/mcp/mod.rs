@@ -1207,7 +1207,7 @@ impl WshMcpServer {
 
                 let _ = session
                     .visual_update_tx
-                    .send(crate::protocol::VisualUpdate::OverlaysChanged);
+                    .send(crate::session::VisualUpdate::OverlaysChanged);
 
                 let result = serde_json::json!({
                     "status": "updated",
@@ -1247,7 +1247,7 @@ impl WshMcpServer {
 
                 let _ = session
                     .visual_update_tx
-                    .send(crate::protocol::VisualUpdate::OverlaysChanged);
+                    .send(crate::session::VisualUpdate::OverlaysChanged);
 
                 let result = serde_json::json!({
                     "status": "created",
@@ -1294,7 +1294,7 @@ impl WshMcpServer {
                 session.focus.clear_if_focused(&id);
                 let _ = session
                     .visual_update_tx
-                    .send(crate::protocol::VisualUpdate::OverlaysChanged);
+                    .send(crate::session::VisualUpdate::OverlaysChanged);
 
                 let result = serde_json::json!({
                     "status": "removed",
@@ -1309,7 +1309,7 @@ impl WshMcpServer {
                 session.focus.unfocus();
                 let _ = session
                     .visual_update_tx
-                    .send(crate::protocol::VisualUpdate::OverlaysChanged);
+                    .send(crate::session::VisualUpdate::OverlaysChanged);
 
                 let result = serde_json::json!({
                     "status": "cleared",
@@ -1448,7 +1448,7 @@ impl WshMcpServer {
 
                 let _ = session
                     .visual_update_tx
-                    .send(crate::protocol::VisualUpdate::PanelsChanged);
+                    .send(crate::session::VisualUpdate::PanelsChanged);
 
                 let result = serde_json::json!({
                     "status": "updated",
@@ -1491,7 +1491,7 @@ impl WshMcpServer {
 
                 let _ = session
                     .visual_update_tx
-                    .send(crate::protocol::VisualUpdate::PanelsChanged);
+                    .send(crate::session::VisualUpdate::PanelsChanged);
 
                 let result = serde_json::json!({
                     "status": "created",
@@ -1547,7 +1547,7 @@ impl WshMcpServer {
 
                 let _ = session
                     .visual_update_tx
-                    .send(crate::protocol::VisualUpdate::PanelsChanged);
+                    .send(crate::session::VisualUpdate::PanelsChanged);
 
                 let result = serde_json::json!({
                     "status": "removed",
@@ -1571,7 +1571,7 @@ impl WshMcpServer {
 
                 let _ = session
                     .visual_update_tx
-                    .send(crate::protocol::VisualUpdate::PanelsChanged);
+                    .send(crate::session::VisualUpdate::PanelsChanged);
 
                 let result = serde_json::json!({
                     "status": "cleared",
@@ -1776,10 +1776,10 @@ impl WshMcpServer {
                     .await;
                     let _ = session
                         .visual_update_tx
-                        .send(crate::protocol::VisualUpdate::OverlaysChanged);
+                        .send(crate::session::VisualUpdate::OverlaysChanged);
                     let _ = session
                         .visual_update_tx
-                        .send(crate::protocol::VisualUpdate::PanelsChanged);
+                        .send(crate::session::VisualUpdate::PanelsChanged);
                 }
             }
         }

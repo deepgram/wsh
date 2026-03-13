@@ -384,7 +384,7 @@ mod tests {
             activity: ActivityTracker::new(),
             focus: crate::input::FocusTracker::new(),
             detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
-            visual_update_tx: tokio::sync::broadcast::channel::<crate::protocol::VisualUpdate>(16).0,
+            visual_update_tx: tokio::sync::broadcast::channel::<crate::session::VisualUpdate>(16).0,
             screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(crate::overlay::ScreenMode::Normal)),
             cancelled: tokio_util::sync::CancellationToken::new(),
         };

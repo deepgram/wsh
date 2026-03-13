@@ -9,7 +9,6 @@ pub mod mcp;
 pub mod overlay;
 pub mod panel;
 pub mod parser;
-pub mod protocol;
 pub mod pty;
 pub mod server;
 pub mod session;

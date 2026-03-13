@@ -20,7 +20,7 @@ use std::sync::Arc;
 use thiserror::Error;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use wsh::{
-    api, client,
+    api,
     server,
     session::SessionRegistry,
     shutdown::ShutdownCoordinator,
@@ -272,9 +272,11 @@ fn is_loopback(addr: &SocketAddr) -> bool {
     addr.ip().is_loopback()
 }
 
-/// Resolve the Unix socket path from explicit `--socket` or `-L` server name.
+/// Resolve the base socket path from explicit `--socket` or `-L` server name.
 ///
 /// `--socket` takes priority; if absent, derives from the server name.
+/// Used as the `--socket` argument when spawning server daemons; the server
+/// derives the HTTP socket path from this base path.
 fn resolve_socket_path(socket: Option<PathBuf>, server_name: &str) -> PathBuf {
     socket.unwrap_or_else(|| server::socket_path_for_instance(server_name))
 }
@@ -592,22 +594,17 @@ async fn run_server(
         tracing::info!(rps, "rate limiting configured");
     }
 
-    let socket_token = token.clone();
-    let socket_hostname = state.hostname.clone();
-    let socket_fed_state = server::FederationState {
-        federation: state.federation.clone(),
-        backends: state.backends.clone(),
-        config_path: state.federation_config_path.clone(),
-        local_token: state.local_token.clone(),
-        default_backend_token: state.default_backend_token.clone(),
-        ip_access: state.ip_access.clone(),
-        server_id: state.server_id.clone(),
-    };
     if let Some(ref prefix) = base_prefix {
         tracing::info!(prefix = %prefix, "base path prefix configured");
     }
     let router_bind = bind.unwrap_or_else(|| "127.0.0.1:0".parse().unwrap());
     let app = api::router(state, api::RouterConfig { token: token.clone(), bind: router_bind, cors_origins, rate_limit, base_prefix: base_prefix.clone() });
+
+    // Acquire instance lock (flock) before binding any sockets.
+    // The lock file is held for the server's lifetime and released on exit.
+    let lock_path = server::lock_path_for_instance(&server_name);
+    let _instance_lock = server::acquire_instance_lock(&lock_path)
+        .map_err(WshError::Io)?;
 
     // Cancellation token for HTTP server shutdown (supports multiple listeners)
     let http_cancel = tokio_util::sync::CancellationToken::new();
@@ -738,24 +735,6 @@ async fn run_server(
         tracing::info!("HTTP API available via Unix socket only (use --bind for TCP)");
     };
 
-    // Acquire instance lock (flock) before binding the socket.
-    // The lock file is held for the server's lifetime and released on exit.
-    let socket_path = resolve_socket_path(socket, &server_name);
-    let lock_path = server::lock_path_for_instance(&server_name);
-    let _instance_lock = server::acquire_instance_lock(&lock_path)
-        .map_err(WshError::Io)?;
-
-    let socket_path_for_cleanup = socket_path.clone();
-    let socket_sessions = sessions.clone();
-    let socket_cancel = tokio_util::sync::CancellationToken::new();
-    let socket_cancel_clone = socket_cancel.clone();
-    let shutdown_request_clone = shutdown_request.clone();
-    let socket_handle = tokio::spawn(async move {
-        if let Err(e) = server::serve(socket_sessions, &socket_path, socket_cancel_clone, socket_token, shutdown_request_clone, socket_hostname, socket_fed_state).await {
-            tracing::error!(?e, "Unix socket server error");
-        }
-    });
-
     tracing::info!("wsh server ready");
 
     // Ephemeral shutdown monitor: when the last session exits in non-persistent
@@ -857,14 +836,9 @@ async fn run_server(
 
     // 1. Stop accepting new connections
     http_cancel.cancel();
-    socket_cancel.cancel();
 
-    // Remove socket files immediately. Once listeners are cancelled they
-    // will never accept again, so the files are just stale markers.
-    if socket_path_for_cleanup.exists() {
-        let _ = std::fs::remove_file(&socket_path_for_cleanup);
-        tracing::debug!(path = %socket_path_for_cleanup.display(), "removed binary socket file");
-    }
+    // Remove socket file immediately. Once the listener is cancelled it
+    // will never accept again, so the file is just a stale marker.
     if http_socket_path_for_cleanup.exists() {
         let _ = std::fs::remove_file(&http_socket_path_for_cleanup);
         tracing::debug!(path = %http_socket_path_for_cleanup.display(), "removed HTTP socket file");
@@ -901,9 +875,6 @@ async fn run_server(
     if tokio::time::timeout(
         std::time::Duration::from_secs(5),
         async {
-            if let Err(e) = socket_handle.await {
-                tracing::warn!(?e, "binary socket server task panicked");
-            }
             if let Err(e) = uds_handle.await {
                 tracing::warn!(?e, "HTTP-over-UDS server task panicked");
             }
@@ -999,52 +970,28 @@ async fn run_mcp(
     tracing::info!("wsh mcp stdio bridge starting");
 
     let socket_path = resolve_socket_path(socket.clone(), &server_name);
+    let http_socket_path = resolve_http_socket_path(socket.clone(), &server_name);
 
     // Connect to existing server or spawn one (with file lock to prevent races)
-    match client::Client::connect(&socket_path).await {
-        Ok(_) => {
-            tracing::debug!("connected to existing server");
-        }
-        Err(_) => {
-            let lock_path = server::spawn_lock_path_for_instance(&server_name);
-            let lp = lock_path.clone();
-            let _lock = tokio::task::spawn_blocking(move || acquire_spawn_lock(&lp))
-                .await
-                .map_err(WshError::TaskJoin)??;
-            // Re-check after lock
-            match client::Client::connect(&socket_path).await {
-                Ok(_) => {
-                    tracing::debug!("connected to server (spawned by another client)");
-                }
-                Err(_) => {
-                    tracing::debug!("no server running, spawning daemon");
-                    spawn_server_daemon(&socket_path, &server_name)?;
-                    wait_for_socket(&socket_path).await?;
-                }
-            }
-        }
-    }
+    let http_client = UdsHttpClient::new(&http_socket_path);
+    if !http_client.health_check().await {
+        tracing::debug!("no server running, acquiring spawn lock");
+        let lock_path = server::spawn_lock_path_for_instance(&server_name);
+        let lp = lock_path.clone();
+        let _lock = tokio::task::spawn_blocking(move || acquire_spawn_lock(&lp))
+            .await
+            .map_err(WshError::TaskJoin)??;
 
-    // Resolve the HTTP UDS socket path for the MCP endpoint
-    let http_socket_path = socket.as_ref()
-        .map(|p| p.with_extension("http.sock"))
-        .unwrap_or_else(|| server::http_socket_path_for_instance(&server_name));
-
-    // Wait for the HTTP UDS socket to appear
-    {
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-        loop {
-            if http_socket_path.exists() {
-                break;
-            }
-            if tokio::time::Instant::now() > deadline {
-                return Err(WshError::Io(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    format!("timed out waiting for HTTP socket at {}", http_socket_path.display()),
-                )));
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        // Re-check after acquiring the lock
+        if !http_client.health_check().await {
+            tracing::debug!("spawning daemon");
+            spawn_server_daemon(&socket_path, &server_name)?;
+            wait_for_http_socket(&http_socket_path).await?;
+        } else {
+            tracing::debug!("connected to server (spawned by another client)");
         }
+    } else {
+        tracing::debug!("connected to existing server");
     }
 
     let uds_http = Arc::new(wsh::uds_client::UdsHttpClient::new(&http_socket_path));
@@ -1343,28 +1290,6 @@ fn spawn_server_daemon(
     });
 
     Ok(())
-}
-
-/// Wait for the Unix socket to become connectable.
-async fn wait_for_socket(socket_path: &std::path::Path) -> Result<(), WshError> {
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        if tokio::time::Instant::now() > deadline {
-            return Err(WshError::Io(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                format!(
-                    "timed out waiting for server socket at {}",
-                    socket_path.display()
-                ),
-            )));
-        }
-        match client::Client::connect(socket_path).await {
-            Ok(_) => return Ok(()),
-            Err(_) => {
-                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            }
-        }
-    }
 }
 
 /// Wait for the HTTP-over-UDS socket to become connectable and healthy.
@@ -2011,7 +1936,7 @@ async fn run_servers(
 }
 
 async fn run_stop(socket: Option<PathBuf>, server_name: String) -> Result<(), WshError> {
-    let http_socket_path = resolve_http_socket_path(socket.clone(), &server_name);
+    let http_socket_path = resolve_http_socket_path(socket, &server_name);
     let client = wsh::uds_client::UdsHttpClient::new(&http_socket_path);
 
     let resp = match client.post_json("/server/shutdown", &serde_json::json!({})).await {
@@ -2029,10 +1954,9 @@ async fn run_stop(socket: Option<PathBuf>, server_name: String) -> Result<(), Ws
         std::process::exit(1);
     }
 
-    // Wait for the socket file to disappear (server cleanup)
-    let socket_path = resolve_socket_path(socket, &server_name);
+    // Wait for the HTTP socket file to disappear (server cleanup)
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
-    while socket_path.exists() {
+    while http_socket_path.exists() {
         if tokio::time::Instant::now() > deadline {
             eprintln!("wsh stop: server acknowledged shutdown but socket file still exists after 10s");
             std::process::exit(1);

@@ -11,8 +11,18 @@ use crate::input::{FocusTracker, InputBroadcaster, InputMode};
 use crate::overlay::{OverlayStore, ScreenMode};
 use crate::panel::PanelStore;
 use crate::parser::Parser;
-use crate::protocol::VisualUpdate;
 use crate::pty::{Pty, PtyError, SpawnCommand};
+
+/// Visual state change notification (internal, not a wire type).
+///
+/// Sent via `Session::visual_update_tx` when overlays or panels change,
+/// allowing subscribers (WebSocket handlers, socket clients) to push
+/// updated visual state to connected clients.
+#[derive(Debug, Clone)]
+pub enum VisualUpdate {
+    OverlaysChanged,
+    PanelsChanged,
+}
 use crate::shutdown::ShutdownCoordinator;
 use crate::terminal::TerminalSize;
 

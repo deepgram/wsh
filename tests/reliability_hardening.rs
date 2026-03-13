@@ -1,9 +1,8 @@
-//! Integration tests for reliability hardening features (Phases 3-7).
+//! Integration tests for reliability hardening features (Phases 4-7).
 //!
 //! These tests verify the defensive measures and resource limits added across
 //! the reliability hardening implementation phases:
 //!
-//! - Phase 3b: Socket initial frame timeout
 //! - Phase 4: Max session count enforcement (registry + HTTP)
 //! - Phase 6: Session cancellation token on removal
 //! - Phase 7b: Drain detaches and cancels sessions
@@ -354,73 +353,3 @@ async fn test_drain_empty_registry_is_noop() {
     assert_eq!(registry.len(), 0);
 }
 
-// ── Phase 3b: Socket initial frame timeout ──────────────────────────────────
-
-#[tokio::test]
-async fn test_socket_initial_frame_timeout() {
-    use tempfile::TempDir;
-    use tokio::net::UnixStream;
-    use wsh::protocol::Frame;
-
-    let dir = TempDir::new().unwrap();
-    let socket_path = dir.path().join("test-timeout.sock");
-
-    let sessions = SessionRegistry::new();
-    let cancel = tokio_util::sync::CancellationToken::new();
-    let cancel_clone = cancel.clone();
-    let path_clone = socket_path.clone();
-
-    // Start the socket server
-    tokio::spawn(async move {
-        wsh::server::serve(sessions, &path_clone, cancel_clone, None, tokio_util::sync::CancellationToken::new(), "test".to_string(), wsh::server::FederationState::default())
-            .await
-            .unwrap();
-    });
-
-    // Wait for socket to appear
-    for _ in 0..50 {
-        if socket_path.exists() {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
-    assert!(socket_path.exists(), "socket should exist");
-
-    // Connect but don't send anything
-    let mut stream = UnixStream::connect(&socket_path).await.unwrap();
-
-    // The server should close the connection after ~5 seconds (the timeout).
-    // We try to read a frame; we should get an error (EOF or timeout).
-    let start = tokio::time::Instant::now();
-    let result = tokio::time::timeout(
-        std::time::Duration::from_secs(8),
-        Frame::read_from(&mut stream),
-    )
-    .await;
-
-    let elapsed = start.elapsed();
-
-    // The read should complete (either EOF or error) before our 8s outer timeout
-    assert!(
-        result.is_ok(),
-        "frame read should complete before outer timeout (server should disconnect idle client)"
-    );
-
-    // The inner result should be an error (EOF / broken pipe)
-    let inner = result.unwrap();
-    assert!(
-        inner.is_err(),
-        "reading from a timed-out connection should return an error"
-    );
-
-    // It should have taken approximately 5 seconds (the server's timeout),
-    // not our full 8 seconds
-    assert!(
-        elapsed.as_secs() >= 4 && elapsed.as_secs() <= 7,
-        "timeout should occur around 5 seconds, took {:.1}s",
-        elapsed.as_secs_f64()
-    );
-
-    // Clean up
-    cancel.cancel();
-}
