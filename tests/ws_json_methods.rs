@@ -437,3 +437,208 @@ async fn test_ws_methods_interleaved_with_events() {
         "should receive method response even while events are streaming"
     );
 }
+
+#[tokio::test]
+async fn test_ws_subscribe_overlay_events() {
+    let (state, _rx, _parser_tx) = create_test_state();
+    let app = api::router(state, api::RouterConfig::default());
+    let addr = start_server(app).await;
+
+    let (ws, _) = connect_async(format!("ws://{}/sessions/test/ws/json", addr))
+        .await
+        .unwrap();
+    let (mut tx, mut rx) = ws.split();
+
+    // Read "connected" message
+    let msg = recv_json(&mut rx).await;
+    assert_eq!(msg["connected"], true);
+
+    // Subscribe to overlay events
+    tx.send(Message::Text(
+        serde_json::json!({
+            "method": "subscribe",
+            "params": {"events": ["overlay"]}
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+
+    // Read subscribe response
+    let resp = recv_json(&mut rx).await;
+    assert_eq!(resp["method"], "subscribe");
+    assert!(resp["result"]["events"].is_array());
+
+    // After subscribe, we expect: sync event, initial overlay_sync, initial panel_sync
+    // Collect the next messages to find each one
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    let mut found_sync = false;
+    let mut found_initial_overlay_sync = false;
+    let mut found_initial_panel_sync = false;
+
+    while tokio::time::Instant::now() < deadline
+        && !(found_sync && found_initial_overlay_sync && found_initial_panel_sync)
+    {
+        if let Ok(Some(Ok(Message::Text(text)))) =
+            tokio::time::timeout(Duration::from_millis(500), rx.next()).await
+        {
+            let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+            if json.get("event") == Some(&serde_json::json!("sync")) {
+                found_sync = true;
+            } else if json.get("type") == Some(&serde_json::json!("overlay_sync")) {
+                // Initial overlay_sync should have empty overlays
+                assert!(json["overlays"].is_array());
+                assert_eq!(json["overlays"].as_array().unwrap().len(), 0);
+                found_initial_overlay_sync = true;
+            } else if json.get("type") == Some(&serde_json::json!("panel_sync")) {
+                // Initial panel_sync should have empty panels
+                assert!(json["panels"].is_array());
+                assert_eq!(json["panels"].as_array().unwrap().len(), 0);
+                found_initial_panel_sync = true;
+            }
+        }
+    }
+    assert!(
+        found_initial_overlay_sync,
+        "should receive initial overlay_sync with empty overlays"
+    );
+    assert!(
+        found_initial_panel_sync,
+        "should receive initial panel_sync with empty panels"
+    );
+
+    // Create an overlay via HTTP POST
+    let http = reqwest::Client::new();
+    let resp = http
+        .post(format!("http://{}/sessions/test/overlay", addr))
+        .json(&serde_json::json!({
+            "x": 0, "y": 0, "width": 10, "height": 1,
+            "spans": [{"text": "hello"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+
+    // Read WebSocket messages until we find an overlay_sync with the new overlay
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    let mut found_overlay_event = false;
+    while tokio::time::Instant::now() < deadline {
+        if let Ok(Some(Ok(Message::Text(text)))) =
+            tokio::time::timeout(Duration::from_millis(500), rx.next()).await
+        {
+            let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+            if json.get("type") == Some(&serde_json::json!("overlay_sync")) {
+                let overlays = json["overlays"].as_array().unwrap();
+                assert_eq!(overlays.len(), 1);
+                // Verify the overlay contains "hello" text in its spans
+                let spans = overlays[0]["spans"].as_array().unwrap();
+                assert!(
+                    spans.iter().any(|s| s["text"] == "hello"),
+                    "overlay spans should contain 'hello', got: {:?}",
+                    spans
+                );
+                found_overlay_event = true;
+                break;
+            }
+        }
+    }
+    assert!(
+        found_overlay_event,
+        "should receive overlay_sync event after creating overlay via HTTP"
+    );
+}
+
+#[tokio::test]
+async fn test_ws_subscribe_panel_events() {
+    let (state, _rx, _parser_tx) = create_test_state();
+    let app = api::router(state, api::RouterConfig::default());
+    let addr = start_server(app).await;
+
+    let (ws, _) = connect_async(format!("ws://{}/sessions/test/ws/json", addr))
+        .await
+        .unwrap();
+    let (mut tx, mut rx) = ws.split();
+
+    // Read "connected" message
+    let _ = recv_json(&mut rx).await;
+
+    // Subscribe to overlay events (which includes panel events)
+    tx.send(Message::Text(
+        serde_json::json!({
+            "method": "subscribe",
+            "params": {"events": ["overlay"]}
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+
+    // Read subscribe response
+    let resp = recv_json(&mut rx).await;
+    assert_eq!(resp["method"], "subscribe");
+
+    // Drain initial sync events (sync, overlay_sync, panel_sync)
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    let mut initial_done = 0;
+    while tokio::time::Instant::now() < deadline && initial_done < 3 {
+        if let Ok(Some(Ok(Message::Text(text)))) =
+            tokio::time::timeout(Duration::from_millis(500), rx.next()).await
+        {
+            let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+            if json.get("event") == Some(&serde_json::json!("sync"))
+                || json.get("type") == Some(&serde_json::json!("overlay_sync"))
+                || json.get("type") == Some(&serde_json::json!("panel_sync"))
+            {
+                initial_done += 1;
+            }
+        }
+    }
+    assert_eq!(initial_done, 3, "should receive all three initial sync events");
+
+    // Create a panel via HTTP POST
+    let http = reqwest::Client::new();
+    let resp = http
+        .post(format!("http://{}/sessions/test/panel", addr))
+        .json(&serde_json::json!({
+            "position": "bottom",
+            "height": 1,
+            "spans": [{"text": "status"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+
+    // Read WebSocket messages until we find a panel_sync with the new panel
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    let mut found_panel_event = false;
+    while tokio::time::Instant::now() < deadline {
+        if let Ok(Some(Ok(Message::Text(text)))) =
+            tokio::time::timeout(Duration::from_millis(500), rx.next()).await
+        {
+            let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+            if json.get("type") == Some(&serde_json::json!("panel_sync")) {
+                let panels = json["panels"].as_array().unwrap();
+                if !panels.is_empty() {
+                    assert_eq!(panels.len(), 1);
+                    // Verify the panel contains "status" text in its spans
+                    let spans = panels[0]["spans"].as_array().unwrap();
+                    assert!(
+                        spans.iter().any(|s| s["text"] == "status"),
+                        "panel spans should contain 'status', got: {:?}",
+                        spans
+                    );
+                    found_panel_event = true;
+                    break;
+                }
+            }
+        }
+    }
+    assert!(
+        found_panel_event,
+        "should receive panel_sync event after creating panel via HTTP"
+    );
+}
