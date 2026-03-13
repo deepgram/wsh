@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "wsh": {
-      "command": "wsh",
-      "args": ["mcp"]
-    }
-  }
-}
