@@ -356,6 +356,7 @@ mod tests {
             local_token: None,
             default_backend_token: None,
             server_id: "test-server-id".to_string(),
+            shutdown_notify: tokio_util::sync::CancellationToken::new(),
         };
 
         let request = ReadResourceRequestParams {
@@ -384,6 +385,7 @@ mod tests {
             local_token: None,
             default_backend_token: None,
             server_id: "test-server-id".to_string(),
+            shutdown_notify: tokio_util::sync::CancellationToken::new(),
         };
 
         let request = ReadResourceRequestParams {
@@ -412,6 +414,7 @@ mod tests {
             local_token: None,
             default_backend_token: None,
             server_id: "test-server-id".to_string(),
+            shutdown_notify: tokio_util::sync::CancellationToken::new(),
         };
 
         let request = ReadResourceRequestParams {
@@ -450,6 +453,7 @@ mod tests {
             local_token: None,
             default_backend_token: None,
             server_id: "test-server-id".to_string(),
+            shutdown_notify: tokio_util::sync::CancellationToken::new(),
         };
 
         let request = ReadResourceRequestParams {
@@ -480,6 +484,7 @@ mod tests {
             local_token: None,
             default_backend_token: None,
             server_id: "test-server-id".to_string(),
+            shutdown_notify: tokio_util::sync::CancellationToken::new(),
         };
 
         let result = list_resources(&state).await.unwrap();

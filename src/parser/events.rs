@@ -85,6 +85,7 @@ pub enum EventType {
     Input,
     Overlay,
     Activity,
+    Output,
 }
 
 #[cfg(test)]

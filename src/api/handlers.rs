@@ -420,6 +420,12 @@ async fn handle_ws_json(
 
     let mut pending_idle: Option<PendingIdle> = None;
 
+    // Visual update subscription (overlays/panels) — lazily created when EventType::Overlay is subscribed
+    let mut visual_update_rx: Option<tokio::sync::broadcast::Receiver<crate::protocol::VisualUpdate>> = None;
+
+    // Raw PTY output subscription — lazily created when EventType::Output is subscribed
+    let mut raw_output_rx: Option<tokio::sync::broadcast::Receiver<Bytes>> = None;
+
     // Activity subscription: background task signals Running/Idle transitions
     let mut activity_sub_rx: Option<tokio::sync::mpsc::Receiver<ActivityStateChange>> = None;
     let mut activity_sub_handle: Option<tokio::task::JoinHandle<()>> = None;
@@ -622,6 +628,70 @@ async fn handle_ws_json(
                 }
             }
 
+            // Visual update subscription (overlay/panel changes)
+            visual_event = async {
+                match &mut visual_update_rx {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                match visual_event {
+                    Ok(crate::protocol::VisualUpdate::OverlaysChanged) => {
+                        let mode = *session.screen_mode.read();
+                        let overlays = session.overlays.list_by_mode(mode);
+                        let event = serde_json::json!({"type": "overlay_sync", "overlays": overlays});
+                        if let Ok(json) = serde_json::to_string(&event) {
+                            ws_send!(ws_mpsc_tx, Message::Text(json.into()));
+                        }
+                    }
+                    Ok(crate::protocol::VisualUpdate::PanelsChanged) => {
+                        let panels = session.panels.list();
+                        let event = serde_json::json!({"type": "panel_sync", "panels": panels});
+                        if let Ok(json) = serde_json::to_string(&event) {
+                            ws_send!(ws_mpsc_tx, Message::Text(json.into()));
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        visual_update_rx = None;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(skipped = n, "visual update subscriber lagged");
+                        // Send a full sync on lag
+                        let mode = *session.screen_mode.read();
+                        let overlays = session.overlays.list_by_mode(mode);
+                        let overlay_event = serde_json::json!({"type": "overlay_sync", "overlays": overlays});
+                        if let Ok(json) = serde_json::to_string(&overlay_event) {
+                            ws_send!(ws_mpsc_tx, Message::Text(json.into()));
+                        }
+                        let panels = session.panels.list();
+                        let panel_event = serde_json::json!({"type": "panel_sync", "panels": panels});
+                        if let Ok(json) = serde_json::to_string(&panel_event) {
+                            ws_send!(ws_mpsc_tx, Message::Text(json.into()));
+                        }
+                    }
+                }
+            }
+
+            // Raw PTY output subscription (binary frames)
+            raw_data = async {
+                match &mut raw_output_rx {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                match raw_data {
+                    Ok(data) => {
+                        ws_send!(ws_mpsc_tx, Message::Binary(data));
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        raw_output_rx = None;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(skipped = n, "raw output subscriber lagged");
+                    }
+                }
+            }
+
             // Ping keepalive
             _ = ping_interval.tick() => {
                 if ping_sent && last_pong.elapsed() > PONG_TIMEOUT {
@@ -713,6 +783,24 @@ async fn handle_ws_json(
                                         }
                                     } else {
                                         input_rx = None;
+                                    }
+
+                                    // Set up visual update subscription if needed
+                                    if subscribed_types.contains(&EventType::Overlay) {
+                                        if visual_update_rx.is_none() {
+                                            visual_update_rx = Some(session.visual_update_tx.subscribe());
+                                        }
+                                    } else {
+                                        visual_update_rx = None;
+                                    }
+
+                                    // Set up raw PTY output subscription if needed
+                                    if subscribed_types.contains(&EventType::Output) {
+                                        if raw_output_rx.is_none() {
+                                            raw_output_rx = Some(session.output_rx.subscribe());
+                                        }
+                                    } else {
+                                        raw_output_rx = None;
                                     }
 
                                     // Set up activity subscription if requested
@@ -814,6 +902,21 @@ async fn handle_ws_json(
                                             scrollback_lines,
                                         };
                                         if let Ok(json) = serde_json::to_string(&sync_event) {
+                                            ws_send!(ws_mpsc_tx, Message::Text(json.into()));
+                                        }
+                                    }
+
+                                    // Send initial overlay/panel state if subscribed
+                                    if subscribed_types.contains(&EventType::Overlay) {
+                                        let mode = *session.screen_mode.read();
+                                        let overlays = session.overlays.list_by_mode(mode);
+                                        let overlay_event = serde_json::json!({"type": "overlay_sync", "overlays": overlays});
+                                        if let Ok(json) = serde_json::to_string(&overlay_event) {
+                                            ws_send!(ws_mpsc_tx, Message::Text(json.into()));
+                                        }
+                                        let panels = session.panels.list();
+                                        let panel_event = serde_json::json!({"type": "panel_sync", "panels": panels});
+                                        if let Ok(json) = serde_json::to_string(&panel_event) {
                                             ws_send!(ws_mpsc_tx, Message::Text(json.into()));
                                         }
                                     }
@@ -920,6 +1023,14 @@ async fn handle_ws_json(
                                 ws_send!(ws_mpsc_tx, Message::Text(json.into()));
                             }
                         }
+                    }
+                    Some(Ok(Message::Binary(data))) => {
+                        // Binary frames are raw input bytes
+                        if let Err(e) = session.input_tx.send(data).await {
+                            tracing::error!("Failed to send binary input: {}", e);
+                            break;
+                        }
+                        session.activity.touch();
                     }
                     Some(Ok(Message::Close(_))) | None => break,
                     _ => continue,
@@ -3443,6 +3554,108 @@ pub(super) async fn server_persist_set(
     } else {
         (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "missing or invalid 'persistent' boolean field"})))
     }
+}
+
+// ── UDS-privileged endpoints ──────────────────────────────────────
+
+/// Check that the request arrived over a Unix domain socket.
+/// TCP connections are rejected with 403 Forbidden.
+/// When no transport info is present (e.g., tests without middleware), access is allowed.
+fn require_uds_transport(
+    transport: Option<crate::api::transport::Transport>,
+) -> Result<(), ApiError> {
+    match transport {
+        Some(crate::api::transport::Transport::Uds { .. }) | None => Ok(()),
+        Some(crate::api::transport::Transport::Tcp { .. }) => Err(ApiError::Forbidden(
+            "this endpoint is only available over Unix domain socket".into(),
+        )),
+    }
+}
+
+/// POST /server/shutdown — trigger graceful server shutdown (UDS-only).
+pub(super) async fn server_shutdown(
+    State(state): State<AppState>,
+    transport: Option<axum::Extension<crate::api::transport::Transport>>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_uds_transport(transport.map(|t| t.0))?;
+    state.shutdown_notify.cancel();
+    Ok(Json(serde_json::json!({"status": "shutting_down"})))
+}
+
+/// GET /server/token — return the configured auth token (UDS-only).
+pub(super) async fn server_token(
+    State(state): State<AppState>,
+    transport: Option<axum::Extension<crate::api::transport::Transport>>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_uds_transport(transport.map(|t| t.0))?;
+    Ok(Json(serde_json::json!({"token": state.local_token})))
+}
+
+/// POST /server/reload-config — reload federation config (UDS-only).
+///
+/// Diffs the current backends against the config file, adding new backends
+/// and removing backends no longer in the config.
+pub(super) async fn server_reload_config(
+    State(state): State<AppState>,
+    transport: Option<axum::Extension<crate::api::transport::Transport>>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_uds_transport(transport.map(|t| t.0))?;
+
+    let config_path = state.federation_config_path.as_ref().ok_or_else(|| {
+        ApiError::InvalidRequest("no federation config file configured".into())
+    })?;
+
+    let new_config = match crate::config::FederationConfig::load(config_path) {
+        Ok(Some(c)) => c,
+        Ok(None) => {
+            return Err(ApiError::InvalidRequest(format!(
+                "config file not found: {}",
+                config_path.display()
+            )));
+        }
+        Err(e) => {
+            return Err(ApiError::InternalError(format!(
+                "failed to load config: {}",
+                e
+            )));
+        }
+    };
+
+    let mut manager = state.federation.lock().await;
+    let current_backends = manager.registry().list();
+    let current_addresses: std::collections::HashSet<String> =
+        current_backends.iter().map(|b| b.address.clone()).collect();
+    let new_addresses: std::collections::HashSet<String> = new_config
+        .servers
+        .iter()
+        .map(|s| s.address.clone())
+        .collect();
+
+    // Add backends new in config
+    let mut added = 0usize;
+    for server_config in &new_config.servers {
+        if !current_addresses.contains(&server_config.address) {
+            if manager
+                .add_backend(&server_config.address, server_config.token.as_deref())
+                .is_ok()
+            {
+                added += 1;
+            }
+        }
+    }
+
+    // Remove backends no longer in config
+    let mut removed = 0usize;
+    for backend in &current_backends {
+        if !new_addresses.contains(&backend.address) {
+            if manager.remove_backend_by_address(&backend.address) {
+                removed += 1;
+            }
+        }
+    }
+
+    tracing::info!(added, removed, "federation config reloaded via HTTP");
+    Ok(Json(serde_json::json!({"added": added, "removed": removed})))
 }
 
 // ── Federation: /servers endpoints ─────────────────────────────────

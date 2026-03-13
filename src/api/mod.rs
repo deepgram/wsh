@@ -4,6 +4,7 @@ mod handlers;
 pub mod origin;
 mod proxy;
 pub mod ticket;
+pub mod transport;
 mod web;
 pub mod ws_methods;
 
@@ -89,6 +90,8 @@ pub struct AppState {
     pub default_backend_token: Option<String>,
     /// Unique identifier for this server instance (UUID v4, generated fresh on each start).
     pub server_id: String,
+    /// Cancellation token for triggering server shutdown from HTTP handlers (UDS-only).
+    pub shutdown_notify: tokio_util::sync::CancellationToken,
 }
 
 pub(crate) fn get_session(
@@ -212,6 +215,9 @@ pub fn router(state: AppState, config: RouterConfig) -> Router {
         .route("/idle", get(idle_any))
         .route("/server/info", get(server_info))
         .route("/server/persist", get(server_persist_get).put(server_persist_set))
+        .route("/server/shutdown", post(server_shutdown))
+        .route("/server/token", get(server_token))
+        .route("/server/reload-config", post(server_reload_config))
         .route("/servers", get(list_servers).post(add_server))
         .route("/servers/{hostname}", get(get_server).delete(remove_server))
         .route("/ws/json", get(ws_json_server));
@@ -399,6 +405,7 @@ mod tests {
             local_token: None,
             default_backend_token: None,
             server_id: "test-server-id".to_string(),
+            shutdown_notify: tokio_util::sync::CancellationToken::new(),
         };
         (state, input_rx, "test".to_string())
     }
@@ -990,6 +997,7 @@ mod tests {
             local_token: None,
             default_backend_token: None,
             server_id: "test-server-id".to_string(),
+            shutdown_notify: tokio_util::sync::CancellationToken::new(),
         }
     }
 
@@ -1498,6 +1506,7 @@ mod tests {
                 local_token: None,
                 default_backend_token: None,
                 server_id: "test-server-id".to_string(),
+                shutdown_notify: tokio_util::sync::CancellationToken::new(),
             },
             RouterConfig::default(),
         );
@@ -1565,6 +1574,7 @@ mod tests {
                 local_token: None,
                 default_backend_token: None,
                 server_id: "test-server-id".to_string(),
+                shutdown_notify: tokio_util::sync::CancellationToken::new(),
             },
             RouterConfig::default(),
         );
@@ -1629,6 +1639,7 @@ mod tests {
                 local_token: None,
                 default_backend_token: None,
                 server_id: "test-server-id".to_string(),
+                shutdown_notify: tokio_util::sync::CancellationToken::new(),
             },
             RouterConfig::default(),
         );
