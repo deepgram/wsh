@@ -278,6 +278,16 @@ fn resolve_socket_path(socket: Option<PathBuf>, server_name: &str) -> PathBuf {
     socket.unwrap_or_else(|| server::socket_path_for_instance(server_name))
 }
 
+/// Resolve the HTTP-over-UDS socket path from explicit `--socket` or `-L` server name.
+///
+/// When `--socket` is provided, the HTTP socket is derived by changing the extension
+/// to `.http.sock`. Otherwise, uses the named-instance convention.
+fn resolve_http_socket_path(socket: Option<PathBuf>, server_name: &str) -> PathBuf {
+    socket
+        .map(|p| p.with_extension("http.sock"))
+        .unwrap_or_else(|| server::http_socket_path_for_instance(server_name))
+}
+
 /// Minimum token length for non-localhost bindings.  Tokens shorter than this
 /// are rejected to prevent accidental auth bypass (e.g. `WSH_TOKEN=""`).
 const MIN_TOKEN_LENGTH: usize = 16;
@@ -1540,23 +1550,35 @@ async fn run_attach(
 }
 
 async fn run_list(socket: Option<PathBuf>, server_name: String, server: Option<String>) -> Result<(), WshError> {
-    let socket_path = resolve_socket_path(socket, &server_name);
-    let mut c = match client::Client::connect(&socket_path).await {
-        Ok(c) => c,
+    let http_socket_path = resolve_http_socket_path(socket, &server_name);
+    let client = wsh::uds_client::UdsHttpClient::new(&http_socket_path);
+
+    let path = match server.as_deref() {
+        Some(s) => format!("/sessions?server={}", s),
+        None => "/sessions".to_string(),
+    };
+
+    let resp = match client.get(&path).await {
+        Ok(r) => r,
         Err(e) => {
             eprintln!(
-                "wsh list: failed to connect to server at {}: {}",
-                socket_path.display(),
+                "wsh list: could not connect to wsh server — is the server running? ({})",
                 e
             );
             std::process::exit(1);
         }
     };
 
-    let sessions = match c.list_sessions_on(server).await {
+    if !resp.status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        eprintln!("wsh list: {}", body);
+        std::process::exit(1);
+    }
+
+    let sessions: Vec<serde_json::Value> = match resp.json().await {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("wsh list: {}", e);
+            eprintln!("wsh list: failed to parse response: {}", e);
             std::process::exit(1);
         }
     };
@@ -1569,15 +1591,24 @@ async fn run_list(socket: Option<PathBuf>, server_name: String, server: Option<S
             "NAME", "PID", "COMMAND", "SIZE", "CLIENTS", "TAGS"
         );
         for s in &sessions {
-            let pid_str = match s.pid {
+            let name = s["name"].as_str().unwrap_or("-");
+            let pid_str = match s["pid"].as_u64() {
                 Some(pid) => pid.to_string(),
                 None => "-".to_string(),
             };
-            let size = format!("{}x{}", s.cols, s.rows);
-            let tags_str = s.tags.join(", ");
+            let command = s["command"].as_str().unwrap_or("-");
+            let cols = s["cols"].as_u64().unwrap_or(0);
+            let rows = s["rows"].as_u64().unwrap_or(0);
+            let size = format!("{}x{}", cols, rows);
+            let clients = s["clients"].as_u64().unwrap_or(0);
+            let tags: Vec<&str> = s["tags"]
+                .as_array()
+                .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
+                .unwrap_or_default();
+            let tags_str = tags.join(", ");
             println!(
                 "{:<20} {:<8} {:<20} {:<12} {:<8} {}",
-                s.name, pid_str, s.command, size, s.clients, tags_str
+                name, pid_str, command, size, clients, tags_str
             );
         }
     }
@@ -1586,21 +1617,28 @@ async fn run_list(socket: Option<PathBuf>, server_name: String, server: Option<S
 }
 
 async fn run_kill(name: String, socket: Option<PathBuf>, server_name: String, server: Option<String>) -> Result<(), WshError> {
-    let socket_path = resolve_socket_path(socket, &server_name);
-    let mut c = match client::Client::connect(&socket_path).await {
-        Ok(c) => c,
+    let http_socket_path = resolve_http_socket_path(socket, &server_name);
+    let client = wsh::uds_client::UdsHttpClient::new(&http_socket_path);
+
+    let path = match server.as_deref() {
+        Some(s) => format!("/sessions/{}?server={}", name, s),
+        None => format!("/sessions/{}", name),
+    };
+
+    let resp = match client.delete(&path).await {
+        Ok(r) => r,
         Err(e) => {
             eprintln!(
-                "wsh kill: failed to connect to server at {}: {}",
-                socket_path.display(),
+                "wsh kill: could not connect to wsh server — is the server running? ({})",
                 e
             );
             std::process::exit(1);
         }
     };
 
-    if let Err(e) = c.kill_session_on(&name, server).await {
-        eprintln!("wsh kill: {}", e);
+    if !resp.status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        eprintln!("wsh kill: {}", body);
         std::process::exit(1);
     }
 
@@ -1609,21 +1647,28 @@ async fn run_kill(name: String, socket: Option<PathBuf>, server_name: String, se
 }
 
 async fn run_detach(name: String, socket: Option<PathBuf>, server_name: String, server: Option<String>) -> Result<(), WshError> {
-    let socket_path = resolve_socket_path(socket, &server_name);
-    let mut c = match client::Client::connect(&socket_path).await {
-        Ok(c) => c,
+    let http_socket_path = resolve_http_socket_path(socket, &server_name);
+    let client = wsh::uds_client::UdsHttpClient::new(&http_socket_path);
+
+    let path = match server.as_deref() {
+        Some(s) => format!("/sessions/{}/detach?server={}", name, s),
+        None => format!("/sessions/{}/detach", name),
+    };
+
+    let resp = match client.post_json(&path, &serde_json::json!({})).await {
+        Ok(r) => r,
         Err(e) => {
             eprintln!(
-                "wsh detach: failed to connect to server at {}: {}",
-                socket_path.display(),
+                "wsh detach: could not connect to wsh server — is the server running? ({})",
                 e
             );
             std::process::exit(1);
         }
     };
 
-    if let Err(e) = c.detach_session_on(&name, server).await {
-        eprintln!("wsh detach: {}", e);
+    if !resp.status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        eprintln!("wsh detach: {}", body);
         std::process::exit(1);
     }
 
@@ -1639,31 +1684,53 @@ async fn run_tag(
     socket: Option<PathBuf>,
     server_name: String,
 ) -> Result<(), WshError> {
-    let socket_path = resolve_socket_path(socket, &server_name);
-    let mut c = match client::Client::connect(&socket_path).await {
-        Ok(c) => c,
+    let http_socket_path = resolve_http_socket_path(socket, &server_name);
+    let client = wsh::uds_client::UdsHttpClient::new(&http_socket_path);
+
+    let path = match server.as_deref() {
+        Some(s) => format!("/sessions/{}?server={}", name, s),
+        None => format!("/sessions/{}", name),
+    };
+
+    let body = serde_json::json!({
+        "add_tags": add,
+        "remove_tags": remove,
+    });
+
+    let resp = match client.patch_json(&path, &body).await {
+        Ok(r) => r,
         Err(e) => {
             eprintln!(
-                "wsh tag: failed to connect to server at {}: {}",
-                socket_path.display(),
+                "wsh tag: could not connect to wsh server — is the server running? ({})",
                 e
             );
             std::process::exit(1);
         }
     };
 
-    match c.manage_tags_on(&name, add, remove, server).await {
-        Ok(tags) => {
-            if tags.is_empty() {
-                println!("Session '{}': no tags", name);
-            } else {
-                println!("Session '{}': {}", name, tags.join(", "));
-            }
-        }
+    if !resp.status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        eprintln!("wsh tag: {}", body);
+        std::process::exit(1);
+    }
+
+    let session_info: serde_json::Value = match resp.json().await {
+        Ok(v) => v,
         Err(e) => {
-            eprintln!("wsh tag: {}", e);
+            eprintln!("wsh tag: failed to parse response: {}", e);
             std::process::exit(1);
         }
+    };
+
+    let tags: Vec<&str> = session_info["tags"]
+        .as_array()
+        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_default();
+
+    if tags.is_empty() {
+        println!("Session '{}': no tags", name);
+    } else {
+        println!("Session '{}': {}", name, tags.join(", "));
     }
 
     Ok(())
@@ -1674,94 +1741,161 @@ async fn run_servers(
     socket: Option<PathBuf>,
     server_name: String,
 ) -> Result<(), WshError> {
-    let socket_path = resolve_socket_path(socket, &server_name);
-    let mut c = match client::Client::connect(&socket_path).await {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!(
-                "wsh servers: failed to connect to server at {}: {}",
-                socket_path.display(),
-                e
-            );
-            std::process::exit(1);
-        }
-    };
+    let http_socket_path = resolve_http_socket_path(socket, &server_name);
+    let client = wsh::uds_client::UdsHttpClient::new(&http_socket_path);
 
     match action {
         ServersAction::List => {
-            let resp = match c.list_servers().await {
+            let resp = match client.get("/servers").await {
                 Ok(r) => r,
                 Err(e) => {
-                    eprintln!("wsh servers list: {}", e);
+                    eprintln!("wsh servers list: could not connect to wsh server — is the server running? ({})", e);
                     std::process::exit(1);
                 }
             };
-            if resp.servers.is_empty() {
+
+            if !resp.status.is_success() {
+                let body = resp.text().await.unwrap_or_default();
+                eprintln!("wsh servers list: {}", body);
+                std::process::exit(1);
+            }
+
+            let servers: Vec<serde_json::Value> = match resp.json() .await {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("wsh servers list: failed to parse response: {}", e);
+                    std::process::exit(1);
+                }
+            };
+
+            if servers.is_empty() {
                 println!("No servers.");
             } else {
                 println!(
                     "{:<20} {:<25} {:<12} {:<10} {}",
                     "HOSTNAME", "ADDRESS", "HEALTH", "ROLE", "SESSIONS"
                 );
-                for s in &resp.servers {
-                    let hostname = s.hostname.as_deref().unwrap_or("-");
-                    let sessions_str = match s.sessions {
+                for s in &servers {
+                    let hostname = s["hostname"].as_str().unwrap_or("-");
+                    let address = s["address"].as_str().unwrap_or("-");
+                    let health = s["health"].as_str().unwrap_or("-");
+                    let role = s["role"].as_str().unwrap_or("-");
+                    let sessions_str = match s["sessions"].as_u64() {
                         Some(n) => n.to_string(),
                         None => "-".to_string(),
                     };
                     println!(
                         "{:<20} {:<25} {:<12} {:<10} {}",
-                        hostname, s.address, s.health, s.role, sessions_str
+                        hostname, address, health, role, sessions_str
                     );
                 }
             }
         }
         ServersAction::Add { address, token } => {
-            match c.add_server(&address, token).await {
-                Ok(resp) => {
-                    println!(
-                        "Server added: {} (health: {})",
-                        resp.address, resp.health
-                    );
-                }
+            let body = serde_json::json!({
+                "address": address,
+                "token": token,
+            });
+
+            let resp = match client.post_json("/servers", &body).await {
+                Ok(r) => r,
                 Err(e) => {
-                    eprintln!("wsh servers add: {}", e);
+                    eprintln!("wsh servers add: could not connect to wsh server — is the server running? ({})", e);
                     std::process::exit(1);
                 }
-            }
-        }
-        ServersAction::Remove { hostname } => {
-            if let Err(e) = c.remove_server(&hostname).await {
-                eprintln!("wsh servers remove: {}", e);
+            };
+
+            if !resp.status.is_success() {
+                let body = resp.text().await.unwrap_or_default();
+                eprintln!("wsh servers add: {}", body);
                 std::process::exit(1);
             }
+
+            let result: serde_json::Value = match resp.json().await {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("wsh servers add: failed to parse response: {}", e);
+                    std::process::exit(1);
+                }
+            };
+
+            println!(
+                "Server added: {} (health: {})",
+                result["address"].as_str().unwrap_or(&address),
+                result["health"].as_str().unwrap_or("unknown")
+            );
+        }
+        ServersAction::Remove { hostname } => {
+            let resp = match client.delete(&format!("/servers/{}", hostname)).await {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("wsh servers remove: could not connect to wsh server — is the server running? ({})", e);
+                    std::process::exit(1);
+                }
+            };
+
+            if !resp.status.is_success() {
+                let body = resp.text().await.unwrap_or_default();
+                eprintln!("wsh servers remove: {}", body);
+                std::process::exit(1);
+            }
+
             println!("Server '{}' removed.", hostname);
         }
         ServersAction::Info => {
-            match c.server_info().await {
-                Ok(info) => {
-                    println!("Hostname: {}", info.hostname);
-                    println!("Version:  {}", info.version);
-                }
+            let resp = match client.get("/server/info").await {
+                Ok(r) => r,
                 Err(e) => {
-                    eprintln!("wsh servers info: {}", e);
+                    eprintln!("wsh servers info: could not connect to wsh server — is the server running? ({})", e);
                     std::process::exit(1);
                 }
+            };
+
+            if !resp.status.is_success() {
+                let body = resp.text().await.unwrap_or_default();
+                eprintln!("wsh servers info: {}", body);
+                std::process::exit(1);
             }
+
+            let info: serde_json::Value = match resp.json().await {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("wsh servers info: failed to parse response: {}", e);
+                    std::process::exit(1);
+                }
+            };
+
+            println!("Hostname: {}", info["hostname"].as_str().unwrap_or("-"));
+            println!("Version:  {}", info["version"].as_str().unwrap_or("-"));
         }
         ServersAction::Reload => {
-            match c.reload_config().await {
-                Ok(resp) => {
-                    println!(
-                        "Config reloaded: {} added, {} removed.",
-                        resp.added, resp.removed
-                    );
-                }
+            let resp = match client.post_json("/server/reload-config", &serde_json::json!({})).await {
+                Ok(r) => r,
                 Err(e) => {
-                    eprintln!("wsh servers reload: {}", e);
+                    eprintln!("wsh servers reload: could not connect to wsh server — is the server running? ({})", e);
                     std::process::exit(1);
                 }
+            };
+
+            if !resp.status.is_success() {
+                let body = resp.text().await.unwrap_or_default();
+                eprintln!("wsh servers reload: {}", body);
+                std::process::exit(1);
             }
+
+            let result: serde_json::Value = match resp.json().await {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("wsh servers reload: failed to parse response: {}", e);
+                    std::process::exit(1);
+                }
+            };
+
+            println!(
+                "Config reloaded: {} added, {} removed.",
+                result["added"].as_u64().unwrap_or(0),
+                result["removed"].as_u64().unwrap_or(0)
+            );
         }
     }
 
@@ -1769,33 +1903,26 @@ async fn run_servers(
 }
 
 async fn run_stop(socket: Option<PathBuf>, server_name: String) -> Result<(), WshError> {
-    let socket_path = resolve_socket_path(socket, &server_name);
-    let mut c = match client::Client::connect(&socket_path).await {
-        Ok(c) => c,
-        Err(e) => {
-            match e.kind() {
-                std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound => {
-                    println!("No server running.");
-                    return Ok(());
-                }
-                _ => {
-                    eprintln!(
-                        "wsh stop: failed to connect to server at {}: {}",
-                        socket_path.display(),
-                        e
-                    );
-                    std::process::exit(1);
-                }
-            }
+    let http_socket_path = resolve_http_socket_path(socket.clone(), &server_name);
+    let client = wsh::uds_client::UdsHttpClient::new(&http_socket_path);
+
+    let resp = match client.post_json("/server/shutdown", &serde_json::json!({})).await {
+        Ok(r) => r,
+        Err(_) => {
+            // If we can't connect, the server is likely not running
+            println!("No server running.");
+            return Ok(());
         }
     };
 
-    if let Err(e) = c.shutdown_server().await {
-        eprintln!("wsh stop: {}", e);
+    if !resp.status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        eprintln!("wsh stop: {}", body);
         std::process::exit(1);
     }
 
     // Wait for the socket file to disappear (server cleanup)
+    let socket_path = resolve_socket_path(socket, &server_name);
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
     while socket_path.exists() {
         if tokio::time::Instant::now() > deadline {
@@ -1810,29 +1937,40 @@ async fn run_stop(socket: Option<PathBuf>, server_name: String) -> Result<(), Ws
 }
 
 async fn run_token(socket: Option<PathBuf>, server_name: String) -> Result<(), WshError> {
-    let socket_path = resolve_socket_path(socket, &server_name);
-    let mut c = match client::Client::connect(&socket_path).await {
-        Ok(c) => c,
+    let http_socket_path = resolve_http_socket_path(socket, &server_name);
+    let client = wsh::uds_client::UdsHttpClient::new(&http_socket_path);
+
+    let resp = match client.get("/server/token").await {
+        Ok(r) => r,
         Err(e) => {
             eprintln!(
-                "wsh token: failed to connect to server at {}: {}",
-                socket_path.display(),
+                "wsh token: could not connect to wsh server — is the server running? ({})",
                 e
             );
             std::process::exit(1);
         }
     };
 
-    match c.get_token().await {
-        Ok(Some(token)) => {
-            println!("{}", token);
-        }
-        Ok(None) => {
-            eprintln!("wsh token: no auth token configured (server is on localhost)");
+    if !resp.status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        eprintln!("wsh token: {}", body);
+        std::process::exit(1);
+    }
+
+    let body: serde_json::Value = match resp.json().await {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("wsh token: failed to parse response: {}", e);
             std::process::exit(1);
         }
-        Err(e) => {
-            eprintln!("wsh token: {}", e);
+    };
+
+    match body["token"].as_str() {
+        Some(token) => {
+            println!("{}", token);
+        }
+        None => {
+            eprintln!("wsh token: no auth token configured (server is on localhost)");
             std::process::exit(1);
         }
     }
