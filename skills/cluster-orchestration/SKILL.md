@@ -20,10 +20,8 @@ description: >
 >    Load the full API reference first: search your workspace for
 >    `skills/core/` and read `SKILL.md`. It contains every endpoint
 >    with working curl examples and a bootstrap sequence.
-> 3. **Quick bootstrap**: `curl -sf http://localhost:8080/health`
->    — if that fails and you need a server:
->    `wsh server -L agent-$$ --bind 127.0.0.1:0 &` and read the
->    bound port from the log output (`server listening addr=...`).
+> 3. **Quick bootstrap**: `curl -sf --unix-socket ${XDG_RUNTIME_DIR:-/tmp}/wsh/default.http.sock http://localhost/health`
+>    — if that fails: `wsh server -L agent-$$ --ephemeral &` and retry.
 
 # wsh:cluster-orchestration — Distributed Terminal Sessions
 

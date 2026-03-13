@@ -23,44 +23,51 @@ and **a voice** (overlays and panels to communicate with the human).
 ## How It Works
 
 wsh manages terminal sessions via a server daemon and exposes
-everything over an HTTP API at `http://localhost:8080`. The human
+everything over an HTTP API served on a Unix domain socket. The human
 sees their normal terminal. You see a programmatic interface to
 the same session. Everything is synchronized — input you send
 appears on their screen, output they generate appears in your
 API calls. All endpoints are scoped to a session via
 `/sessions/:name/` prefix (e.g., `/sessions/default/input`).
 
+By default, wsh serves HTTP over a Unix domain socket at
+`${XDG_RUNTIME_DIR}/wsh/<name>.http.sock` (default name: "default").
+This is local-only and requires no authentication. TCP access
+is opt-in via `--bind` for remote scenarios.
+
 > **MCP also available:** wsh is also accessible as an MCP server (14 tools,
-> 3 resources, 9 prompts) via Streamable HTTP at `/mcp` or the `wsh mcp` stdio
-> bridge. See the `wsh:core-mcp` prompt for MCP-specific guidance.
+> 3 resources, 9 prompts) via Streamable HTTP at `/mcp` on the same socket,
+> or via the `wsh mcp` stdio bridge. See the `wsh:core-mcp` prompt for
+> MCP-specific guidance.
 
 ## Getting Started
 
 Before using the API, make sure a wsh server is reachable.
 
 **Step 1: Check for an existing server.** A wsh server may already be
-running — try the default endpoint:
+running — try the default Unix socket:
 
-    curl -sf http://localhost:8080/health
+    WSH_SOCK=${XDG_RUNTIME_DIR:-/tmp}/wsh/default.http.sock
+    curl -sf --unix-socket $WSH_SOCK http://localhost/health
 
-If this returns `200 OK`, the server is at `localhost:8080`. Skip to
-step 3.
+If this returns `200 OK`, the server is reachable. Skip to step 3.
 
-**Step 2: Start a server (only if needed).** Bind to port `0` so the
-OS picks an available port, and use `-L` with a unique name to avoid
-colliding with any existing wsh instance:
+**Step 2: Start a server (only if needed).** Use `-L` with a unique
+name to avoid colliding with any existing wsh instance:
 
-    wsh server -L agent-$$ --bind 127.0.0.1:0 2>/tmp/wsh-$$.log &
+    wsh server -L agent-$$ --ephemeral &
     sleep 1
-    cat /tmp/wsh-$$.log
+    WSH_SOCK=${XDG_RUNTIME_DIR:-/tmp}/wsh/agent-$$.http.sock
+    # Wait for socket to appear
+    while [ ! -S "$WSH_SOCK" ]; do sleep 0.1; done
 
-Look for the log line `server listening addr=127.0.0.1:<port>`. Use
-that address for all subsequent API calls (not `localhost:8080`).
+The socket path is deterministic from the instance name — no port
+discovery needed.
 
 **Step 3: Create a session.** Sessions are where commands run. Create
-one via the API (substitute your actual port for `PORT`):
+one via the API:
 
-    curl -s -X POST http://127.0.0.1:PORT/sessions \
+    curl -s -X POST --unix-socket $WSH_SOCK http://localhost/sessions \
       -H "Content-Type: application/json" \
       -d '{"name": "work"}'
 
@@ -70,21 +77,21 @@ Returns `{"name": "work", ...}` on success.
 using the API primitives described below. The fundamental loop:
 
     # Send a command
-    curl -s -X POST http://127.0.0.1:PORT/sessions/work/input -d $'ls -la\n'
+    curl -s -X POST --unix-socket $WSH_SOCK http://localhost/sessions/work/input -d $'ls -la\n'
     # Wait for idle
-    curl -s http://127.0.0.1:PORT/sessions/work/idle?timeout_ms=2000
+    curl -s --unix-socket $WSH_SOCK http://localhost/sessions/work/idle?timeout_ms=2000
     # Read the screen
-    curl -s http://127.0.0.1:PORT/sessions/work/screen?format=plain
+    curl -s --unix-socket $WSH_SOCK http://localhost/sessions/work/screen?format=plain
 
 ## Authentication
 
-When wsh binds to localhost (default), no authentication is needed —
-all endpoints are open.
+When wsh serves over a Unix domain socket (default), no authentication
+is needed — all connections are local and trusted.
 
-When binding to a non-loopback address (e.g., `--bind 0.0.0.0:8080`),
+When binding to a TCP address with `--bind` (e.g., `--bind 0.0.0.0:7368`),
 every request requires a Bearer token:
 
-    curl -H "Authorization: Bearer <token>" http://host:8080/sessions/default/screen
+    curl -H "Authorization: Bearer <token>" http://host:7368/sessions/default/screen
 
 The token is either auto-generated on startup (printed to stderr) or
 set via `--token` / `WSH_TOKEN`. Retrieve it later with `wsh token`.
@@ -115,12 +122,12 @@ These are the building blocks. Every specialized skill builds on these.
 Inject keystrokes into the terminal. Supports raw bytes — use
 bash `$'...'` quoting for control characters.
 
-    curl -s -X POST http://localhost:8080/sessions/default/input -d 'ls -la'
-    curl -s -X POST http://localhost:8080/sessions/default/input -d $'ls -la\n'
-    curl -s -X POST http://localhost:8080/sessions/default/input -d $'\x03'        # Ctrl+C
-    curl -s -X POST http://localhost:8080/sessions/default/input -d $'\x1b'        # Escape
-    curl -s -X POST http://localhost:8080/sessions/default/input -d $'\x1b[A'      # Arrow Up
-    curl -s -X POST http://localhost:8080/sessions/default/input -d $'\t'          # Tab
+    curl -s -X POST --unix-socket $WSH_SOCK http://localhost/sessions/default/input -d 'ls -la'
+    curl -s -X POST --unix-socket $WSH_SOCK http://localhost/sessions/default/input -d $'ls -la\n'
+    curl -s -X POST --unix-socket $WSH_SOCK http://localhost/sessions/default/input -d $'\x03'        # Ctrl+C
+    curl -s -X POST --unix-socket $WSH_SOCK http://localhost/sessions/default/input -d $'\x1b'        # Escape
+    curl -s -X POST --unix-socket $WSH_SOCK http://localhost/sessions/default/input -d $'\x1b[A'      # Arrow Up
+    curl -s -X POST --unix-socket $WSH_SOCK http://localhost/sessions/default/input -d $'\t'          # Tab
 
 Returns 204 (no content) on success.
 
@@ -129,7 +136,7 @@ Block until the terminal has been idle for `timeout_ms` milliseconds.
 This is a hint that the program may be idle — it could also just be
 working without producing output.
 
-    curl -s http://localhost:8080/sessions/default/idle?timeout_ms=2000
+    curl -s --unix-socket $WSH_SOCK http://localhost/sessions/default/idle?timeout_ms=2000
 
 Returns the current screen snapshot plus a `generation` counter once
 idle. Returns 408 if the terminal doesn't settle within 30 seconds
@@ -138,18 +145,18 @@ idle. Returns 408 if the terminal doesn't settle within 30 seconds
 When polling repeatedly, pass back the `generation` from the previous
 response as `last_generation` to avoid busy-loop storms:
 
-    curl -s 'http://localhost:8080/sessions/default/idle?timeout_ms=2000&last_generation=42'
+    curl -s --unix-socket $WSH_SOCK 'http://localhost/sessions/default/idle?timeout_ms=2000&last_generation=42'
 
 Or use `fresh=true` to always observe real silence (simpler, but
 always waits at least `timeout_ms`):
 
-    curl -s 'http://localhost:8080/sessions/default/idle?timeout_ms=2000&fresh=true'
+    curl -s --unix-socket $WSH_SOCK 'http://localhost/sessions/default/idle?timeout_ms=2000&fresh=true'
 
 ### Read the Screen
 Get the current visible screen contents.
 
-    curl -s http://localhost:8080/sessions/default/screen?format=plain
-    curl -s http://localhost:8080/sessions/default/screen?format=styled
+    curl -s --unix-socket $WSH_SOCK http://localhost/sessions/default/screen?format=plain
+    curl -s --unix-socket $WSH_SOCK http://localhost/sessions/default/screen?format=styled
 
 `plain` returns simple text lines. `styled` returns spans with
 color and formatting attributes.
@@ -157,20 +164,20 @@ color and formatting attributes.
 ### Read Scrollback
 Get historical output that has scrolled off screen.
 
-    curl -s http://localhost:8080/sessions/default/scrollback?format=plain&offset=0&limit=100
+    curl -s --unix-socket $WSH_SOCK http://localhost/sessions/default/scrollback?format=plain&offset=0&limit=100
 
 Use `offset` and `limit` to page through history.
 
 ### Health Check
 Verify wsh is running.
 
-    curl -s http://localhost:8080/health
+    curl -s --unix-socket $WSH_SOCK http://localhost/health
 
 ### Real-Time Events (WebSocket)
 For monitoring and input capture, you need real-time event
 streaming. Connect to the JSON WebSocket:
 
-    websocat ws://localhost:8080/sessions/default/ws/json
+    websocat --ws-c-uri=ws://localhost/sessions/default/ws/json - ws-c:unix:$WSH_SOCK
 
 After connecting, subscribe to the events you care about:
 
@@ -199,7 +206,7 @@ handle the initial sync after subscribing.
 
 For a different session, replace `default` with the session name:
 
-    websocat ws://localhost:8080/sessions/build/ws/json
+    websocat --ws-c-uri=ws://localhost/sessions/build/ws/json - ws-c:unix:$WSH_SOCK
 
 You can also send requests over the WebSocket instead of
 HTTP — `get_screen`, `send_input`, `resize`,
@@ -215,19 +222,19 @@ Floating text positioned on top of terminal content. They don't
 affect the terminal — they're a layer on top.
 
     # Create an overlay at position (0, 0) with explicit size
-    curl -s -X POST http://localhost:8080/sessions/default/overlay \
+    curl -s -X POST --unix-socket $WSH_SOCK http://localhost/sessions/default/overlay \
       -H "Content-Type: application/json" \
       -d '{"x": 0, "y": 0, "width": 20, "height": 1,
            "spans": [{"text": "Hello!", "bold": true}]}'
 
     # Returns {"id": "uuid"} — use this to update or delete it
-    curl -s -X DELETE http://localhost:8080/sessions/default/overlay/{id}
-    curl -s -X DELETE http://localhost:8080/sessions/default/overlay          # clear all
+    curl -s -X DELETE --unix-socket $WSH_SOCK http://localhost/sessions/default/overlay/{id}
+    curl -s -X DELETE --unix-socket $WSH_SOCK http://localhost/sessions/default/overlay          # clear all
 
 **Opaque overlays:** Add `background` to fill the rectangle with a
 solid color, making it a window-like element:
 
-    curl -s -X POST http://localhost:8080/sessions/default/overlay \
+    curl -s -X POST --unix-socket $WSH_SOCK http://localhost/sessions/default/overlay \
       -H "Content-Type: application/json" \
       -d '{"x": 10, "y": 5, "width": 40, "height": 10,
            "background": {"bg": "black"},
@@ -238,7 +245,7 @@ Background accepts named colors (`"bg": "blue"`) or RGB
 
 **Named spans:** Give spans an `id` for targeted updates:
 
-    curl -s -X POST http://localhost:8080/sessions/default/overlay \
+    curl -s -X POST --unix-socket $WSH_SOCK http://localhost/sessions/default/overlay \
       -H "Content-Type: application/json" \
       -d '{"x": 0, "y": 0, "width": 30, "height": 1,
            "spans": [
@@ -247,13 +254,13 @@ Background accepts named colors (`"bg": "blue"`) or RGB
           ]}'
 
     # Update named spans by id (POST with array of span updates)
-    curl -s -X POST http://localhost:8080/sessions/default/overlay/{id}/spans \
+    curl -s -X POST --unix-socket $WSH_SOCK http://localhost/sessions/default/overlay/{id}/spans \
       -H "Content-Type: application/json" \
       -d '{"spans": [{"id": "value", "text": "stopped", "fg": "red"}]}'
 
 **Region writes:** Place styled text at specific (row, col) offsets:
 
-    curl -s -X POST http://localhost:8080/sessions/default/overlay/{id}/write \
+    curl -s -X POST --unix-socket $WSH_SOCK http://localhost/sessions/default/overlay/{id}/write \
       -H "Content-Type: application/json" \
       -d '{"writes": [{"row": 2, "col": 5, "text": "Hello", "bold": true}]}'
 
@@ -270,13 +277,13 @@ Agent-owned screen regions at the top or bottom of the terminal.
 Unlike overlays, panels **shrink the PTY** — they carve out
 dedicated space.
 
-    curl -s -X POST http://localhost:8080/sessions/default/panel \
+    curl -s -X POST --unix-socket $WSH_SOCK http://localhost/sessions/default/panel \
       -H "Content-Type: application/json" \
       -d '{"position": "bottom", "height": 3, "spans": [{"text": "Status: running"}]}'
 
 **Background:** Add `background` to fill the panel with a solid color:
 
-    curl -s -X POST http://localhost:8080/sessions/default/panel \
+    curl -s -X POST --unix-socket $WSH_SOCK http://localhost/sessions/default/panel \
       -H "Content-Type: application/json" \
       -d '{"position": "bottom", "height": 2,
            "background": {"bg": "blue"},
@@ -285,13 +292,13 @@ dedicated space.
 **Named spans:** Same as overlays — give spans an `id` for targeted
 updates via POST with an array of span updates:
 
-    curl -s -X POST http://localhost:8080/sessions/default/panel/{id}/spans \
+    curl -s -X POST --unix-socket $WSH_SOCK http://localhost/sessions/default/panel/{id}/spans \
       -H "Content-Type: application/json" \
       -d '{"spans": [{"id": "status", "text": "3 errors", "fg": "red"}]}'
 
 **Region writes:** Place text at specific (row, col) offsets:
 
-    curl -s -X POST http://localhost:8080/sessions/default/panel/{id}/write \
+    curl -s -X POST --unix-socket $WSH_SOCK http://localhost/sessions/default/panel/{id}/write \
       -H "Content-Type: application/json" \
       -d '{"writes": [{"row": 0, "col": 10, "text": "updated", "bold": true}]}'
 
@@ -305,8 +312,8 @@ real estate.
 ### Input Capture
 Intercept keyboard input so it comes to you instead of the shell.
 
-    curl -s -X POST http://localhost:8080/sessions/default/input/capture    # grab input
-    curl -s -X POST http://localhost:8080/sessions/default/input/release    # release back
+    curl -s -X POST --unix-socket $WSH_SOCK http://localhost/sessions/default/input/capture    # grab input
+    curl -s -X POST --unix-socket $WSH_SOCK http://localhost/sessions/default/input/release    # release back
 
 While captured, keystrokes are available via WebSocket subscription
 instead of going to the PTY. The human can press Ctrl+\ to toggle
@@ -315,12 +322,12 @@ capture mode (it switches between passthrough and capture).
 **Focus routing:** Direct captured input to a specific focusable
 overlay or panel. At most one element has focus at a time.
 
-    curl -s -X POST http://localhost:8080/sessions/default/input/focus \
+    curl -s -X POST --unix-socket $WSH_SOCK http://localhost/sessions/default/input/focus \
       -H "Content-Type: application/json" \
       -d '{"id": "overlay-uuid"}'
 
-    curl -s http://localhost:8080/sessions/default/input/focus               # get current focus
-    curl -s -X POST http://localhost:8080/sessions/default/input/unfocus     # clear focus
+    curl -s --unix-socket $WSH_SOCK http://localhost/sessions/default/input/focus               # get current focus
+    curl -s -X POST --unix-socket $WSH_SOCK http://localhost/sessions/default/input/unfocus     # clear focus
 
 Focus is automatically cleared when input is released or when the
 focused element is deleted.
@@ -333,9 +340,9 @@ Enter a separate screen mode where you can create a completely
 independent set of overlays and panels. Exiting cleans up everything
 automatically.
 
-    curl -s http://localhost:8080/sessions/default/screen_mode                  # get current mode
-    curl -s -X POST http://localhost:8080/sessions/default/screen_mode/enter_alt  # enter alt screen
-    curl -s -X POST http://localhost:8080/sessions/default/screen_mode/exit_alt   # exit alt screen
+    curl -s --unix-socket $WSH_SOCK http://localhost/sessions/default/screen_mode                  # get current mode
+    curl -s -X POST --unix-socket $WSH_SOCK http://localhost/sessions/default/screen_mode/enter_alt  # enter alt screen
+    curl -s -X POST --unix-socket $WSH_SOCK http://localhost/sessions/default/screen_mode/exit_alt   # exit alt screen
 
 Overlays and panels are automatically tagged with the screen mode
 active at the time of creation. List endpoints return only elements
@@ -352,11 +359,11 @@ and should leave no trace when done.
 wsh always runs as a server daemon managing sessions. The sessions
 endpoint is always available:
 
-    curl -s http://localhost:8080/sessions
+    curl -s --unix-socket $WSH_SOCK http://localhost/sessions
 
 ### Creating Sessions
 
-    curl -s -X POST http://localhost:8080/sessions \
+    curl -s -X POST --unix-socket $WSH_SOCK http://localhost/sessions \
       -H "Content-Type: application/json" \
       -d '{"name": "build", "command": "cargo build", "tags": ["build", "ci"]}'
 
@@ -377,22 +384,22 @@ sessions by purpose.
 All the primitives work per-session by adding `/sessions/:name/`
 as a prefix:
 
-    curl -s -X POST http://localhost:8080/sessions/build/input -d $'cargo test\n'
-    curl -s http://localhost:8080/sessions/build/idle?timeout_ms=2000
-    curl -s http://localhost:8080/sessions/build/screen?format=plain
+    curl -s -X POST --unix-socket $WSH_SOCK http://localhost/sessions/build/input -d $'cargo test\n'
+    curl -s --unix-socket $WSH_SOCK http://localhost/sessions/build/idle?timeout_ms=2000
+    curl -s --unix-socket $WSH_SOCK http://localhost/sessions/build/screen?format=plain
 
 Overlays, panels, and input capture are also per-session.
 
 ### Filtering Sessions by Tag
 
-    curl -s 'http://localhost:8080/sessions?tag=build,test'
+    curl -s --unix-socket $WSH_SOCK 'http://localhost/sessions?tag=build,test'
 
 Returns only sessions that have at least one of the specified tags
 (union/OR semantics).
 
 ### Updating Tags
 
-    curl -s -X PATCH http://localhost:8080/sessions/build \
+    curl -s -X PATCH --unix-socket $WSH_SOCK http://localhost/sessions/build \
       -H "Content-Type: application/json" \
       -d '{"add_tags": ["production"], "remove_tags": ["draft"]}'
 
@@ -402,7 +409,7 @@ Tags can be added and removed alongside a rename in a single PATCH.
 You can race idle detection across all sessions (or a tag-filtered
 subset):
 
-    curl -s 'http://localhost:8080/idle?timeout_ms=2000&format=plain'
+    curl -s --unix-socket $WSH_SOCK 'http://localhost/idle?timeout_ms=2000&format=plain'
 
 Returns the first session to become idle, including its name:
 
@@ -411,34 +418,34 @@ Returns the first session to become idle, including its name:
 To avoid re-returning the same session, pass `last_session` and
 `last_generation` from the previous response:
 
-    curl -s 'http://localhost:8080/idle?timeout_ms=2000&last_session=build&last_generation=7'
+    curl -s --unix-socket $WSH_SOCK 'http://localhost/idle?timeout_ms=2000&last_session=build&last_generation=7'
 
 To scope idle detection to specific tags:
 
-    curl -s 'http://localhost:8080/idle?timeout_ms=2000&tag=build'
+    curl -s --unix-socket $WSH_SOCK 'http://localhost/idle?timeout_ms=2000&tag=build'
 
 Returns 404 (`no_sessions`) if no sessions exist. Returns 408 if no
 session settles within `max_wait_ms`.
 
 ### Session Lifecycle
 
-    curl -s http://localhost:8080/sessions              # list all
-    curl -s 'http://localhost:8080/sessions?tag=build'  # list by tag
-    curl -s http://localhost:8080/sessions/build         # get info
-    curl -s -X PATCH http://localhost:8080/sessions/build \
+    curl -s --unix-socket $WSH_SOCK http://localhost/sessions              # list all
+    curl -s --unix-socket $WSH_SOCK 'http://localhost/sessions?tag=build'  # list by tag
+    curl -s --unix-socket $WSH_SOCK http://localhost/sessions/build         # get info
+    curl -s -X PATCH --unix-socket $WSH_SOCK http://localhost/sessions/build \
       -H "Content-Type: application/json" \
       -d '{"name": "build-v2"}'                         # rename (same name rules apply)
-    curl -s -X PATCH http://localhost:8080/sessions/build \
+    curl -s -X PATCH --unix-socket $WSH_SOCK http://localhost/sessions/build \
       -H "Content-Type: application/json" \
       -d '{"add_tags": ["ci"]}'                         # add tags
-    curl -s -X DELETE http://localhost:8080/sessions/build  # kill
+    curl -s -X DELETE --unix-socket $WSH_SOCK http://localhost/sessions/build  # kill
 
 ### Default Session
-When wsh is started with `wsh` (no arguments), it auto-spawns a
-server daemon and creates a session named `default`. Use
-`/sessions/default/` prefix for all endpoints. If started with
-`--name`, the session has that name instead. Tags can be set at
-startup with `--tag`.
+When wsh is started with `wsh` (no arguments), it auto-spawns an
+ephemeral server daemon (UDS-only, no TCP) and creates a session
+named `default`. Use `/sessions/default/` prefix for all endpoints.
+If started with `--name`, the session has that name instead. Tags
+can be set at startup with `--tag`.
 
 ## Federation
 

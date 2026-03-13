@@ -22,12 +22,14 @@ and **a voice** (overlays and panels to communicate with the human).
 
 ## How It Works
 
-wsh manages terminal sessions via a server daemon and exposes
-everything as MCP tools. The human sees their normal terminal. You
-interact through tool calls to the same session. Everything is
-synchronized — input you send appears on their screen, output they
-generate appears in your tool responses. All tools take a `session`
-parameter to specify which session to operate on (e.g., `"default"`).
+wsh manages terminal sessions via a server daemon that listens on a
+Unix domain socket (by default at `${XDG_RUNTIME_DIR}/wsh/default.http.sock`).
+MCP tools connect to this socket automatically. The human sees their
+normal terminal. You interact through tool calls to the same session.
+Everything is synchronized — input you send appears on their screen,
+output they generate appears in your tool responses. All tools take a
+`session` parameter to specify which session to operate on (e.g.,
+`"default"`).
 
 ## Getting Started
 
@@ -57,10 +59,12 @@ For more control, use `wsh_send_input`, `wsh_await_idle`, and
 
 ## Authentication
 
-When wsh binds to localhost (default), no authentication is needed.
-When binding to a non-loopback address, a Bearer token is required
-on all requests (including MCP). The token is auto-generated on
-startup or set via `--token` / `WSH_TOKEN`.
+MCP tools connect locally via Unix domain socket, so no authentication
+is needed for local use. Authentication only matters when wsh is
+configured with TCP HTTP (via `--bind`) for remote access across the
+network. For remote TCP access, a Bearer token is required on all
+requests. The token is auto-generated on startup or set via `--token`
+/ `WSH_TOKEN`.
 
 ## The Fundamental Loop
 
@@ -323,10 +327,10 @@ sessions by purpose.
     wsh_manage_session(session="build", action="remove_tags", tags=["draft"])    # remove tags
 
 ### Default Session
-When wsh is started with `wsh` (no arguments), it auto-spawns a
-server daemon and creates a session named `default`. Use
-`session="default"` for all tool calls. If started with `--name`,
-the session has that name instead.
+When wsh is started with `wsh` (no arguments), it auto-spawns an
+ephemeral server daemon (listening on Unix domain socket only) and
+creates a session named `default`. Use `session="default"` for all
+tool calls. If started with `--name`, the session has that name instead.
 
 ## Federation (Multi-Server)
 
