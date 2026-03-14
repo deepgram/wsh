@@ -34,7 +34,7 @@ const PROXY_IDLE_TIMEOUT: Duration = Duration::from_secs(330);
 use tools::{
     CreateSessionParams, ListSessionsParams, ManageSessionParams, ManageAction,
     SendInputParams, Encoding, GetScreenParams, GetScrollbackParams,
-    AwaitIdleParams, SendAndReadParams,
+    AwaitIdleParams, SendAndReadParams, SendKeysParams,
     OverlayParams, RemoveOverlayParams, PanelParams, RemovePanelParams,
     InputModeParams, InputModeAction, ScreenModeParams, ScreenModeAction,
     ListServersParams, AddServerParams, RemoveServerParams, ServerStatusParams,
@@ -234,6 +234,121 @@ async fn response_to_call_result(resp: reqwest::Response) -> Result<CallToolResu
     }
 }
 
+// ── Diagnostic helpers ────────────────────────────────────────────
+
+/// Format input bytes as a human-readable preview string.
+/// Control characters are shown as named keys (e.g., <Enter>, <Ctrl+C>).
+fn format_preview(data: &[u8]) -> String {
+    let mut out = String::new();
+    let mut i = 0;
+    while i < data.len() {
+        if out.len() > 80 {
+            out.push_str("...");
+            break;
+        }
+        let b = data[i];
+        match b {
+            // ESC followed by [ — CSI sequence
+            0x1b if data.get(i + 1) == Some(&b'[') => {
+                let start = i;
+                i += 2; // skip ESC [
+                while i < data.len() && !(0x40..=0x7e).contains(&data[i]) {
+                    i += 1;
+                }
+                if i < data.len() {
+                    let final_byte = data[i];
+                    let param = &data[start + 2..i];
+                    match final_byte {
+                        b'A' if param.is_empty() => out.push_str("<Up>"),
+                        b'B' if param.is_empty() => out.push_str("<Down>"),
+                        b'C' if param.is_empty() => out.push_str("<Right>"),
+                        b'D' if param.is_empty() => out.push_str("<Left>"),
+                        b'H' if param.is_empty() => out.push_str("<Home>"),
+                        b'F' if param.is_empty() => out.push_str("<End>"),
+                        b'~' => match param {
+                            b"3" => out.push_str("<Delete>"),
+                            b"5" => out.push_str("<PageUp>"),
+                            b"6" => out.push_str("<PageDown>"),
+                            _ => out.push_str("<CSI>"),
+                        },
+                        _ => out.push_str("<CSI>"),
+                    }
+                    i += 1;
+                    continue;
+                }
+                // Incomplete CSI — treat as bare Escape
+                out.push_str("<Escape>");
+                i = start + 1;
+                continue;
+            }
+            // ESC followed by O — SS3 sequence (function keys F1-F4)
+            0x1b if data.get(i + 1) == Some(&b'O') => {
+                if let Some(&final_byte) = data.get(i + 2) {
+                    match final_byte {
+                        b'P' => out.push_str("<F1>"),
+                        b'Q' => out.push_str("<F2>"),
+                        b'R' => out.push_str("<F3>"),
+                        b'S' => out.push_str("<F4>"),
+                        _ => out.push_str("<Escape>"),
+                    }
+                    i += 3;
+                    continue;
+                }
+                out.push_str("<Escape>");
+            }
+            // Bare ESC
+            0x1b => out.push_str("<Escape>"),
+            // Named control characters
+            0x09 => out.push_str("<Tab>"),
+            0x0a => out.push_str("<Enter>"),
+            0x0d => out.push_str("<CR>"),
+            // Other control characters (0x01-0x1a, excluding tab/enter/cr and ESC)
+            0x01..=0x1a => {
+                let ch = (b'A' + b - 1) as char;
+                out.push_str(&format!("<Ctrl+{}>", ch));
+            }
+            0x7f => out.push_str("<Backspace>"),
+            0x20..=0x7e => out.push(b as char),
+            _ => {
+                // Try to decode as UTF-8
+                if let Ok(s) = std::str::from_utf8(&data[i..]) {
+                    if let Some(ch) = s.chars().next() {
+                        out.push(ch);
+                        i += ch.len_utf8();
+                        continue;
+                    }
+                }
+                out.push_str(&format!("<0x{:02x}>", b));
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Check if input bytes contain patterns that suggest double-escaping.
+fn detect_double_escape(data: &[u8]) -> Option<String> {
+    let patterns: &[(&[u8], &str)] = &[
+        (b"\\n", "\\n"),
+        (b"\\t", "\\t"),
+        (b"\\r", "\\r"),
+        (b"\\x", "\\x.."),
+        (b"\\u00", "\\u00.."),
+    ];
+
+    for (pattern, display) in patterns {
+        if data.windows(pattern.len()).any(|w| w == *pattern) {
+            return Some(format!(
+                "Input contains literal backslash sequences (e.g., '{}'). \
+                 These were sent as-is. If you intended control characters, \
+                 use base64 encoding or wsh_send_keys.",
+                display
+            ));
+        }
+    }
+    None
+}
+
 // ── MCP server ─────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -322,7 +437,7 @@ impl ServerHandler for WshMcpServer {
                 website_url: None,
             },
             instructions: Some(
-                "wsh exposes terminal sessions as an API. Use wsh_run_command for the common \
+                "wsh exposes terminal sessions as an API. Use wsh_send_and_read for the common \
                  send/wait/read loop. Use wsh_create_session to start sessions, \
                  wsh_list_sessions to discover them, wsh_manage_session to kill/rename/detach. \
                  Visual feedback via wsh_overlay and wsh_panel. Input capture via wsh_input_mode. \
@@ -807,11 +922,31 @@ impl WshMcpServer {
                     Bytes::from(decoded)
                 }
             };
-            return proxy_post_bytes(
+            let data_ref = data.clone();
+            let len = data.len();
+            proxy_post_bytes(
                 &backend,
                 &format!("/sessions/{}/input", params.session),
                 data,
-            ).await;
+            ).await?;
+
+            let preview = format_preview(&data_ref);
+            let mut result = serde_json::json!({
+                "status": "sent",
+                "bytes": len,
+                "preview": preview,
+            });
+            if len == 0 {
+                result["warning"] = serde_json::json!(
+                    "Input was empty (0 bytes). If you intended a control character, \
+                     use base64 encoding or wsh_send_keys."
+                );
+            } else if let Some(warning) = detect_double_escape(&data_ref) {
+                result["warning"] = serde_json::json!(warning);
+            }
+            return Ok(CallToolResult::success(vec![Content::text(
+                serde_json::to_string(&result).unwrap_or_default(),
+            )]));
         }
 
         let session = self.get_session(&params.session)?;
@@ -832,6 +967,7 @@ impl WshMcpServer {
             }
         };
 
+        let data_ref = data.clone();
         let len = data.len();
         tokio::time::timeout(
             Duration::from_secs(5),
@@ -844,6 +980,58 @@ impl WshMcpServer {
                 format!("failed to send input: {e}"),
                 None,
             )
+        })?;
+        session.activity.touch();
+
+        let preview = format_preview(&data_ref);
+        let mut result = serde_json::json!({
+            "status": "sent",
+            "bytes": len,
+            "preview": preview,
+        });
+        if len == 0 {
+            result["warning"] = serde_json::json!(
+                "Input was empty (0 bytes). If you intended a control character, \
+                 use base64 encoding or wsh_send_keys."
+            );
+        } else if let Some(warning) = detect_double_escape(&data_ref) {
+            result["warning"] = serde_json::json!(warning);
+        }
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string(&result).unwrap_or_default(),
+        )]))
+    }
+
+    /// Send a sequence of named keys and literal text to a terminal session.
+    #[tool(description = "Send keystrokes to a terminal session using named keys. Each element in the keys array is either {\"text\": \"...\"} for literal characters or {\"key\": \"...\"} for named special keys. Supported keys: enter, tab, escape, backspace, delete, up, down, left, right, home, end, pageup, pagedown, ctrl+a through ctrl+z, f1-f12. Key names are case-insensitive. Use 'server' to target a remote federated server.")]
+    async fn wsh_send_keys(
+        &self,
+        Parameters(params): Parameters<SendKeysParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let data = Bytes::from(
+            tools::resolve_keys(&params.keys)
+                .map_err(|e| ErrorData::invalid_params(e, None))?,
+        );
+        let len = data.len();
+
+        // Federation: proxy raw bytes to remote.
+        if let McpSessionTarget::Remote(backend) = self.resolve_server(params.server.as_deref())? {
+            return proxy_post_bytes(
+                &backend,
+                &format!("/sessions/{}/input", params.session),
+                data,
+            ).await;
+        }
+
+        let session = self.get_session(&params.session)?;
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            session.input_tx.send(data),
+        )
+        .await
+        .map_err(|_| ErrorData::internal_error("input send timed out", None))?
+        .map_err(|e| {
+            ErrorData::internal_error(format!("failed to send input: {e}"), None)
         })?;
         session.activity.touch();
 
@@ -975,8 +1163,8 @@ impl WshMcpServer {
     }
 
     /// Send input and wait for the terminal to become idle, then return the screen.
-    #[tool(description = "Send input to a terminal session, wait for idle, then return the screen contents. This is the primary 'run a command' primitive: send input, wait for output to settle, read the result. If idle is not reached within max_wait_ms, the screen is still returned but marked as an error. Use 'server' to target a remote federated server.")]
-    async fn wsh_run_command(
+    #[tool(description = "Send keystrokes to a terminal session, wait for output to settle, then return the screen contents. This is the primary send/wait/read primitive. Each element in the keys array is either {\"text\": \"...\"} for literal characters or {\"key\": \"...\"} for named special keys (enter, tab, escape, ctrl+c, up, down, etc.). If idle is not reached within max_wait_ms, the screen is still returned but marked as an error. Use 'server' to target a remote federated server.")]
+    async fn wsh_send_and_read(
         &self,
         Parameters(params): Parameters<SendAndReadParams>,
     ) -> Result<CallToolResult, ErrorData> {
@@ -1906,5 +2094,77 @@ impl WshMcpServer {
         Ok(CallToolResult::success(vec![Content::text(
             serde_json::to_string(&result).unwrap_or_default(),
         )]))
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::*;
+
+    #[test]
+    fn preview_plain_text() {
+        assert_eq!(format_preview(b"hello"), "hello");
+    }
+
+    #[test]
+    fn preview_with_enter() {
+        assert_eq!(format_preview(b"ls -la\n"), "ls -la<Enter>");
+    }
+
+    #[test]
+    fn preview_ctrl_c() {
+        assert_eq!(format_preview(&[0x03]), "<Ctrl+C>");
+    }
+
+    #[test]
+    fn preview_arrow_up() {
+        assert_eq!(format_preview(b"\x1b[A"), "<Up>");
+    }
+
+    #[test]
+    fn preview_escape_alone() {
+        assert_eq!(format_preview(b"\x1b"), "<Escape>");
+    }
+
+    #[test]
+    fn preview_mixed() {
+        assert_eq!(
+            format_preview(b"echo hi\n"),
+            "echo hi<Enter>"
+        );
+    }
+
+    #[test]
+    fn preview_f1_key() {
+        assert_eq!(format_preview(b"\x1bOP"), "<F1>");
+    }
+
+    #[test]
+    fn preview_delete_key() {
+        assert_eq!(format_preview(b"\x1b[3~"), "<Delete>");
+    }
+
+    #[test]
+    fn detect_literal_backslash_n() {
+        let data = b"hello\\n";
+        assert!(detect_double_escape(data).is_some());
+    }
+
+    #[test]
+    fn detect_literal_backslash_u00() {
+        let data = b"\\u0003";
+        assert!(detect_double_escape(data).is_some());
+    }
+
+    #[test]
+    fn no_false_positive_real_newline() {
+        let data = b"hello\n";
+        assert!(detect_double_escape(data).is_none());
+    }
+
+    #[test]
+    fn no_false_positive_plain_text() {
+        let data = b"just text";
+        assert!(detect_double_escape(data).is_none());
     }
 }
