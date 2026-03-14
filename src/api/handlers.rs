@@ -3532,7 +3532,7 @@ pub(super) async fn server_info(
 ) -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "hostname": state.hostname,
-        "version": env!("CARGO_PKG_VERSION"),
+        "version": crate::build_version(),
         "server_id": state.server_id,
         "instance_name": state.instance_name,
         "socket_path": state.http_socket_path.to_string_lossy(),

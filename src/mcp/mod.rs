@@ -312,7 +312,7 @@ impl ServerHandler for WshMcpServer {
             server_info: Implementation {
                 name: "wsh".to_string(),
                 title: None,
-                version: env!("CARGO_PKG_VERSION").to_string(),
+                version: crate::build_version().to_string(),
                 description: Some(
                     "An API for your terminal. Exposes terminal sessions as structured, \
                      programmable interfaces for AI agents and automation."

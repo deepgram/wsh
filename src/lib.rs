@@ -1,3 +1,14 @@
+pub fn build_version() -> &'static str {
+    concat!(
+        env!("CARGO_PKG_VERSION"),
+        " (",
+        env!("WSH_GIT_DESCRIBE"),
+        " ",
+        env!("WSH_BUILD_PROFILE"),
+        ")",
+    )
+}
+
 pub mod activity;
 pub mod config;
 pub mod api;

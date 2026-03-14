@@ -34,7 +34,7 @@ use wsh::{
 /// A transparent PTY wrapper that exposes terminal I/O via HTTP/WebSocket API.
 /// Run your shell inside wsh to access it from web browsers, agents, and other tools.
 #[derive(ClapParser, Debug)]
-#[command(name = "wsh", version, about, long_about = None)]
+#[command(name = "wsh", version = wsh::build_version(), about, long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,

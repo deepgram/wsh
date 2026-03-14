@@ -3,6 +3,25 @@ use std::path::Path;
 use std::process::Command;
 
 fn main() {
+    // --- Git describe + build profile ---
+    // Re-run when git HEAD changes (new commits, branch switch, etc.)
+    println!("cargo:rerun-if-changed=.git/HEAD");
+    println!("cargo:rerun-if-changed=.git/refs/");
+
+    let git_describe = Command::new("git")
+        .args(["describe", "--tags", "--always", "--dirty"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    println!("cargo:rustc-env=WSH_GIT_DESCRIBE={git_describe}");
+
+    let profile = env::var("PROFILE").unwrap_or_else(|_| "unknown".to_string());
+    println!("cargo:rustc-env=WSH_BUILD_PROFILE={profile}");
+
     // Re-run when web sources change
     println!("cargo:rerun-if-changed=web/src/");
     println!("cargo:rerun-if-changed=web/index.html");
