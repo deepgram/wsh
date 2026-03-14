@@ -3,6 +3,7 @@ import { forwardRef } from "preact/compat";
 import { focusedSession, connectionState } from "../state/sessions";
 import { getScreen } from "../state/terminal";
 import { ctrlActive, altActive, clearModifiers } from "../state/modifiers";
+import { sessionStatuses } from "../state/groups";
 import type { WshClient } from "../api/ws";
 import { keyToSequence, lineToPlainText } from "../utils/keymap";
 
@@ -46,7 +47,13 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(
 
   const send = (data: string) => {
     if (!connected) return;
-    client.sendInput(session, data).catch((e) => {
+    client.sendInput(session, data).then(() => {
+      const updated = new Map(sessionStatuses.value);
+      if (updated.get(session) === "idle") {
+        updated.set(session, "running");
+        sessionStatuses.value = updated;
+      }
+    }).catch((e) => {
       console.error(`Failed to send input to session "${session}":`, e);
     });
   };

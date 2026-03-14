@@ -105,3 +105,7 @@ export interface ServerInfo {
   role: string;
   sessions?: number;
 }
+
+export interface SendInputResult {
+  generation: number;
+}

@@ -1,4 +1,4 @@
-import type { WsRequest, WsResponse, EventType, ScreenResponse, ScrollbackResponse, SessionInfo, ServerInfo } from "./types";
+import type { WsRequest, WsResponse, EventType, ScreenResponse, ScrollbackResponse, SessionInfo, ServerInfo, SendInputResult } from "./types";
 
 type PendingRequest = {
   resolve: (value: unknown) => void;
@@ -457,11 +457,12 @@ export class WshClient {
     return result as ScreenResponse;
   }
 
-  async sendInput(session: string, data: string): Promise<void> {
+  async sendInput(session: string, data: string): Promise<SendInputResult> {
     // Input clears resize suppression — any subsequent PTY output is a
     // response to this input, not a SIGWINCH redraw.
     this.resizeTimes.delete(session);
-    await this.request("send_input", { data }, session);
+    const result = await this.request("send_input", { data }, session);
+    return result as SendInputResult;
   }
 
   async resize(session: string, cols: number, rows: number): Promise<void> {
