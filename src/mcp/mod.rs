@@ -130,11 +130,14 @@ async fn proxy_post_json(
 }
 
 /// Make a proxied POST request with raw bytes body.
+///
+/// Returns the parsed JSON response body on success. Callers build their own
+/// `CallToolResult` from the returned value.
 async fn proxy_post_bytes(
     backend: &BackendEntry,
     path: &str,
     body: Bytes,
-) -> Result<CallToolResult, ErrorData> {
+) -> Result<serde_json::Value, ErrorData> {
     let url = backend.url_for(path);
     let client = build_proxy_client()?;
 
@@ -149,11 +152,8 @@ async fn proxy_post_bytes(
 
     let status = resp.status();
     if status.is_success() {
-        // Input endpoint returns 204 No Content — return a simple success.
-        let result = serde_json::json!({"status": "sent"});
-        Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string(&result).unwrap_or_default(),
-        )]))
+        let body: serde_json::Value = resp.json().await.unwrap_or(serde_json::json!({}));
+        Ok(body)
     } else {
         let text = resp.text().await.unwrap_or_default();
         Err(ErrorData::internal_error(
@@ -924,7 +924,7 @@ impl WshMcpServer {
             };
             let data_ref = data.clone();
             let len = data.len();
-            proxy_post_bytes(
+            let remote_body = proxy_post_bytes(
                 &backend,
                 &format!("/sessions/{}/input", params.session),
                 data,
@@ -936,6 +936,10 @@ impl WshMcpServer {
                 "bytes": len,
                 "preview": preview,
             });
+            // Forward generation from remote.
+            if let Some(gen) = remote_body.get("generation") {
+                result["generation"] = gen.clone();
+            }
             if len == 0 {
                 result["warning"] = serde_json::json!(
                     "Input was empty (0 bytes). If you intended a control character, \
@@ -969,6 +973,7 @@ impl WshMcpServer {
 
         let data_ref = data.clone();
         let len = data.len();
+        let generation = session.activity.generation();
         tokio::time::timeout(
             Duration::from_secs(5),
             session.input_tx.send(data),
@@ -988,6 +993,7 @@ impl WshMcpServer {
             "status": "sent",
             "bytes": len,
             "preview": preview,
+            "generation": generation,
         });
         if len == 0 {
             result["warning"] = serde_json::json!(
@@ -1016,14 +1022,25 @@ impl WshMcpServer {
 
         // Federation: proxy raw bytes to remote.
         if let McpSessionTarget::Remote(backend) = self.resolve_server(params.server.as_deref())? {
-            return proxy_post_bytes(
+            let remote_body = proxy_post_bytes(
                 &backend,
                 &format!("/sessions/{}/input", params.session),
                 data,
-            ).await;
+            ).await?;
+            let mut result = serde_json::json!({
+                "status": "sent",
+                "bytes": len,
+            });
+            if let Some(gen) = remote_body.get("generation") {
+                result["generation"] = gen.clone();
+            }
+            return Ok(CallToolResult::success(vec![Content::text(
+                serde_json::to_string(&result).unwrap_or_default(),
+            )]));
         }
 
         let session = self.get_session(&params.session)?;
+        let generation = session.activity.generation();
         tokio::time::timeout(
             Duration::from_secs(5),
             session.input_tx.send(data),
@@ -1038,6 +1055,7 @@ impl WshMcpServer {
         let result = serde_json::json!({
             "status": "sent",
             "bytes": len,
+            "generation": generation,
         });
         Ok(CallToolResult::success(vec![Content::text(
             serde_json::to_string(&result).unwrap_or_default(),
