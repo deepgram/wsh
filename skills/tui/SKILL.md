@@ -69,17 +69,8 @@ need to know the program's keybindings.
 
 ### Universal Navigation Keys
 
-    $'\x1b[A'       # Arrow Up
-    $'\x1b[B'       # Arrow Down
-    $'\x1b[C'       # Arrow Right
-    $'\x1b[D'       # Arrow Left
-    $'\x1b[5~'      # Page Up
-    $'\x1b[6~'      # Page Down
-    $'\x1b[H'       # Home
-    $'\x1b[F'       # End
-    $'\t'           # Tab (often cycles panes or fields)
-    $'\n'           # Enter (confirm / open)
-    $'\x1b'         # Escape (cancel / back)
+Arrow keys, Page Up/Down, Home/End, Tab (cycle panes), Enter
+(confirm/open), Escape (cancel/back).
 
 ### Vim-Style Navigation
 Many TUIs adopt vim conventions:
@@ -180,7 +171,7 @@ resource type (`:pods`, `:deployments`). `j/k` navigates,
 ### General Strategy for Unfamiliar TUIs
 1. Read the screen — look for help hints at top or bottom
 2. Try `?` or `h` — most TUIs open a help screen
-3. Try `F1` (`$'\x1bOP'`) — some use function keys for help
+3. Try F1 — some use function keys for help
 4. Read the help, then press `q` or `Esc` to close it
 5. If completely stuck: `q`, `Esc`, `:q`, `Ctrl+C`,
    `Ctrl+Q` — try these in order to exit
