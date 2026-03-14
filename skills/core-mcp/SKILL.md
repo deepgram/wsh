@@ -3,7 +3,7 @@ name: core-mcp
 description: >
   REQUIRED before any wsh terminal operation. Contains the complete MCP
   tool reference and bootstrap sequence for wsh_create_session,
-  wsh_send_input, wsh_get_screen, wsh_run_command, and all wsh_* tools.
+  wsh_send_input, wsh_get_screen, wsh_send_and_read, wsh_send_keys, and all wsh_* tools.
   Do NOT guess wsh CLI commands or HTTP endpoints — use MCP tools or load
   this skill first.
 user-invocable: false
@@ -51,9 +51,9 @@ Returns the session name and terminal dimensions on success.
 
 **Step 3: Use the send/wait/read loop.** The primary tool:
 
-    wsh_run_command(session="work", input="ls -la\n", format="plain")
+    wsh_send_and_read(session="work", keys=[{"text": "ls -la"}, {"key": "enter"}], format="plain")
 
-This sends input, waits for idle, and returns the screen in one call.
+This sends keystrokes, waits for idle, and returns the screen in one call.
 For more control, use `wsh_send_input`, `wsh_await_idle`, and
 `wsh_get_screen` separately.
 
@@ -82,36 +82,69 @@ just this loop repeated until the task is done.
 
 These are the building blocks. Every specialized skill builds on these.
 
-### Run a Command (Send + Wait + Read)
-The primary tool for the send/wait/read loop. Sends input, waits for
-idle, then returns the screen contents.
+### Send and Read (Send + Wait + Read)
+The primary tool for the send/wait/read loop. Sends keystrokes, waits
+for idle, then returns the screen contents.
 
-Use `wsh_run_command` with:
+Use `wsh_send_and_read` with:
 - `session` — target session name (e.g., `"default"`)
-- `input` — the text to send (include `\n` for Enter)
+- `keys` — array of key actions (see Send Keys below)
 - `timeout_ms` — idle timeout (default 2000)
 - `max_wait_ms` — maximum wall-clock wait (default 30000)
 - `format` — `"plain"` or `"styled"` (default `"styled"`)
 
 Example: run `ls -la` and read the result:
 
-    wsh_run_command(session="default", input="ls -la\n", format="plain")
+    wsh_send_and_read(session="default", keys=[{"text": "ls -la"}, {"key": "enter"}], format="plain")
 
 Returns the screen contents plus a `generation` counter. If the
 terminal doesn't settle within `max_wait_ms`, the screen is still
 returned but flagged as an error.
 
-### Send Input
-Inject keystrokes into the terminal. The `input` field is a JSON
-string — use JSON escape sequences for special keys, not bash-style
-`\x` escapes (which are not valid JSON and will be sent literally).
+### Send Keys
+Inject keystrokes into the terminal using named keys. No encoding
+to get wrong — use key names instead of escape sequences.
+
+Use `wsh_send_keys` with:
+- `session` — target session name
+- `keys` — array of key actions
+
+Each element in `keys` is either:
+- `{"text": "..."}` — literal characters to type
+- `{"key": "..."}` — a named special key
+
+**Named keys:** `enter`, `tab`, `escape`, `backspace`, `delete`,
+`up`, `down`, `left`, `right`, `home`, `end`, `pageup`, `pagedown`,
+`ctrl+a` through `ctrl+z`, `f1`-`f12`. Case-insensitive.
+
+Examples:
+
+    wsh_send_keys(session="default", keys=[{"text": "ls -la"}, {"key": "enter"}])
+    wsh_send_keys(session="default", keys=[{"key": "ctrl+c"}])
+    wsh_send_keys(session="default", keys=[{"key": "escape"}, {"text": ":wq"}, {"key": "enter"}])
+
+Returns `{"status": "sent", "bytes": N}` on success.
+
+### Send Input (Low-Level)
+Raw byte injection for advanced use. Prefer `wsh_send_keys` for
+most input — it handles encoding automatically.
 
 Use `wsh_send_input` with:
 - `session` — target session name
 - `input` — the text or data to send (JSON string encoding)
 - `encoding` — `"utf8"` (default) or `"base64"`
 
-**Control character quick reference (JSON escapes):**
+Returns `{"status": "sent", "bytes": N, "preview": "..."}`.
+Includes a `warning` field if the input looks empty or
+double-escaped.
+
+**Base64 encoding** bypasses any MCP transport issues with control
+characters:
+- `wsh_send_input(session="default", input="Aw==", encoding="base64")` — Ctrl+C
+- `wsh_send_input(session="default", input="Cg==", encoding="base64")` — Enter
+
+<details>
+<summary>JSON escape reference (for utf8 encoding)</summary>
 
 | Key         | JSON escape  | Example                                    |
 |-------------|--------------|--------------------------------------------|
@@ -119,24 +152,10 @@ Use `wsh_send_input` with:
 | Tab         | `\t`         | `input="\t"`                               |
 | Ctrl+C      | `\u0003`     | `input="\u0003"`                           |
 | Ctrl+D      | `\u0004`     | `input="\u0004"`                           |
-| Ctrl+Z      | `\u001a`     | `input="\u001a"`                           |
-| Ctrl+L      | `\u000c`     | `input="\u000c"`                           |
-| Ctrl+A      | `\u0001`     | `input="\u0001"`                           |
-| Ctrl+E      | `\u0005`     | `input="\u0005"`                           |
-| Ctrl+U      | `\u0015`     | `input="\u0015"`                           |
 | Escape      | `\u001b`     | `input="\u001b"`                           |
-| Arrow Up    | `\u001b[A`   | `input="\u001b[A"`                         |
-| Arrow Down  | `\u001b[B`   | `input="\u001b[B"`                         |
-| Arrow Right | `\u001b[C`   | `input="\u001b[C"`                         |
-| Arrow Left  | `\u001b[D`   | `input="\u001b[D"`                         |
 
 Any Ctrl+key = `\u00XX` where XX is the ASCII code (A=01, B=02, ..., Z=1a).
-Arrow keys and function keys use `\u001b` (Escape) as a prefix.
-
-**Base64 encoding** is an alternative for binary data:
-- `wsh_send_input(session="default", input="Aw==", encoding="base64")` — Ctrl+C
-
-Returns `{"status": "sent", "bytes": N}` on success.
+</details>
 
 ### Wait for Idle
 Block until the terminal has been idle for `timeout_ms` milliseconds.
