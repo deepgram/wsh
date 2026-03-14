@@ -604,13 +604,14 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                     }
                 }
             };
+            let generation = session.activity.generation();
             match tokio::time::timeout(
                 std::time::Duration::from_secs(5),
                 session.input_tx.send(bytes),
             ).await {
                 Ok(Ok(())) => {
                     session.activity.touch();
-                    WsResponse::success(id, method, serde_json::json!({}))
+                    WsResponse::success(id, method, serde_json::json!({"generation": generation}))
                 }
                 Ok(Err(_)) => WsResponse::error(
                     id,
@@ -1352,7 +1353,8 @@ mod tests {
         };
         let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
-        assert!(json["result"].is_object());
+        assert!(json["result"]["generation"].is_number(),
+            "send_input should return generation");
 
         let received = rx.try_recv().unwrap();
         assert_eq!(received.as_ref(), b"hello");
@@ -1370,7 +1372,8 @@ mod tests {
         };
         let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
-        assert!(json["result"].is_object());
+        assert!(json["result"]["generation"].is_number(),
+            "send_input should return generation");
 
         let received = rx.try_recv().unwrap();
         assert_eq!(received.as_ref(), b"\x03");
