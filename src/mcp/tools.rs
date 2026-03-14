@@ -125,7 +125,7 @@ pub struct SendInputParams {
     pub session: String,
 
     /// The input data to send. Interpretation depends on `encoding`.
-    #[schemars(description = "The input data to send. For utf8 encoding, this is plain text. For base64 encoding, this is base64-encoded binary data.")]
+    #[schemars(description = "The input data to send. Uses JSON string encoding — control characters must be JSON escape sequences, not bash-style escapes. Common keys: \\n = Enter, \\t = Tab, \\u0003 = Ctrl+C, \\u0004 = Ctrl+D, \\u001b = Escape, \\u001b[A/B/C/D = Arrow Up/Down/Right/Left. Always include \\n to 'press Enter': \"ls -la\\n\". For base64 encoding, this is base64-encoded binary data.")]
     pub input: String,
 
     /// How to interpret the `input` field. Defaults to `utf8`.
@@ -251,7 +251,7 @@ pub struct RunCommandParams {
     pub session: String,
 
     /// The input to send (typically a command followed by a newline).
-    #[schemars(description = "The input to send to the terminal (e.g. a command string). A newline is NOT appended automatically.")]
+    #[schemars(description = "The input to send to the terminal. A trailing \\n is NOT appended automatically — include it to press Enter: \"ls -la\\n\". Control characters use JSON escapes (see wsh_send_input).")]
     pub input: String,
 
     /// Idle timeout in milliseconds. Defaults to 2000.

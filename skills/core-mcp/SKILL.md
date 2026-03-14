@@ -102,20 +102,39 @@ terminal doesn't settle within `max_wait_ms`, the screen is still
 returned but flagged as an error.
 
 ### Send Input
-Inject keystrokes into the terminal. Supports UTF-8 text (default)
-or base64-encoded binary for control characters.
+Inject keystrokes into the terminal. The `input` field is a JSON
+string — use JSON escape sequences for special keys, not bash-style
+`\x` escapes (which are not valid JSON and will be sent literally).
 
 Use `wsh_send_input` with:
 - `session` — target session name
-- `input` — the text or data to send
+- `input` — the text or data to send (JSON string encoding)
 - `encoding` — `"utf8"` (default) or `"base64"`
 
-Examples:
-- Send a command: `wsh_send_input(session="default", input="ls -la\n")`
-- Send Ctrl+C: `wsh_send_input(session="default", input="Aw==", encoding="base64")` (base64 of `\x03`)
-- Send Escape: `wsh_send_input(session="default", input="Gw==", encoding="base64")` (base64 of `\x1b`)
-- Send Arrow Up: `wsh_send_input(session="default", input="G1tB", encoding="base64")` (base64 of `\x1b[A`)
-- Send Tab: `wsh_send_input(session="default", input="\t")`
+**Control character quick reference (JSON escapes):**
+
+| Key         | JSON escape  | Example                                    |
+|-------------|--------------|--------------------------------------------|
+| Enter       | `\n`         | `input="ls -la\n"`                         |
+| Tab         | `\t`         | `input="\t"`                               |
+| Ctrl+C      | `\u0003`     | `input="\u0003"`                           |
+| Ctrl+D      | `\u0004`     | `input="\u0004"`                           |
+| Ctrl+Z      | `\u001a`     | `input="\u001a"`                           |
+| Ctrl+L      | `\u000c`     | `input="\u000c"`                           |
+| Ctrl+A      | `\u0001`     | `input="\u0001"`                           |
+| Ctrl+E      | `\u0005`     | `input="\u0005"`                           |
+| Ctrl+U      | `\u0015`     | `input="\u0015"`                           |
+| Escape      | `\u001b`     | `input="\u001b"`                           |
+| Arrow Up    | `\u001b[A`   | `input="\u001b[A"`                         |
+| Arrow Down  | `\u001b[B`   | `input="\u001b[B"`                         |
+| Arrow Right | `\u001b[C`   | `input="\u001b[C"`                         |
+| Arrow Left  | `\u001b[D`   | `input="\u001b[D"`                         |
+
+Any Ctrl+key = `\u00XX` where XX is the ASCII code (A=01, B=02, ..., Z=1a).
+Arrow keys and function keys use `\u001b` (Escape) as a prefix.
+
+**Base64 encoding** is an alternative for binary data:
+- `wsh_send_input(session="default", input="Aw==", encoding="base64")` — Ctrl+C
 
 Returns `{"status": "sent", "bytes": N}` on success.
 
