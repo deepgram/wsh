@@ -3773,3 +3773,143 @@ pub(super) async fn get_server(
         "server_id": backend.server_id,
     })))
 }
+
+// ── MCP WebSocket transport (internal bridge endpoint) ──────────
+
+/// WebSocket endpoint for the `wsh mcp` stdio bridge to connect to.
+///
+/// This is an **internal** transport endpoint, not a public MCP transport.
+/// External MCP clients use the Streamable HTTP `/mcp` endpoint. The WebSocket
+/// here provides reliable interest signaling (via `ConnectionGuard`) so the
+/// ephemeral server stays alive while the MCP bridge is connected.
+///
+/// Protocol: newline-delimited JSON (matching rmcp's `JsonRpcMessageCodec`).
+/// Each WS Text message contains exactly one JSON-RPC message.
+pub(super) async fn mcp_ws_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    ws.max_message_size(MAX_WS_MESSAGE_SIZE)
+        .on_upgrade(|socket| handle_mcp_ws(socket, state))
+}
+
+async fn handle_mcp_ws(socket: WebSocket, state: AppState) {
+    // Register with ShutdownCoordinator — holds the server alive.
+    let (_conn_guard, mut shutdown_rx) = state.shutdown.register();
+    if *shutdown_rx.borrow_and_update() {
+        return;
+    }
+
+    // Increment MCP session counter (diagnostic).
+    let mcp_counter = state.mcp_session_count.clone();
+    let current = mcp_counter.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    if current >= super::MAX_MCP_SESSIONS {
+        mcp_counter.fetch_sub(1, std::sync::atomic::Ordering::Release);
+        tracing::warn!("MCP WS connection rejected: max sessions reached");
+        return;
+    }
+
+    // Create the MCP server handler with session counter for cleanup on drop.
+    let handler = crate::mcp::WshMcpServer::new(state.clone())
+        .with_session_counter(mcp_counter);
+
+    // Create an in-memory duplex channel to bridge WS ↔ rmcp.
+    // rmcp speaks AsyncRead/AsyncWrite with newline-delimited JSON framing.
+    let (rmcp_side, bridge_side) = tokio::io::duplex(65536);
+    let (bridge_read, mut bridge_write) = tokio::io::split(bridge_side);
+
+    // Spawn rmcp server on the rmcp side of the duplex.
+    let rmcp_handle = tokio::spawn(async move {
+        match rmcp::service::serve_server(handler, rmcp_side).await {
+            Ok(running) => {
+                // Wait for the service to complete (peer closes or error).
+                let _ = running.waiting().await;
+            }
+            Err(e) => {
+                tracing::debug!(?e, "MCP WS: rmcp initialization failed");
+            }
+        }
+    });
+
+    let (mut ws_tx, mut ws_rx) = socket.split();
+
+    // Bridge task: WS → rmcp (write to bridge_write)
+    let ws_to_rmcp = tokio::spawn(async move {
+        while let Some(msg) = ws_rx.next().await {
+            match msg {
+                Ok(Message::Text(text)) => {
+                    use tokio::io::AsyncWriteExt;
+                    // rmcp expects newline-delimited JSON
+                    if let Err(e) = bridge_write.write_all(text.as_bytes()).await {
+                        tracing::debug!(?e, "MCP WS: write to rmcp failed");
+                        break;
+                    }
+                    if !text.ends_with('\n') {
+                        if let Err(e) = bridge_write.write_all(b"\n").await {
+                            tracing::debug!(?e, "MCP WS: write newline to rmcp failed");
+                            break;
+                        }
+                    }
+                    if let Err(e) = bridge_write.flush().await {
+                        tracing::debug!(?e, "MCP WS: flush to rmcp failed");
+                        break;
+                    }
+                }
+                Ok(Message::Close(_)) => break,
+                Ok(Message::Ping(_)) => {} // tungstenite handles pong automatically
+                Ok(_) => {} // ignore binary, pong
+                Err(e) => {
+                    tracing::debug!(?e, "MCP WS: ws recv error");
+                    break;
+                }
+            }
+        }
+        // Drop bridge_write to signal EOF to rmcp's reader
+        drop(bridge_write);
+    });
+
+    // Bridge task: rmcp → WS (read from bridge_read, line by line)
+    let rmcp_to_ws = tokio::spawn(async move {
+        use tokio::io::AsyncBufReadExt;
+        let mut reader = tokio::io::BufReader::new(bridge_read);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line).await {
+                Ok(0) => break, // EOF
+                Ok(_) => {
+                    let trimmed = line.trim_end();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    if ws_tx.send(Message::Text(trimmed.to_string().into())).await.is_err() {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!(?e, "MCP WS: read from rmcp failed");
+                    break;
+                }
+            }
+        }
+        // Send close frame
+        let _ = ws_tx.send(Message::Close(Some(CloseFrame {
+            code: axum::extract::ws::close_code::NORMAL,
+            reason: "MCP session ended".into(),
+        }))).await;
+    });
+
+    // Wait for either direction to finish, or shutdown signal
+    tokio::select! {
+        _ = ws_to_rmcp => {}
+        _ = rmcp_to_ws => {}
+        _ = shutdown_rx.changed() => {
+            tracing::debug!("MCP WS: shutdown signal received");
+        }
+    }
+
+    // Cancel rmcp server
+    rmcp_handle.abort();
+    tracing::debug!("MCP WS connection closed");
+    // _conn_guard drops here → active_count decrements → interest_changed fires
+}

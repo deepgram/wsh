@@ -21,6 +21,9 @@ struct Inner {
     active: AtomicUsize,
     /// Notified when all connections close
     all_closed: Notify,
+    /// Notified when interest level changes (connection count decrements or
+    /// external events that may affect shutdown decisions).
+    interest_changed: Notify,
 }
 
 impl ShutdownCoordinator {
@@ -31,6 +34,7 @@ impl ShutdownCoordinator {
                 shutdown_tx,
                 active: AtomicUsize::new(0),
                 all_closed: Notify::new(),
+                interest_changed: Notify::new(),
             }),
         }
     }
@@ -71,6 +75,27 @@ impl ShutdownCoordinator {
     pub fn active_count(&self) -> usize {
         self.inner.active.load(Ordering::SeqCst)
     }
+
+    /// Wake any task waiting on [`interest_changed`](Self::interest_changed).
+    ///
+    /// Called by external code (e.g., MCP session drop) to signal that the
+    /// interest level may have changed. `ConnectionGuard::drop` already calls
+    /// this automatically.
+    pub fn notify_interest_changed(&self) {
+        self.inner.interest_changed.notify_waiters();
+    }
+
+    /// Returns a `Notified` future that completes when interest level changes.
+    ///
+    /// **TOCTOU-safe usage:** register the `Notified` *before* checking state:
+    /// ```ignore
+    /// let notified = coordinator.interest_changed();
+    /// if coordinator.active_count() == 0 { /* shut down */ }
+    /// notified.await; // won't miss drops between check and wait
+    /// ```
+    pub fn interest_changed(&self) -> tokio::sync::futures::Notified<'_> {
+        self.inner.interest_changed.notified()
+    }
 }
 
 impl Default for ShutdownCoordinator {
@@ -87,6 +112,10 @@ pub struct ConnectionGuard {
 impl Drop for ConnectionGuard {
     fn drop(&mut self) {
         let prev = self.inner.active.fetch_sub(1, Ordering::SeqCst);
+        // Always notify interest_changed — any decrement could tip the
+        // ephemeral monitor's has_interest() check (which combines
+        // active_count with sessions.is_empty()).
+        self.inner.interest_changed.notify_waiters();
         if prev == 1 {
             // We were the last connection, notify waiters
             self.inner.all_closed.notify_waiters();
@@ -175,6 +204,57 @@ mod tests {
             .await
             .expect("should complete")
             .expect("should not panic");
+    }
+
+    #[tokio::test]
+    async fn test_interest_changed_fires_on_guard_drop() {
+        let coord = ShutdownCoordinator::new();
+        let (guard, _) = coord.register();
+        assert_eq!(coord.active_count(), 1);
+
+        let notified = coord.interest_changed();
+        drop(guard);
+
+        // Should complete promptly
+        tokio::time::timeout(Duration::from_millis(100), notified)
+            .await
+            .expect("interest_changed should fire on guard drop");
+        assert_eq!(coord.active_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_interest_changed_fires_on_external_notify() {
+        let coord = ShutdownCoordinator::new();
+
+        let notified = coord.interest_changed();
+        coord.notify_interest_changed();
+
+        tokio::time::timeout(Duration::from_millis(100), notified)
+            .await
+            .expect("interest_changed should fire on external notify");
+    }
+
+    #[tokio::test]
+    async fn test_interest_changed_toctou_safety() {
+        // Verify that registering the Notified BEFORE checking count
+        // correctly catches a guard drop that happens between check and await.
+        let coord = ShutdownCoordinator::new();
+        let (guard, _) = coord.register();
+
+        // Step 1: register notified BEFORE checking state
+        let notified = coord.interest_changed();
+
+        // Step 2: check state — still 1
+        assert_eq!(coord.active_count(), 1);
+
+        // Step 3: guard drops between check and await
+        drop(guard);
+
+        // Step 4: notified must fire (not hang)
+        tokio::time::timeout(Duration::from_millis(100), notified)
+            .await
+            .expect("TOCTOU: interest_changed must fire even when guard drops between check and await");
+        assert_eq!(coord.active_count(), 0);
     }
 
     #[tokio::test]

@@ -745,82 +745,13 @@ async fn run_server(
 
     tracing::info!("wsh server ready");
 
-    // Ephemeral shutdown monitor: when the last session exits in non-persistent
-    // mode, shut down the server automatically.  Also includes an idle timeout
-    // so that an orphaned ephemeral server (client crashed before creating a
-    // session) doesn't run forever.
-    let config_for_monitor = server_config.clone();
-    let sessions_for_monitor = sessions.clone();
-    let ephemeral_handle = tokio::spawn(async move {
-        let mut events = sessions_for_monitor.subscribe_events();
-
-        if !config_for_monitor.is_persistent() {
-            // Give the client 30 seconds to create its first session.
-            // If nothing happens, the daemon was likely orphaned.
-            let idle_timeout = tokio::time::sleep(std::time::Duration::from_secs(30));
-            tokio::pin!(idle_timeout);
-
-            // Wait for either the first event or the idle timeout
-            tokio::select! {
-                result = events.recv() => {
-                    match result {
-                        Ok(_) => {} // Got an event, enter normal monitoring
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => return false,
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {} // Lost events, enter normal monitoring
-                    }
-                }
-                _ = &mut idle_timeout => {
-                    if sessions_for_monitor.is_empty() {
-                        tracing::info!("no sessions created within idle timeout, ephemeral server shutting down");
-                        return true;
-                    }
-                    // Sessions exist somehow, enter normal monitoring
-                }
-            }
-        }
-
-        // Normal monitoring: wait for all sessions to end
-        loop {
-            match events.recv().await {
-                Ok(event) => {
-                    let is_removal = matches!(
-                        event,
-                        wsh::session::SessionEvent::Destroyed { .. }
-                    );
-                    if is_removal
-                        && !config_for_monitor.is_persistent()
-                        && sessions_for_monitor.is_empty()
-                    {
-                        tracing::info!(
-                            "last session ended, ephemeral server shutting down"
-                        );
-                        return true;
-                    }
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => return false,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!(skipped = n, "ephemeral monitor lagged on session events");
-                    if !config_for_monitor.is_persistent() && sessions_for_monitor.is_empty() {
-                        // ── Grace period after lag ────────────────────────
-                        //
-                        // During rapid session churn (e.g., AI orchestration
-                        // creating/destroying many sessions), the registry
-                        // may appear empty in the gap between a destroy and
-                        // the next create. Wait briefly before committing to
-                        // shutdown so a racing create has time to land.
-                        // ─────────────────────────────────────────────────
-                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                        if sessions_for_monitor.is_empty() {
-                            tracing::info!("last session ended (detected after lag), ephemeral server shutting down");
-                            return true;
-                        }
-                        tracing::debug!("new session appeared during lag grace period, continuing");
-                    }
-                    continue;
-                }
-            }
-        }
-    });
+    // Ephemeral shutdown monitor: when no interest remains (no sessions AND
+    // no persistent connections), shut down the server automatically.
+    let ephemeral_handle = tokio::spawn(ephemeral_monitor(
+        server_config.clone(),
+        sessions.clone(),
+        shutdown.clone(),
+    ));
 
     // Wait for Ctrl+C, SIGTERM, ephemeral shutdown, or `wsh stop` request
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
@@ -905,6 +836,126 @@ async fn run_server(
     Ok(())
 }
 
+/// Interest-aware ephemeral shutdown monitor.
+///
+/// Returns `true` when the server should shut down (no interest remaining in
+/// non-persistent mode), or `false` if the event channel closed.
+///
+/// "Interest" means at least one of:
+/// - Terminal sessions exist (`!sessions.is_empty()`)
+/// - Persistent connections are active (`shutdown.active_count() > 0`),
+///   e.g., WebSocket clients streaming a session, web UI, `/mcp/ws` bridge
+///
+/// HTTP MCP sessions (Streamable HTTP `/mcp`) are deliberately excluded from
+/// interest: they are stateless and cannot reliably signal client departure.
+async fn ephemeral_monitor(
+    config: Arc<api::ServerConfig>,
+    sessions: SessionRegistry,
+    shutdown: ShutdownCoordinator,
+) -> bool {
+    let mut events = sessions.subscribe_events();
+
+    /// Check if anything is keeping the server alive.
+    fn has_interest(sessions: &SessionRegistry, shutdown: &ShutdownCoordinator) -> bool {
+        !sessions.is_empty() || shutdown.active_count() > 0
+    }
+
+    // ── Phase 1: idle timeout ─────────────────────────────────────
+    //
+    // In non-persistent mode, give clients 30 seconds to establish
+    // interest (create a session or open a persistent connection).
+    // If nothing happens, the daemon was likely orphaned.
+    if !config.is_persistent() {
+        let idle_timeout = tokio::time::sleep(std::time::Duration::from_secs(30));
+        tokio::pin!(idle_timeout);
+
+        loop {
+            // TOCTOU-safe: register notified BEFORE checking state
+            let notified = shutdown.interest_changed();
+            if has_interest(&sessions, &shutdown) {
+                break; // interest established, enter normal monitoring
+            }
+            tokio::select! {
+                result = events.recv() => {
+                    match result {
+                        Ok(_) => break, // event received, enter normal monitoring
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => return false,
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => break,
+                    }
+                }
+                _ = notified => {
+                    // Interest may have changed, re-check in next iteration
+                    continue;
+                }
+                _ = &mut idle_timeout => {
+                    if !has_interest(&sessions, &shutdown) {
+                        tracing::info!("no interest within idle timeout, ephemeral server shutting down");
+                        return true;
+                    }
+                    break; // interest appeared, enter normal monitoring
+                }
+            }
+        }
+    }
+
+    // ── Phase 2: normal monitoring ────────────────────────────────
+    //
+    // Wait for all interest to drain (sessions empty AND active_count == 0).
+    loop {
+        let notified = shutdown.interest_changed();
+
+        // Quick check: if persistent mode was toggled on, never shut down
+        if config.is_persistent() {
+            // Wait for events indefinitely (persistent mode)
+            match events.recv().await {
+                Ok(_) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return false,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+            }
+        }
+
+        if !has_interest(&sessions, &shutdown) {
+            tracing::info!("no interest remaining, ephemeral server shutting down");
+            return true;
+        }
+
+        tokio::select! {
+            result = events.recv() => {
+                match result {
+                    Ok(event) => {
+                        let is_removal = matches!(
+                            event,
+                            wsh::session::SessionEvent::Destroyed { .. }
+                        );
+                        if is_removal && !has_interest(&sessions, &shutdown) {
+                            tracing::info!("last session ended, ephemeral server shutting down");
+                            return true;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return false,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(skipped = n, "ephemeral monitor lagged on session events");
+                        if !has_interest(&sessions, &shutdown) {
+                            // Grace period: rapid session churn may leave
+                            // registry momentarily empty between destroy
+                            // and the next create.
+                            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                            if !has_interest(&sessions, &shutdown) {
+                                tracing::info!("no interest remaining (detected after lag), ephemeral server shutting down");
+                                return true;
+                            }
+                            tracing::debug!("interest appeared during lag grace period, continuing");
+                        }
+                    }
+                }
+            }
+            _ = notified => {
+                // active_count changed, re-check in next iteration
+            }
+        }
+    }
+}
+
 /// Manual TLS accept loop for HTTPS serving.
 ///
 /// `axum::serve()` only accepts `TcpListener` (sealed `Listener` trait), so
@@ -970,7 +1021,11 @@ async fn serve_tls(
 // ── MCP stdio mode ─────────────────────────────────────────────────
 
 /// Run the MCP stdio bridge: connect to (or spawn) a server, then bridge
-/// stdin/stdout JSON-RPC ↔ the server's `/mcp` Streamable HTTP endpoint via UDS.
+/// stdin/stdout JSON-RPC ↔ the server's `/mcp/ws` WebSocket endpoint via UDS.
+///
+/// The WebSocket connection registers a `ConnectionGuard` on the server,
+/// providing reliable interest signaling for ephemeral shutdown. No manual
+/// DELETE cleanup is needed — the server detects disconnection automatically.
 async fn run_mcp(
     socket: Option<PathBuf>,
     server_name: String,
@@ -1002,224 +1057,86 @@ async fn run_mcp(
         tracing::debug!("connected to existing server");
     }
 
-    let uds_http = Arc::new(wsh::uds_client::UdsHttpClient::new(&http_socket_path));
-    let session_id: Arc<tokio::sync::Mutex<Option<String>>> =
-        Arc::new(tokio::sync::Mutex::new(None));
+    // Connect WebSocket-over-UDS to /mcp/ws eagerly. This registers a
+    // ConnectionGuard on the server immediately, preventing the ephemeral
+    // idle timeout from firing while the MCP host is slow to send `initialize`.
+    let stream = tokio::net::UnixStream::connect(&http_socket_path)
+        .await
+        .map_err(WshError::Io)?;
+    let (mut ws, _response) =
+        tokio_tungstenite::client_async("ws://localhost/mcp/ws", stream)
+            .await
+            .map_err(|e| WshError::Io(std::io::Error::new(std::io::ErrorKind::ConnectionRefused, e)))?;
+    tracing::debug!("connected to /mcp/ws");
+
+    use futures::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
 
     let stdin = tokio::io::stdin();
     let mut reader = tokio::io::BufReader::new(stdin);
-    // Stdout writes are serialized through an Arc<Mutex> so concurrent
-    // response tasks can write without interleaving.
-    let stdout = Arc::new(tokio::sync::Mutex::new(tokio::io::stdout()));
-
-    // ── Design decision: concurrent request dispatch ─────────────
-    //
-    // MCP hosts (e.g., Claude Desktop) may pipeline multiple requests
-    // before the first one completes. A sequential bridge would block
-    // fast queries (list_sessions, get_screen) behind slow tools
-    // (run_command with a 30s wait). We spawn each request into its
-    // own task and write responses to stdout as they arrive. JSON-RPC
-    // response correlation is handled by the `id` field, so ordering
-    // does not matter.
-    //
-    // Tasks are tracked in a JoinSet so we can drain in-flight requests
-    // on EOF, and bounded by a semaphore to prevent unbounded memory
-    // growth under sustained pipelining with a slow/unresponsive server.
-    // ─────────────────────────────────────────────────────────────
-    let mut in_flight = tokio::task::JoinSet::new();
-    let concurrency = Arc::new(tokio::sync::Semaphore::new(64));
+    let mut stdout = tokio::io::stdout();
 
     let mut line = String::new();
     loop {
         line.clear();
-        let n = tokio::io::AsyncBufReadExt::read_line(&mut reader, &mut line)
-            .await
-            .map_err(WshError::Io)?;
-        if n == 0 {
-            // EOF on stdin
-            break;
-        }
-
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        let body_str = trimmed.to_string();
-        let client = uds_http.clone();
-        let sid = session_id.clone();
-        let out = stdout.clone();
-        let sem = concurrency.clone();
-
-        in_flight.spawn(async move {
-            // Acquire permit before dispatching; dropped when the task completes.
-            let _permit = sem.acquire().await;
-            mcp_bridge_dispatch_uds(body_str, client, sid, out).await;
-        });
-    }
-
-    // ── Drain in-flight requests ─────────────────────────────────────
-    //
-    // Wait for dispatched tasks to finish so their responses reach the
-    // MCP host before we tear down stdout. Bounded by a timeout to
-    // avoid hanging indefinitely if the server is unresponsive.
-    // ─────────────────────────────────────────────────────────────────
-    if !in_flight.is_empty() {
-        tracing::debug!(
-            count = in_flight.len(),
-            "draining in-flight MCP bridge tasks"
-        );
-        let _ = tokio::time::timeout(std::time::Duration::from_secs(10), async {
-            while in_flight.join_next().await.is_some() {}
-        })
-        .await;
-    }
-
-    // ── Cleanup: terminate server-side MCP session ───────────────────
-    //
-    // Send HTTP DELETE to the /mcp endpoint with the session ID so the
-    // server's LocalSessionManager can clean up. Without this, each
-    // `wsh mcp` invocation leaks a session on the server.
-    // ─────────────────────────────────────────────────────────────────
-    let sid_guard = session_id.lock().await;
-    if let Some(ref sid) = *sid_guard {
-        let _ = uds_http.delete_with_headers(
-            "/mcp",
-            &[("Mcp-Session-Id", sid.as_str())],
-        ).await;
-        tracing::debug!("sent MCP session cleanup DELETE");
-    }
-    drop(sid_guard);
-
-    tracing::info!("wsh mcp stdio bridge exiting");
-    Ok(())
-}
-
-/// Dispatch a single MCP JSON-RPC request to the server over UDS and write
-/// the response to stdout. Called from a spawned task for concurrency.
-async fn mcp_bridge_dispatch_uds(
-    body_str: String,
-    client: Arc<wsh::uds_client::UdsHttpClient>,
-    session_id: Arc<tokio::sync::Mutex<Option<String>>>,
-    stdout: Arc<tokio::sync::Mutex<tokio::io::Stdout>>,
-) {
-    // Extract the JSON-RPC request ID so we can echo it in error responses
-    let request_id = serde_json::from_str::<serde_json::Value>(&body_str)
-        .ok()
-        .and_then(|v| v.get("id").cloned())
-        .unwrap_or(serde_json::Value::Null);
-
-    // Build extra headers
-    let sid_val;
-    let mut headers = vec![
-        ("Accept", "application/json, text/event-stream"),
-    ];
-    {
-        let sid = session_id.lock().await;
-        if let Some(ref s) = *sid {
-            sid_val = s.clone();
-        } else {
-            sid_val = String::new();
-        }
-    }
-    if !sid_val.is_empty() {
-        headers.push(("Mcp-Session-Id", &sid_val));
-    }
-
-    let resp = match client.post_raw(
-        "/mcp",
-        "application/json",
-        bytes::Bytes::from(body_str),
-        &headers,
-    ).await {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::error!(?e, "HTTP request to /mcp failed");
-            let err_json = serde_json::json!({
-                "jsonrpc": "2.0",
-                "error": {
-                    "code": -32603,
-                    "message": format!("HTTP request failed: {e}")
-                },
-                "id": request_id
-            });
-            let err_line = format!("{}\n", err_json);
-            let mut out = stdout.lock().await;
-            let _ = tokio::io::AsyncWriteExt::write_all(&mut *out, err_line.as_bytes()).await;
-            let _ = tokio::io::AsyncWriteExt::flush(&mut *out).await;
-            *session_id.lock().await = None;
-            return;
-        }
-    };
-
-    // Capture headers before consuming the body
-    let content_type = resp.headers
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_string();
-
-    // Capture mcp-session-id from response headers
-    if let Some(sid) = resp.headers.get("mcp-session-id") {
-        if let Ok(s) = sid.to_str() {
-            *session_id.lock().await = Some(s.to_string());
-        }
-    }
-
-    let status = resp.status;
-
-    // Stale session recovery
-    if status == hyper::StatusCode::NOT_FOUND || status == hyper::StatusCode::BAD_REQUEST {
-        let mut sid = session_id.lock().await;
-        if sid.is_some() {
-            tracing::warn!(status = %status, "server rejected session ID, clearing for re-init");
-            *sid = None;
-        }
-    }
-
-    let body = resp.text().await.unwrap_or_else(|_| String::new());
-
-    if !status.is_success() && !status.is_informational() {
-        tracing::warn!(status = %status, "MCP endpoint returned error");
-        if !body.trim().is_empty() {
-            let out_line = format!("{}\n", body.trim());
-            let mut out = stdout.lock().await;
-            let _ = tokio::io::AsyncWriteExt::write_all(&mut *out, out_line.as_bytes()).await;
-            let _ = tokio::io::AsyncWriteExt::flush(&mut *out).await;
-        }
-        return;
-    }
-
-    // Parse SSE response based on content-type only.
-    let mut out = stdout.lock().await;
-    if content_type.contains("text/event-stream") {
-        for event in body.split("\n\n") {
-            let event = event.trim();
-            if event.is_empty() {
-                continue;
+        tokio::select! {
+            // stdin → WS
+            result = tokio::io::AsyncBufReadExt::read_line(&mut reader, &mut line) => {
+                match result {
+                    Ok(0) => {
+                        // EOF on stdin — MCP host closed
+                        tracing::debug!("stdin EOF");
+                        break;
+                    }
+                    Ok(_) => {
+                        let trimmed = line.trim();
+                        if !trimmed.is_empty() {
+                            if ws.send(Message::Text(trimmed.to_string().into())).await.is_err() {
+                                tracing::debug!("WS send failed");
+                                break;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(?e, "stdin read error");
+                        break;
+                    }
+                }
             }
-            for event_line in event.lines() {
-                if let Some(data) = event_line.strip_prefix("data:") {
-                    let json_str = data.trim();
-                    if !json_str.is_empty() {
-                        let out_line = format!("{}\n", json_str);
-                        let _ = tokio::io::AsyncWriteExt::write_all(
-                            &mut *out,
-                            out_line.as_bytes(),
-                        )
-                        .await;
+            // WS → stdout
+            msg = ws.next() => {
+                match msg {
+                    Some(Ok(Message::Text(text))) => {
+                        use tokio::io::AsyncWriteExt;
+                        let text_ref: &str = &text;
+                        let _ = stdout.write_all(text_ref.as_bytes()).await;
+                        if !text_ref.ends_with('\n') {
+                            let _ = stdout.write_all(b"\n").await;
+                        }
+                        let _ = stdout.flush().await;
+                    }
+                    Some(Ok(Message::Close(_))) => {
+                        tracing::debug!("WS close received");
+                        break;
+                    }
+                    Some(Ok(_)) => {} // ignore binary, ping, pong
+                    Some(Err(e)) => {
+                        tracing::error!(?e, "WS recv error");
+                        break;
+                    }
+                    None => {
+                        tracing::debug!("WS stream ended");
+                        break;
                     }
                 }
             }
         }
-    } else {
-        let trimmed_body = body.trim();
-        if !trimmed_body.is_empty() {
-            let out_line = format!("{}\n", trimmed_body);
-            let _ = tokio::io::AsyncWriteExt::write_all(&mut *out, out_line.as_bytes()).await;
-        }
     }
-    let _ = tokio::io::AsyncWriteExt::flush(&mut *out).await;
+
+    // Close WebSocket gracefully
+    let _ = ws.close(None).await;
+    tracing::info!("wsh mcp stdio bridge exiting");
+    Ok(())
 }
 
 // ── Default mode (no subcommand) ───────────────────────────────────

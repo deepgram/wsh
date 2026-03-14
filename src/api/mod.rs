@@ -236,6 +236,7 @@ pub fn router(state: AppState, config: RouterConfig) -> Router {
         .route("/openapi.yaml", get(openapi_spec))
         .route("/docs", get(docs_index))
         .nest_service("/mcp", mcp_service)
+        .route("/mcp/ws", get(mcp_ws_handler))
         .with_state(state);
 
     // Auth/origin layer is applied first (inner), then rate limiting (outer).
@@ -1466,26 +1467,52 @@ mod tests {
 
     // ── Ephemeral shutdown logic tests ───────────────────────────────
 
-    /// Simulates the ephemeral shutdown monitor: watches for session events
-    /// and returns `true` when the last session is removed in ephemeral mode.
+    /// Simulates the ephemeral shutdown monitor (Phase 2 only — no idle timeout).
+    ///
+    /// Watches for session events and interest changes. Returns `true` when
+    /// no interest remains in ephemeral mode.
     async fn run_ephemeral_monitor(
         config: Arc<ServerConfig>,
         sessions: crate::session::SessionRegistry,
+        shutdown: ShutdownCoordinator,
     ) -> bool {
         let mut events = sessions.subscribe_events();
+
+        fn has_interest(
+            sessions: &crate::session::SessionRegistry,
+            shutdown: &ShutdownCoordinator,
+        ) -> bool {
+            !sessions.is_empty() || shutdown.active_count() > 0
+        }
+
         loop {
-            match events.recv().await {
-                Ok(event) => {
-                    let is_removal = matches!(
-                        event,
-                        crate::session::SessionEvent::Destroyed { .. }
-                    );
-                    if is_removal && !config.is_persistent() && sessions.is_empty() {
+            let notified = shutdown.interest_changed();
+
+            tokio::select! {
+                result = events.recv() => {
+                    match result {
+                        Ok(event) => {
+                            let is_removal = matches!(
+                                event,
+                                crate::session::SessionEvent::Destroyed { .. }
+                            );
+                            if is_removal
+                                && !config.is_persistent()
+                                && !has_interest(&sessions, &shutdown)
+                            {
+                                return true;
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => return false,
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    }
+                }
+                _ = notified => {
+                    // Interest changed — check if we should shut down
+                    if !config.is_persistent() && !has_interest(&sessions, &shutdown) {
                         return true;
                     }
                 }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => return false,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
             }
         }
     }
@@ -1498,7 +1525,8 @@ mod tests {
         // Start the monitor and yield so it subscribes to events before
         // we create any sessions.  (In production the monitor starts at
         // server boot, well before any sessions exist.)
-        let monitor = tokio::spawn(run_ephemeral_monitor(config.clone(), registry.clone()));
+        let shutdown = ShutdownCoordinator::new();
+        let monitor = tokio::spawn(run_ephemeral_monitor(config.clone(), registry.clone(), shutdown.clone()));
         tokio::task::yield_now().await;
 
         // Create a session via the registry
@@ -1567,9 +1595,10 @@ mod tests {
     async fn test_persistent_server_stays_alive_when_last_session_removed() {
         let config = Arc::new(ServerConfig::new(true)); // persistent
         let registry = crate::session::SessionRegistry::new();
+        let shutdown = ShutdownCoordinator::new();
 
         // Start the monitor and yield so it subscribes before events fire
-        let monitor = tokio::spawn(run_ephemeral_monitor(config.clone(), registry.clone()));
+        let monitor = tokio::spawn(run_ephemeral_monitor(config.clone(), registry.clone(), shutdown.clone()));
         tokio::task::yield_now().await;
 
         // Create and remove a session
@@ -1636,9 +1665,10 @@ mod tests {
     async fn test_ephemeral_does_not_trigger_while_sessions_remain() {
         let config = Arc::new(ServerConfig::new(false)); // ephemeral
         let registry = crate::session::SessionRegistry::new();
+        let shutdown = ShutdownCoordinator::new();
 
         // Start the monitor and yield so it subscribes before events fire
-        let monitor = tokio::spawn(run_ephemeral_monitor(config.clone(), registry.clone()));
+        let monitor = tokio::spawn(run_ephemeral_monitor(config.clone(), registry.clone(), shutdown.clone()));
         tokio::task::yield_now().await;
 
         let app = router(
@@ -1758,6 +1788,7 @@ mod tests {
         let monitor = tokio::spawn(run_ephemeral_monitor(
             state.server_config.clone(),
             state.sessions.clone(),
+            state.shutdown.clone(),
         ));
 
         let response = app
@@ -1779,6 +1810,155 @@ mod tests {
         )
         .await;
         assert!(result.is_err(), "upgraded-to-persistent server should not shutdown");
+    }
+
+    #[tokio::test]
+    async fn test_ephemeral_ws_interest_prevents_shutdown() {
+        // A persistent connection (active_count > 0) should keep the server
+        // alive even after the last session is destroyed.
+        let config = Arc::new(ServerConfig::new(false)); // ephemeral
+        let registry = crate::session::SessionRegistry::new();
+        let shutdown = ShutdownCoordinator::new();
+
+        let monitor = tokio::spawn(run_ephemeral_monitor(
+            config.clone(), registry.clone(), shutdown.clone(),
+        ));
+        tokio::task::yield_now().await;
+
+        // Simulate a persistent WS connection (e.g., /mcp/ws bridge)
+        let (guard, _rx) = shutdown.register();
+        assert_eq!(shutdown.active_count(), 1);
+
+        let app = router(
+            AppState {
+                sessions: registry.clone(),
+                shutdown: shutdown.clone(),
+                server_config: config.clone(),
+                server_ws_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                mcp_session_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                ticket_store: Arc::new(ticket::TicketStore::new()),
+                backends: crate::federation::registry::BackendRegistry::new(),
+                federation: std::sync::Arc::new(tokio::sync::Mutex::new(crate::federation::manager::FederationManager::new())),
+                ip_access: None,
+                hostname: "test".to_string(),
+                federation_config_path: None,
+                local_token: None,
+                default_backend_token: None,
+                server_id: "test-server-id".to_string(),
+                shutdown_notify: tokio_util::sync::CancellationToken::new(),
+                tcp_addr: None,
+                instance_name: "test".to_string(),
+                http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
+            },
+            RouterConfig::default(),
+        );
+
+        // Create and destroy a session
+        let response = app.clone().oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/sessions")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"name":"ws-interest-test"}"#))
+                .unwrap(),
+        ).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let response = app.oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/sessions/ws-interest-test")
+                .body(Body::empty())
+                .unwrap(),
+        ).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+        // Monitor should NOT fire — WS connection still active
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(300),
+            async { monitor.await.unwrap() },
+        ).await;
+        assert!(result.is_err(), "should not shutdown while WS connection is active");
+
+        // Verify interest is still held
+        assert_eq!(shutdown.active_count(), 1);
+        drop(guard);
+    }
+
+    #[tokio::test]
+    async fn test_ephemeral_all_interest_drops_triggers_shutdown() {
+        // When sessions are empty AND active_count drops to 0, the monitor
+        // should trigger shutdown.
+        let config = Arc::new(ServerConfig::new(false)); // ephemeral
+        let registry = crate::session::SessionRegistry::new();
+        let shutdown = ShutdownCoordinator::new();
+
+        // Simulate a persistent WS connection
+        let (guard, _rx) = shutdown.register();
+
+        let monitor = tokio::spawn(run_ephemeral_monitor(
+            config.clone(), registry.clone(), shutdown.clone(),
+        ));
+        tokio::task::yield_now().await;
+
+        let app = router(
+            AppState {
+                sessions: registry.clone(),
+                shutdown: shutdown.clone(),
+                server_config: config.clone(),
+                server_ws_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                mcp_session_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                ticket_store: Arc::new(ticket::TicketStore::new()),
+                backends: crate::federation::registry::BackendRegistry::new(),
+                federation: std::sync::Arc::new(tokio::sync::Mutex::new(crate::federation::manager::FederationManager::new())),
+                ip_access: None,
+                hostname: "test".to_string(),
+                federation_config_path: None,
+                local_token: None,
+                default_backend_token: None,
+                server_id: "test-server-id".to_string(),
+                shutdown_notify: tokio_util::sync::CancellationToken::new(),
+                tcp_addr: None,
+                instance_name: "test".to_string(),
+                http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
+            },
+            RouterConfig::default(),
+        );
+
+        // Create and destroy a session
+        let response = app.clone().oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/sessions")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"name":"all-interest-test"}"#))
+                .unwrap(),
+        ).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let response = app.oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/sessions/all-interest-test")
+                .body(Body::empty())
+                .unwrap(),
+        ).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+        // Still held by WS connection
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Drop the WS connection — all interest gone
+        drop(guard);
+        assert_eq!(shutdown.active_count(), 0);
+
+        // Monitor should fire
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            monitor,
+        ).await;
+        assert!(result.is_ok(), "ephemeral monitor should complete after all interest drops");
+        assert!(result.unwrap().unwrap(), "ephemeral monitor should return true");
     }
 
     // ── Screen mode HTTP tests ──────────────────────────────────────
