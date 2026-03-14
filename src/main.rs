@@ -606,6 +606,7 @@ async fn run_server(
         tracing::info!(prefix = %prefix, "base path prefix configured");
     }
     let router_bind = bind.unwrap_or_else(|| "127.0.0.1:0".parse().unwrap());
+    let uds_state = state.clone();
     let app = api::router(state, api::RouterConfig { token: token.clone(), bind: router_bind, cors_origins, rate_limit, base_prefix: base_prefix.clone() });
 
     // Acquire instance lock (flock) before binding any sockets.
@@ -641,7 +642,7 @@ async fn run_server(
             .map_err(WshError::Io)?;
     }
 
-    let uds_app = app.clone()
+    let uds_app = api::core_router(uds_state)
         .layer(axum::middleware::from_fn(api::transport::uds_transport_middleware));
 
     let uds_cancel = http_cancel.clone();
