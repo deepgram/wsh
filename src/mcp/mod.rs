@@ -1192,23 +1192,29 @@ impl WshMcpServer {
         })?;
 
         // Federation: proxy to remote if server is specified.
-        // For run_command on a remote, we execute the three steps (send input,
+        // For send_and_read on a remote, we execute the three steps (send input,
         // await idle, get screen) as separate proxied HTTP calls so the remote
         // server's activity tracker handles the timing.
         if let McpSessionTarget::Remote(backend) = self.resolve_server(params.server.as_deref())? {
-            // 1. Send input
+            // 1. Send input — response includes generation
             let input_bytes = Bytes::from(input_raw);
-            proxy_post_bytes(
+            let input_result = proxy_post_bytes(
                 &backend,
                 &format!("/sessions/{}/input", params.session),
                 input_bytes,
             ).await?;
 
-            // 2. Await idle (use the extended-timeout client)
-            let idle_path = format!(
+            // 2. Await idle using generation from input response
+            let mut idle_path = format!(
                 "/sessions/{}/idle?timeout_ms={}&max_wait_ms={}",
                 params.session, params.timeout_ms, params.max_wait_ms,
             );
+            if let Some(gen) = input_result["generation"].as_u64() {
+                idle_path.push_str(&format!(
+                    "&last_generation={}&last_session={}",
+                    gen, params.session,
+                ));
+            }
             let idle_result = proxy_get_long(&backend, &idle_path).await;
 
             // 3. Get screen regardless of idle outcome
@@ -1242,6 +1248,12 @@ impl WshMcpServer {
             // Local execution
             let session = self.get_session(&params.session)?;
 
+            // Capture generation before sending so wait_for_idle knows to wait
+            // for at least one new activity event. Without this, a race exists:
+            // if the PTY hasn't echoed our input before wait_for_idle checks,
+            // it sees stale timestamps and returns immediately.
+            let gen_before = session.activity.generation();
+
             // 1. Send input
             let data = Bytes::from(input_raw);
             tokio::time::timeout(
@@ -1256,10 +1268,6 @@ impl WshMcpServer {
                     None,
                 )
             })?;
-            // Note: no manual activity.touch() here. The PTY reader calls touch()
-            // when output arrives (including the echo of our input). Adding a manual
-            // touch would gratuitously reset the idle timer, forcing agents to
-            // wait the full timeout_ms even for silent commands.
 
             // 2. Await idle
             let timeout = Duration::from_millis(params.timeout_ms.min(MAX_WAIT_CEILING_MS));
@@ -1267,7 +1275,7 @@ impl WshMcpServer {
 
             let idle_result = tokio::time::timeout(
                 max_wait,
-                session.activity.wait_for_idle(timeout, None),
+                session.activity.wait_for_idle(timeout, Some(gen_before)),
             )
             .await;
 
