@@ -136,7 +136,13 @@ impl Default for RouterConfig {
     }
 }
 
-pub fn router(state: AppState, config: RouterConfig) -> Router {
+/// Build the MCP service and all API route definitions (session routes,
+/// management routes, ws-ticket, openapi, docs, MCP endpoints).
+///
+/// Returns a `Router` with `.with_state(state)` applied. This is the "protected"
+/// portion in TCP mode — the routes that auth/rate-limiting wrap. For UDS mode
+/// (via [`core_router()`]) these routes are served without any auth layer.
+fn api_routes(state: AppState) -> Router {
     use rmcp::transport::streamable_http_server::{
         StreamableHttpService, StreamableHttpServerConfig,
         session::local::LocalSessionManager,
@@ -160,6 +166,7 @@ pub fn router(state: AppState, config: RouterConfig) -> Router {
         Arc::new(LocalSessionManager::default()),
         StreamableHttpServerConfig::default(),
     );
+
     let session_routes = Router::new()
         .route("/input", post(input))
         .route("/input/mode", get(input_mode_get))
@@ -228,8 +235,7 @@ pub fn router(state: AppState, config: RouterConfig) -> Router {
         .route("/servers/{hostname}", get(get_server).delete(remove_server))
         .route("/ws/json", get(ws_json_server));
 
-    let ticket_store = state.ticket_store.clone();
-    let protected = Router::new()
+    Router::new()
         .merge(session_mgmt_routes)
         .nest("/sessions/{name}", session_routes)
         .route("/auth/ws-ticket", post(ws_ticket))
@@ -237,7 +243,80 @@ pub fn router(state: AppState, config: RouterConfig) -> Router {
         .route("/docs", get(docs_index))
         .nest_service("/mcp", mcp_service)
         .route("/mcp/ws", get(mcp_ws_handler))
-        .with_state(state);
+        .with_state(state)
+}
+
+/// Wrap API routes with public routes (`/health`, `/`, `/ui`), body limit, and
+/// security response headers.
+///
+/// This is shared by both [`core_router()`] and [`router()`]. The `routes`
+/// parameter is either bare API routes (for UDS) or auth-wrapped API routes
+/// (for TCP).
+fn assemble_router(routes: Router) -> Router {
+    let ui = Router::new().fallback(web::web_asset);
+
+    Router::new()
+        .route("/", get(|| async { Redirect::temporary("/ui") }))
+        .route("/health", get(health))
+        .merge(routes)
+        .nest("/ui", ui)
+        .layer(DefaultBodyLimit::max(1024 * 1024)) // 1 MB
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("x-frame-options"),
+            HeaderValue::from_static("DENY"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("x-content-type-options"),
+            HeaderValue::from_static("nosniff"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("referrer-policy"),
+            HeaderValue::from_static("no-referrer"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("content-security-policy"),
+            HeaderValue::from_static(
+                "default-src 'self'; script-src 'self'; style-src 'self'; \
+                 connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'"
+            ),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("permissions-policy"),
+            HeaderValue::from_static("geolocation=(), microphone=(), camera=()"),
+        ))
+}
+
+/// Build the core router with all route definitions, body limit, and security headers.
+///
+/// This router contains NO authentication, NO rate limiting, NO CORS, NO origin
+/// checks, and NO base prefix. It is suitable for trusted transports such as
+/// Unix domain sockets where these TCP-oriented middleware layers are unnecessary
+/// (or actively harmful -- e.g. `PeerIpKeyExtractor` fails on UDS).
+///
+/// For TCP listeners, use [`router()`] which layers on auth, rate limiting,
+/// CORS, origin checks, and base prefix support.
+pub fn core_router(state: AppState) -> Router {
+    assemble_router(api_routes(state))
+}
+
+/// Build the full TCP router with auth, rate limiting, CORS, and base prefix.
+///
+/// Internally calls [`api_routes()`] to build the route definitions, wraps them
+/// with TCP-specific middleware, then calls [`assemble_router()`] to add public
+/// routes (`/health`, `/`, `/ui`), body limit, and security headers.
+///
+/// Layers applied to API routes (from innermost to outermost):
+/// 1. Auth middleware (token-based) or origin check (localhost CSWSH protection)
+/// 2. Rate limiting (governor with `PeerIpKeyExtractor`)
+///
+/// Layers applied to the assembled router:
+/// 3. CORS (if origins are configured)
+/// 4. Base prefix nesting (for reverse-proxy deployment)
+pub fn router(state: AppState, config: RouterConfig) -> Router {
+    // Clone ticket_store before state is moved into api_routes.
+    let ticket_store = state.ticket_store.clone();
+
+    let protected = api_routes(state);
 
     // Auth/origin layer is applied first (inner), then rate limiting (outer).
     // In axum's tower model, .layer(A).layer(B) means B runs first.
@@ -285,37 +364,7 @@ pub fn router(state: AppState, config: RouterConfig) -> Router {
         protected
     };
 
-    let ui = Router::new().fallback(web::web_asset);
-
-    let router = Router::new()
-        .route("/", get(|| async { Redirect::temporary("/ui") }))
-        .route("/health", get(health))
-        .merge(protected)
-        .nest("/ui", ui)
-        .layer(DefaultBodyLimit::max(1024 * 1024)) // 1 MB
-        .layer(SetResponseHeaderLayer::overriding(
-            HeaderName::from_static("x-frame-options"),
-            HeaderValue::from_static("DENY"),
-        ))
-        .layer(SetResponseHeaderLayer::overriding(
-            HeaderName::from_static("x-content-type-options"),
-            HeaderValue::from_static("nosniff"),
-        ))
-        .layer(SetResponseHeaderLayer::overriding(
-            HeaderName::from_static("referrer-policy"),
-            HeaderValue::from_static("no-referrer"),
-        ))
-        .layer(SetResponseHeaderLayer::overriding(
-            HeaderName::from_static("content-security-policy"),
-            HeaderValue::from_static(
-                "default-src 'self'; script-src 'self'; style-src 'self'; \
-                 connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'"
-            ),
-        ))
-        .layer(SetResponseHeaderLayer::overriding(
-            HeaderName::from_static("permissions-policy"),
-            HeaderValue::from_static("geolocation=(), microphone=(), camera=()"),
-        ));
+    let router = assemble_router(protected);
 
     // Conditionally apply CORS if origins are configured.
     let router = if config.cors_origins.is_empty() {
@@ -2843,5 +2892,78 @@ mod tests {
             .await
             .unwrap();
         assert_ne!(response.status(), StatusCode::NOT_FOUND, "prefixed session route should be found");
+    }
+
+    // ── core_router tests ───────────────────────────────────────────
+
+    /// Creates a minimal AppState without sessions (for core_router tests).
+    fn test_state() -> AppState {
+        let federation_manager = crate::federation::manager::FederationManager::new();
+        AppState {
+            sessions: crate::session::SessionRegistry::new(),
+            shutdown: ShutdownCoordinator::new(),
+            server_config: Arc::new(ServerConfig::new(false)),
+            server_ws_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            mcp_session_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            ticket_store: Arc::new(ticket::TicketStore::new()),
+            backends: federation_manager.registry().clone(),
+            federation: Arc::new(tokio::sync::Mutex::new(federation_manager)),
+            ip_access: None,
+            hostname: "test".to_string(),
+            federation_config_path: None,
+            local_token: None,
+            default_backend_token: None,
+            server_id: "test-id".to_string(),
+            shutdown_notify: tokio_util::sync::CancellationToken::new(),
+            tcp_addr: None,
+            instance_name: "test".to_string(),
+            http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
+        }
+    }
+
+    #[tokio::test]
+    async fn core_router_serves_health_without_auth() {
+        let app = core_router(test_state());
+        let resp = app
+            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn core_router_serves_sessions_without_auth() {
+        let app = core_router(test_state());
+        let resp = app
+            .oneshot(Request::builder().uri("/sessions").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn tcp_router_requires_auth_when_token_set() {
+        let app = router(
+            test_state(),
+            RouterConfig {
+                token: Some("secret".to_string()),
+                ..Default::default()
+            },
+        );
+        let resp = app
+            .oneshot(Request::builder().uri("/sessions").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 401);
+    }
+
+    #[tokio::test]
+    async fn core_router_uses_bare_paths_not_prefixed() {
+        let app = core_router(test_state());
+        let resp = app
+            .oneshot(Request::builder().uri("/sessions").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
     }
 }
