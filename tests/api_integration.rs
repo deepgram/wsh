@@ -132,7 +132,19 @@ async fn test_api_input_to_pty() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Parse the JSON body and verify generation is present
+    let body = axum::body::to_bytes(response.into_body(), 1024)
+        .await
+        .expect("failed to read response body");
+    let json: serde_json::Value =
+        serde_json::from_slice(&body).expect("response is not valid JSON");
+    assert!(
+        json["generation"].is_number(),
+        "Expected generation to be a number, got: {}",
+        json
+    );
 
     // Verify the input was forwarded to the channel
     let received = tokio::time::timeout(Duration::from_secs(1), input_rx.recv())
@@ -197,7 +209,7 @@ async fn test_api_input_multiple_requests() {
 
         assert_eq!(
             response.status(),
-            StatusCode::NO_CONTENT,
+            StatusCode::OK,
             "Request {} failed",
             i
         );

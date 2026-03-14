@@ -192,7 +192,7 @@ async fn test_session_isolation() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 204);
+    assert_eq!(resp.status(), 200);
 
     // Wait for PTY to process
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -453,8 +453,8 @@ async fn test_per_session_endpoints_work_after_create() {
         .unwrap();
     assert_eq!(
         resp.status(),
-        204,
-        "Expected 204 for /input on newly created session"
+        200,
+        "Expected 200 for /input on newly created session"
     );
 
     // GET /sessions/test-session/overlay should work (empty list)

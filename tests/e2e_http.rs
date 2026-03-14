@@ -148,7 +148,7 @@ async fn test_http_post_input_reaches_pty_and_produces_output() {
         .expect("Failed to build request");
 
     let response = sender.send_request(request).await.expect("Request failed");
-    assert_eq!(response.status(), 204, "Expected 204 No Content");
+    assert_eq!(response.status(), 200, "Expected 200 OK with generation");
 
     // === Collect output from broker ===
     let mut collected = Vec::new();
@@ -319,7 +319,7 @@ async fn test_scrollback_endpoint_with_real_pty() {
             .expect("Failed to build request");
 
         let response = sender.send_request(request).await.expect("Request failed");
-        assert_eq!(response.status(), 204);
+        assert_eq!(response.status(), 200);
     }
 
     // Wait for all output to be processed

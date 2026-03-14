@@ -1119,6 +1119,11 @@ async fn test_mcp_tool_send_input_and_get_screen() {
         result["bytes"].as_u64().unwrap() > 0,
         "Should have sent at least 1 byte"
     );
+    assert!(
+        result["generation"].is_number(),
+        "Expected generation to be a number, got: {}",
+        result
+    );
 
     // Wait a bit for output to appear
     tokio::time::sleep(Duration::from_millis(500)).await;

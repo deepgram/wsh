@@ -315,7 +315,7 @@ async fn test_rapid_http_requests() {
             .body(http_body_util::Full::new(Bytes::from(cmd)))
             .expect("request");
         let response = sender.send_request(request).await.expect("send");
-        assert_eq!(response.status(), 204, "Expected 204 for marker {}", marker);
+        assert_eq!(response.status(), 200, "Expected 200 for marker {}", marker);
     }
 
     // Collect output

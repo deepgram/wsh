@@ -262,7 +262,19 @@ async fn test_http_input_resets_idle_timer() {
         .body(http_body_util::Full::new(Bytes::from("x")))
         .unwrap();
     let resp = sender.send_request(req).await.expect("request");
-    assert_eq!(resp.status().as_u16(), 204);
+    assert_eq!(resp.status().as_u16(), 200);
+    // Parse the body and verify generation is present
+    let body = http_body_util::BodyExt::collect(resp.into_body())
+        .await
+        .expect("failed to read response body")
+        .to_bytes();
+    let json: serde_json::Value =
+        serde_json::from_slice(&body).expect("response is not valid JSON");
+    assert!(
+        json["generation"].is_number(),
+        "Expected generation to be a number, got: {}",
+        json
+    );
 
     let (status, elapsed) = idle_task.await.unwrap();
     assert_eq!(status, 200);
