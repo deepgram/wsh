@@ -91,21 +91,12 @@ for idle after sending — the program will advance.
 
 ## Control Characters
 
-These are your emergency exits and special actions:
+Emergency exits and special actions: Ctrl+C (interrupt), Ctrl+D
+(EOF/exit), Ctrl+Z (suspend), Ctrl+L (clear screen), Ctrl+U
+(clear line), Escape.
 
-    $'\x03'         # Ctrl+C  — interrupt / cancel
-    $'\x04'         # Ctrl+D  — EOF / exit shell
-    $'\x1a'         # Ctrl+Z  — suspend process
-    $'\x0c'         # Ctrl+L  — clear screen
-    $'\x01'         # Ctrl+A  — beginning of line
-    $'\x05'         # Ctrl+E  — end of line
-    $'\x15'         # Ctrl+U  — clear line
-    $'\x1b'         # Escape
-
-If a command hangs or you need to bail out, Ctrl+C is your first
-resort. If the process doesn't respond to Ctrl+C, Ctrl+D or
-Ctrl+Z may work. Read the screen after each attempt to see if
-it had effect.
+If a command hangs, try Ctrl+C first. If unresponsive, Ctrl+Z
+to suspend then `kill %1`.
 
 ## Detecting Success and Failure
 
@@ -249,9 +240,9 @@ Before running destructive commands:
 ### Knowing when to give up
 If a command is stuck and not responding to Ctrl+C, don't
 hammer it with more input. Strategies in order:
-1. Send Ctrl+C (`$'\x03'`)
+1. Send Ctrl+C
 2. Wait a moment, try Ctrl+C again
-3. Send Ctrl+Z (`$'\x1a'`) to suspend, then `kill %1`
+3. Send Ctrl+Z to suspend, then `kill %1`
 4. Tell the human what's happening and ask for help
 
 ### Shell state persists
