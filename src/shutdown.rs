@@ -43,6 +43,9 @@ impl ShutdownCoordinator {
     /// connection's lifetime, and a receiver for the shutdown signal.
     pub fn register(&self) -> (ConnectionGuard, watch::Receiver<bool>) {
         self.inner.active.fetch_add(1, Ordering::SeqCst);
+        // Notify interest_changed so the ephemeral monitor's Phase 1 can
+        // detect that interest appeared (and break to Phase 2).
+        self.inner.interest_changed.notify_waiters();
         let guard = ConnectionGuard {
             inner: self.inner.clone(),
         };

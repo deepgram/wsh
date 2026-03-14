@@ -3833,8 +3833,12 @@ async fn handle_mcp_ws(socket: WebSocket, state: AppState) {
 
     let (mut ws_tx, mut ws_rx) = socket.split();
 
-    // Bridge task: WS → rmcp (write to bridge_write)
-    let ws_to_rmcp = tokio::spawn(async move {
+    // Pong tracking: ws_to_rmcp task updates the watch on Pong receipt.
+    let (pong_tx, pong_rx) =
+        tokio::sync::watch::channel(tokio::time::Instant::now());
+
+    // Bridge task: WS → rmcp (write incoming WS messages to bridge_write)
+    let mut ws_to_rmcp = tokio::spawn(async move {
         while let Some(msg) = ws_rx.next().await {
             match msg {
                 Ok(Message::Text(text)) => {
@@ -3855,9 +3859,12 @@ async fn handle_mcp_ws(socket: WebSocket, state: AppState) {
                         break;
                     }
                 }
+                Ok(Message::Pong(_)) => {
+                    let _ = pong_tx.send(tokio::time::Instant::now());
+                }
                 Ok(Message::Close(_)) => break,
-                Ok(Message::Ping(_)) => {} // tungstenite handles pong automatically
-                Ok(_) => {} // ignore binary, pong
+                Ok(Message::Ping(_)) => {} // axum auto-responds with Pong
+                Ok(_) => {}
                 Err(e) => {
                     tracing::debug!(?e, "MCP WS: ws recv error");
                     break;
@@ -3868,8 +3875,12 @@ async fn handle_mcp_ws(socket: WebSocket, state: AppState) {
         drop(bridge_write);
     });
 
-    // Bridge task: rmcp → WS (read from bridge_read, line by line)
-    let rmcp_to_ws = tokio::spawn(async move {
+    // Bridge task: rmcp → mpsc (read lines from bridge, send through channel).
+    // We use an mpsc channel instead of reading directly in the select! loop
+    // because AsyncBufReadExt::read_line is not cancellation-safe — partial
+    // data may be appended to the buffer if another select! branch fires first.
+    let (line_tx, mut line_rx) = tokio::sync::mpsc::channel::<String>(32);
+    let bridge_reader = tokio::spawn(async move {
         use tokio::io::AsyncBufReadExt;
         let mut reader = tokio::io::BufReader::new(bridge_read);
         let mut line = String::new();
@@ -3878,12 +3889,11 @@ async fn handle_mcp_ws(socket: WebSocket, state: AppState) {
             match reader.read_line(&mut line).await {
                 Ok(0) => break, // EOF
                 Ok(_) => {
-                    let trimmed = line.trim_end();
-                    if trimmed.is_empty() {
-                        continue;
-                    }
-                    if ws_tx.send(Message::Text(trimmed.to_string().into())).await.is_err() {
-                        break;
+                    let trimmed = line.trim_end().to_string();
+                    if !trimmed.is_empty() {
+                        if line_tx.send(trimmed).await.is_err() {
+                            break;
+                        }
                     }
                 }
                 Err(e) => {
@@ -3892,23 +3902,69 @@ async fn handle_mcp_ws(socket: WebSocket, state: AppState) {
                 }
             }
         }
-        // Send close frame
-        let _ = ws_tx.send(Message::Close(Some(CloseFrame {
-            code: axum::extract::ws::close_code::NORMAL,
-            reason: "MCP session ended".into(),
-        }))).await;
     });
 
-    // Wait for either direction to finish, or shutdown signal
-    tokio::select! {
-        _ = ws_to_rmcp => {}
-        _ = rmcp_to_ws => {}
-        _ = shutdown_rx.changed() => {
-            tracing::debug!("MCP WS: shutdown signal received");
+    // Ping/pong keepalive
+    let mut ping_interval =
+        tokio::time::interval(std::time::Duration::from_secs(30));
+    ping_interval.reset(); // don't fire immediately
+    let mut ping_sent = false;
+    const PONG_TIMEOUT: std::time::Duration =
+        std::time::Duration::from_secs(10);
+
+    // Main select loop: forward rmcp lines to WS, send pings, handle shutdown.
+    // We also select on ws_to_rmcp completion — when the client disconnects,
+    // that task finishes, and we must break immediately rather than waiting for
+    // rmcp to drain (which may never happen if rmcp is idle).
+    loop {
+        tokio::select! {
+            line = line_rx.recv() => {
+                match line {
+                    Some(text) => {
+                        if ws_tx.send(Message::Text(text.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    None => break, // bridge_reader finished (rmcp closed)
+                }
+            }
+
+            _ = &mut ws_to_rmcp => {
+                // Client disconnected — ws_to_rmcp task finished.
+                break;
+            }
+
+            _ = ping_interval.tick() => {
+                if ping_sent && pong_rx.borrow().elapsed() > PONG_TIMEOUT {
+                    tracing::debug!("MCP WS: client unresponsive (no pong), closing");
+                    break;
+                }
+                if ws_tx.send(Message::Ping(Bytes::new())).await.is_err() {
+                    break;
+                }
+                ping_sent = true;
+            }
+
+            _ = shutdown_rx.changed() => {
+                if *shutdown_rx.borrow() {
+                    tracing::debug!("MCP WS: shutdown signal received");
+                    break;
+                }
+            }
         }
     }
 
-    // Cancel rmcp server
+    // Send close frame
+    let _ = ws_tx
+        .send(Message::Close(Some(CloseFrame {
+            code: axum::extract::ws::close_code::NORMAL,
+            reason: "MCP session ended".into(),
+        })))
+        .await;
+
+    // Cancel background tasks
+    ws_to_rmcp.abort();
+    bridge_reader.abort();
     rmcp_handle.abort();
     tracing::debug!("MCP WS connection closed");
     // _conn_guard drops here → active_count decrements → interest_changed fires
