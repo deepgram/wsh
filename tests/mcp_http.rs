@@ -187,8 +187,8 @@ async fn test_mcp_initialize_returns_server_info() {
     );
     let instructions = result["instructions"].as_str().unwrap();
     assert!(
-        instructions.contains("wsh_run_command"),
-        "Instructions should mention wsh_run_command"
+        instructions.contains("wsh_send_and_read"),
+        "Instructions should mention wsh_send_and_read"
     );
 }
 
@@ -232,10 +232,10 @@ async fn test_mcp_list_tools() {
         .as_array()
         .expect("Expected tools array in list tools response");
 
-    // We should have all 14 tools
+    // We should have all 15 tools
     assert!(
-        tools.len() >= 14,
-        "Expected at least 14 tools, got {}",
+        tools.len() >= 15,
+        "Expected at least 15 tools, got {}",
         tools.len()
     );
 
@@ -250,8 +250,12 @@ async fn test_mcp_list_tools() {
         "Missing wsh_create_session tool"
     );
     assert!(
-        tool_names.contains(&"wsh_run_command"),
-        "Missing wsh_run_command tool"
+        tool_names.contains(&"wsh_send_and_read"),
+        "Missing wsh_send_and_read tool"
+    );
+    assert!(
+        tool_names.contains(&"wsh_send_keys"),
+        "Missing wsh_send_keys tool"
     );
     assert!(
         tool_names.contains(&"wsh_get_screen"),
@@ -720,8 +724,8 @@ async fn test_mcp_get_prompt() {
         "Core prompt content should contain 'core-mcp' (from frontmatter)"
     );
     assert!(
-        content_text.contains("wsh_run_command"),
-        "Core prompt content should reference wsh_run_command tool"
+        content_text.contains("wsh_send_and_read"),
+        "Core prompt content should reference wsh_send_and_read tool"
     );
 }
 
@@ -1014,16 +1018,16 @@ async fn test_mcp_tool_create_duplicate_session() {
     cleanup_session(&client, addr, &mcp_session, sess_name).await;
 }
 
-// ── Test 14: wsh_run_command (core agent loop) ───────────────────
+// ── Test 14: wsh_send_and_read (core agent loop) ─────────────────
 
 #[tokio::test]
-async fn test_mcp_tool_run_command() {
+async fn test_mcp_tool_send_and_read() {
     let app = create_test_app();
     let addr = start_test_server(app).await;
     let client = reqwest::Client::new();
     let mcp_session = setup_mcp_session(&client, addr).await;
 
-    let sess_name = "mcp-runcmd-test";
+    let sess_name = "mcp-sendread-test";
 
     // Create session
     let json = call_tool(
@@ -1039,15 +1043,18 @@ async fn test_mcp_tool_run_command() {
     // Give the shell a moment to start
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // Run a command
+    // Send keys and read
     let json = call_tool(
         &client,
         addr,
         &mcp_session,
-        "wsh_run_command",
+        "wsh_send_and_read",
         serde_json::json!({
             "session": sess_name,
-            "input": "echo hello_wsh_test\n",
+            "keys": [
+                {"text": "echo hello_wsh_test"},
+                {"key": "enter"}
+            ],
             "timeout_ms": 2000,
             "max_wait_ms": 15000,
             "format": "plain",
@@ -1062,7 +1069,7 @@ async fn test_mcp_tool_run_command() {
     // Should have a screen field regardless of idle outcome
     assert!(
         result.get("screen").is_some(),
-        "run_command response should contain 'screen' field, got: {}",
+        "send_and_read response should contain 'screen' field, got: {}",
         result
     );
 

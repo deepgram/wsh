@@ -232,8 +232,8 @@ fn test_mcp_stdio_initialize() {
         );
         let instructions = result["instructions"].as_str().unwrap();
         assert!(
-            instructions.contains("wsh_run_command"),
-            "Instructions should mention wsh_run_command"
+            instructions.contains("wsh_send_and_read"),
+            "Instructions should mention wsh_send_and_read"
         );
 
         // Clean up: drop stdin to close the pipe

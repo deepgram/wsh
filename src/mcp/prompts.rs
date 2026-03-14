@@ -157,8 +157,8 @@ mod tests {
                     "core prompt should contain 'core-mcp' (from frontmatter)"
                 );
                 assert!(
-                    text.contains("wsh_run_command"),
-                    "MCP-adapted core skill should reference wsh_run_command"
+                    text.contains("wsh_send_and_read"),
+                    "MCP-adapted core skill should reference wsh_send_and_read"
                 );
             }
             _ => panic!("expected text content"),
