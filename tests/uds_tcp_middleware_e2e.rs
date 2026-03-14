@@ -238,3 +238,50 @@ async fn uds_websocket_works_without_auth() {
         std::thread::sleep(Duration::from_millis(50));
     }
 }
+
+#[tokio::test]
+async fn mcp_ws_over_uds_works_without_auth() {
+    let port = free_port();
+    let token = "test-secret-token-mcp1";
+    let socket_dir = tempfile::TempDir::new().unwrap();
+    let socket_path = socket_dir.path().join("mcp-mw.sock");
+    let http_socket_path = socket_path.with_extension("http.sock");
+
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_wsh"))
+        .arg("server")
+        .arg("--bind")
+        .arg(format!("0.0.0.0:{}", port))
+        .arg("--token")
+        .arg(token)
+        .arg("--base-prefix")
+        .arg("/wsh")
+        .arg("--socket")
+        .arg(&socket_path)
+        .arg("--server-name")
+        .arg("mcp-mw-e2e")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("failed to spawn wsh server");
+
+    wait_for_http_socket(&http_socket_path)
+        .await
+        .expect("UDS should be ready");
+
+    // ── MCP WebSocket over UDS: should connect without auth ─
+    let ws_stream = tokio::net::UnixStream::connect(&http_socket_path)
+        .await
+        .expect("UDS connect");
+    let (mut ws, resp) =
+        tokio_tungstenite::client_async("ws://localhost/mcp/ws", ws_stream)
+            .await
+            .expect("MCP WS upgrade should succeed over UDS without auth");
+    assert_eq!(resp.status(), 101, "should upgrade to WebSocket");
+
+    // Close WS cleanly
+    let _ = ws.close(None).await;
+
+    // ── Cleanup: kill server ────────────────────────────────
+    child.kill().ok();
+    let _ = child.wait();
+}
