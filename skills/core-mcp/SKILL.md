@@ -123,7 +123,9 @@ Examples:
     wsh_send_keys(session="default", keys=[{"key": "ctrl+c"}])
     wsh_send_keys(session="default", keys=[{"key": "escape"}, {"text": ":wq"}, {"key": "enter"}])
 
-Returns `{"status": "sent", "bytes": N}` on success.
+Returns `{"status": "sent", "bytes": N, "generation": G}` on success.
+The `generation` counter is the activity state before input was
+submitted — pass it to `wsh_await_idle` for correct sequencing.
 
 ### Send Input (Low-Level)
 Raw byte injection for advanced use. Prefer `wsh_send_keys` for
@@ -134,7 +136,9 @@ Use `wsh_send_input` with:
 - `input` — the text or data to send (JSON string encoding)
 - `encoding` — `"utf8"` (default) or `"base64"`
 
-Returns `{"status": "sent", "bytes": N, "preview": "..."}`.
+Returns `{"status": "sent", "bytes": N, "preview": "...", "generation": G}`.
+The `generation` counter is the activity state before input was
+submitted — pass it to `wsh_await_idle` for correct sequencing.
 Includes a `warning` field if the input looks empty or
 double-escaped.
 
