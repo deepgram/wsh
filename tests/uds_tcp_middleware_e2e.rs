@@ -150,3 +150,91 @@ async fn uds_bypasses_tcp_middleware() {
         std::thread::sleep(Duration::from_millis(50));
     }
 }
+
+#[tokio::test]
+async fn uds_websocket_works_without_auth() {
+    let port = free_port();
+    let token = "test-secret-token-5678";
+    let socket_dir = tempfile::TempDir::new().unwrap();
+    let socket_path = socket_dir.path().join("ws-mw.sock");
+    let http_socket_path = socket_path.with_extension("http.sock");
+
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_wsh"))
+        .arg("server")
+        .arg("--ephemeral")
+        .arg("--bind")
+        .arg(format!("0.0.0.0:{}", port))
+        .arg("--token")
+        .arg(token)
+        .arg("--base-prefix")
+        .arg("/wsh")
+        .arg("--socket")
+        .arg(&socket_path)
+        .arg("--server-name")
+        .arg("ws-mw-e2e")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("failed to spawn wsh server");
+
+    wait_for_http_socket(&http_socket_path)
+        .await
+        .expect("UDS should be ready");
+    wait_for_ready(port).await.expect("TCP should be ready");
+
+    // Create session via UDS
+    let uds = wsh::uds_client::UdsHttpClient::new(&http_socket_path);
+    let resp = uds
+        .post_json("/sessions", &serde_json::json!({"name": "ws-test"}))
+        .await
+        .expect("create session");
+    assert_eq!(resp.status, 201);
+
+    // ── UDS WebSocket: works without auth ───────────────────
+    let ws_stream = tokio::net::UnixStream::connect(&http_socket_path)
+        .await
+        .expect("UDS connect");
+    let (mut ws, _resp) =
+        tokio_tungstenite::client_async("ws://localhost/sessions/ws-test/ws/json", ws_stream)
+            .await
+            .expect("UDS WS upgrade should succeed without auth");
+
+    // Read the initial {"connected": true} message
+    use futures::StreamExt;
+    let msg = tokio::time::timeout(Duration::from_secs(2), ws.next())
+        .await
+        .expect("should get message in time")
+        .expect("stream should have message")
+        .expect("message should be valid");
+    let text = msg.into_text().expect("should be text");
+    let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(json["connected"], true, "UDS WS should connect");
+
+    // Close WS
+    let _ = futures::SinkExt::close(&mut ws).await;
+
+    // ── TCP WebSocket without auth: rejected ────────────────
+    use tokio_tungstenite::tungstenite;
+    let tcp_url = format!("ws://127.0.0.1:{}/wsh/sessions/ws-test/ws/json", port);
+    let result = tokio_tungstenite::connect_async(&tcp_url).await;
+    match result {
+        Err(tungstenite::Error::Http(resp)) => {
+            assert_eq!(resp.status(), 401, "TCP WS without auth should be 401");
+        }
+        other => panic!("expected HTTP 401 error, got: {:?}", other),
+    }
+
+    // ── Cleanup ─────────────────────────────────────────────
+    let _ = uds.delete("/sessions/ws-test").await;
+    let start = std::time::Instant::now();
+    loop {
+        if child.try_wait().expect("try_wait").is_some() {
+            break;
+        }
+        if start.elapsed() > Duration::from_secs(10) {
+            child.kill().ok();
+            panic!("server did not exit");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
