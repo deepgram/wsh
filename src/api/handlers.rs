@@ -3904,13 +3904,17 @@ async fn handle_mcp_ws(socket: WebSocket, state: AppState) {
         }
     });
 
-    // Ping/pong keepalive
+    // Ping/pong keepalive.
+    //
+    // Unlike the other WS handlers (which reset `ping_sent = false` on Pong
+    // receipt in the same select loop), Pong is received in the separate
+    // `ws_to_rmcp` task and recorded in `pong_rx`. We track `last_ping_time`
+    // and compare it against the pong timestamp to detect unresponsive clients.
     let mut ping_interval =
         tokio::time::interval(std::time::Duration::from_secs(30));
     ping_interval.reset(); // don't fire immediately
     let mut ping_sent = false;
-    const PONG_TIMEOUT: std::time::Duration =
-        std::time::Duration::from_secs(10);
+    let mut last_ping_time = tokio::time::Instant::now();
 
     // Main select loop: forward rmcp lines to WS, send pings, handle shutdown.
     // We also select on ws_to_rmcp completion — when the client disconnects,
@@ -3935,7 +3939,8 @@ async fn handle_mcp_ws(socket: WebSocket, state: AppState) {
             }
 
             _ = ping_interval.tick() => {
-                if ping_sent && pong_rx.borrow().elapsed() > PONG_TIMEOUT {
+                if ping_sent && *pong_rx.borrow() < last_ping_time {
+                    // No pong received since our last ping — client is dead.
                     tracing::debug!("MCP WS: client unresponsive (no pong), closing");
                     break;
                 }
@@ -3943,6 +3948,7 @@ async fn handle_mcp_ws(socket: WebSocket, state: AppState) {
                     break;
                 }
                 ping_sent = true;
+                last_ping_time = tokio::time::Instant::now();
             }
 
             _ = shutdown_rx.changed() => {
