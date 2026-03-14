@@ -117,6 +117,90 @@ fn default_encoding() -> Encoding {
     Encoding::Utf8
 }
 
+/// A single element in a key sequence: either literal text or a named key.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(untagged)]
+pub enum KeyAction {
+    /// Literal text to type (sent as UTF-8 bytes, no transformation).
+    #[schemars(description = "Literal text to type. Sent as raw UTF-8 bytes.")]
+    Text {
+        text: String,
+    },
+    /// A named special key (e.g., "enter", "ctrl+c", "up").
+    #[schemars(description = "A named special key. Examples: enter, tab, escape, backspace, delete, up, down, left, right, home, end, pageup, pagedown, ctrl+a through ctrl+z, f1 through f12.")]
+    Key {
+        key: String,
+    },
+}
+
+/// Resolve a sequence of key actions into raw bytes.
+pub fn resolve_keys(keys: &[KeyAction]) -> Result<Vec<u8>, String> {
+    let mut buf = Vec::new();
+    for action in keys {
+        match action {
+            KeyAction::Text { text } => buf.extend_from_slice(text.as_bytes()),
+            KeyAction::Key { key } => {
+                let bytes = resolve_named_key(key)?;
+                buf.extend_from_slice(bytes);
+            }
+        }
+    }
+    Ok(buf)
+}
+
+/// Static lookup table for Ctrl+A (0x01) through Ctrl+Z (0x1a).
+static CTRL_BYTES: [u8; 26] = [
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
+    14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
+];
+
+fn resolve_named_key(name: &str) -> Result<&'static [u8], String> {
+    match name.to_ascii_lowercase().as_str() {
+        // Common
+        "enter" => Ok(b"\n"),
+        "tab" => Ok(b"\t"),
+        "escape" => Ok(b"\x1b"),
+        "backspace" => Ok(b"\x7f"),
+        "delete" => Ok(b"\x1b[3~"),
+        // Arrows
+        "up" => Ok(b"\x1b[A"),
+        "down" => Ok(b"\x1b[B"),
+        "right" => Ok(b"\x1b[C"),
+        "left" => Ok(b"\x1b[D"),
+        // Navigation
+        "home" => Ok(b"\x1b[H"),
+        "end" => Ok(b"\x1b[F"),
+        "pageup" => Ok(b"\x1b[5~"),
+        "pagedown" => Ok(b"\x1b[6~"),
+        // Function keys
+        "f1" => Ok(b"\x1bOP"),
+        "f2" => Ok(b"\x1bOQ"),
+        "f3" => Ok(b"\x1bOR"),
+        "f4" => Ok(b"\x1bOS"),
+        "f5" => Ok(b"\x1b[15~"),
+        "f6" => Ok(b"\x1b[17~"),
+        "f7" => Ok(b"\x1b[18~"),
+        "f8" => Ok(b"\x1b[19~"),
+        "f9" => Ok(b"\x1b[20~"),
+        "f10" => Ok(b"\x1b[21~"),
+        "f11" => Ok(b"\x1b[23~"),
+        "f12" => Ok(b"\x1b[24~"),
+        // Ctrl+letter
+        other => {
+            if let Some(letter) = other.strip_prefix("ctrl+") {
+                if letter.len() == 1 {
+                    let ch = letter.as_bytes()[0].to_ascii_lowercase();
+                    if ch.is_ascii_lowercase() {
+                        let idx = (ch - b'a') as usize;
+                        return Ok(&CTRL_BYTES[idx..idx + 1]);
+                    }
+                }
+            }
+            Err(format!("unrecognized key name: '{}'", name))
+        }
+    }
+}
+
 /// Parameters for the `wsh_send_input` tool.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct SendInputParams {
@@ -243,16 +327,33 @@ pub struct AwaitIdleParams {
     pub server: Option<String>,
 }
 
-/// Parameters for the `wsh_run_command` tool.
+/// Parameters for the `wsh_send_keys` tool.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct RunCommandParams {
+pub struct SendKeysParams {
     /// The name of the target session.
     #[schemars(description = "The name of the target session.")]
     pub session: String,
 
-    /// The input to send (typically a command followed by a newline).
-    #[schemars(description = "The input to send to the terminal. A trailing \\n is NOT appended automatically — include it to press Enter: \"ls -la\\n\". Control characters use JSON escapes (see wsh_send_input).")]
-    pub input: String,
+    /// Sequence of key actions to send.
+    #[schemars(description = "Array of key actions. Each element is either {\"text\": \"...\"} for literal characters or {\"key\": \"...\"} for named keys (enter, tab, escape, ctrl+c, up, down, etc.).")]
+    pub keys: Vec<KeyAction>,
+
+    /// Target a specific federated server by hostname. Omit for local.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Target a specific federated server by hostname. Omit to target the local server.")]
+    pub server: Option<String>,
+}
+
+/// Parameters for the `wsh_send_and_read` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SendAndReadParams {
+    /// The name of the target session.
+    #[schemars(description = "The name of the target session.")]
+    pub session: String,
+
+    /// Sequence of key actions to send.
+    #[schemars(description = "Array of key actions. Each element is either {\"text\": \"...\"} for literal characters or {\"key\": \"...\"} for named keys (enter, tab, escape, ctrl+c, up, down, etc.).")]
+    pub keys: Vec<KeyAction>,
 
     /// Idle timeout in milliseconds. Defaults to 2000.
     #[serde(default = "default_timeout_ms")]
@@ -881,44 +982,6 @@ mod tests {
         assert_eq!(params.max_wait_ms, 10000);
     }
 
-    // ── RunCommandParams ────────────────────────────────────────
-
-    #[test]
-    fn run_command_params_defaults() {
-        let json = serde_json::json!({
-            "session": "my-session",
-            "input": "ls -la\n"
-        });
-        let params: RunCommandParams = serde_json::from_value(json).unwrap();
-        assert_eq!(params.session, "my-session");
-        assert_eq!(params.input, "ls -la\n");
-        assert_eq!(params.timeout_ms, 2000);
-        assert_eq!(params.max_wait_ms, 30000);
-        assert!(matches!(params.format, ScreenFormat::Styled));
-    }
-
-    #[test]
-    fn run_command_params_all_fields() {
-        let json = serde_json::json!({
-            "session": "s",
-            "input": "echo hi\n",
-            "timeout_ms": 1000,
-            "max_wait_ms": 5000,
-            "format": "plain"
-        });
-        let params: RunCommandParams = serde_json::from_value(json).unwrap();
-        assert_eq!(params.timeout_ms, 1000);
-        assert_eq!(params.max_wait_ms, 5000);
-        assert!(matches!(params.format, ScreenFormat::Plain));
-    }
-
-    #[test]
-    fn run_command_params_missing_input() {
-        let json = serde_json::json!({"session": "s"});
-        let result = serde_json::from_value::<RunCommandParams>(json);
-        assert!(result.is_err());
-    }
-
     // ── OverlayParams ──────────────────────────────────────────
 
     #[test]
@@ -1317,8 +1380,12 @@ mod tests {
         let p: GetScrollbackParams = serde_json::from_value(json).unwrap();
         assert_eq!(p.server.as_deref(), Some("h"));
 
-        let json = serde_json::json!({"session": "s", "input": "x\n", "server": "h"});
-        let p: RunCommandParams = serde_json::from_value(json).unwrap();
+        let json = serde_json::json!({"session": "s", "keys": [{"text": "x"}], "server": "h"});
+        let p: SendAndReadParams = serde_json::from_value(json).unwrap();
+        assert_eq!(p.server.as_deref(), Some("h"));
+
+        let json = serde_json::json!({"session": "s", "keys": [{"key": "enter"}], "server": "h"});
+        let p: SendKeysParams = serde_json::from_value(json).unwrap();
         assert_eq!(p.server.as_deref(), Some("h"));
 
         let json = serde_json::json!({"session": "s", "server": "h"});
@@ -1411,6 +1478,179 @@ mod tests {
     fn server_status_params_missing_hostname() {
         let json = serde_json::json!({});
         let result = serde_json::from_value::<ServerStatusParams>(json);
+        assert!(result.is_err());
+    }
+
+    // ── KeyAction ──────────────────────────────────────────────────
+
+    #[test]
+    fn key_action_text() {
+        let json = serde_json::json!({"text": "hello"});
+        let action: KeyAction = serde_json::from_value(json).unwrap();
+        assert!(matches!(action, KeyAction::Text { text } if text == "hello"));
+    }
+
+    #[test]
+    fn key_action_key() {
+        let json = serde_json::json!({"key": "enter"});
+        let action: KeyAction = serde_json::from_value(json).unwrap();
+        assert!(matches!(action, KeyAction::Key { key } if key == "enter"));
+    }
+
+    #[test]
+    fn key_action_invalid() {
+        let json = serde_json::json!({"other": "x"});
+        let result = serde_json::from_value::<KeyAction>(json);
+        assert!(result.is_err());
+    }
+
+    // ── resolve_keys ──────────────────────────────────────────────
+
+    #[test]
+    fn resolve_keys_text() {
+        let keys = vec![KeyAction::Text { text: "hello".into() }];
+        let bytes = resolve_keys(&keys).unwrap();
+        assert_eq!(bytes, b"hello");
+    }
+
+    #[test]
+    fn resolve_keys_enter() {
+        let keys = vec![KeyAction::Key { key: "enter".into() }];
+        let bytes = resolve_keys(&keys).unwrap();
+        assert_eq!(bytes, b"\n");
+    }
+
+    #[test]
+    fn resolve_keys_ctrl_c() {
+        let keys = vec![KeyAction::Key { key: "ctrl+c".into() }];
+        let bytes = resolve_keys(&keys).unwrap();
+        assert_eq!(bytes, &[0x03]);
+    }
+
+    #[test]
+    fn resolve_keys_mixed_sequence() {
+        let keys = vec![
+            KeyAction::Text { text: "ls -la".into() },
+            KeyAction::Key { key: "enter".into() },
+        ];
+        let bytes = resolve_keys(&keys).unwrap();
+        assert_eq!(bytes, b"ls -la\n");
+    }
+
+    #[test]
+    fn resolve_keys_escape_sequence() {
+        let keys = vec![KeyAction::Key { key: "up".into() }];
+        let bytes = resolve_keys(&keys).unwrap();
+        assert_eq!(bytes, b"\x1b[A");
+    }
+
+    #[test]
+    fn resolve_keys_case_insensitive() {
+        let keys = vec![KeyAction::Key { key: "Ctrl+C".into() }];
+        let bytes = resolve_keys(&keys).unwrap();
+        assert_eq!(bytes, &[0x03]);
+    }
+
+    #[test]
+    fn resolve_keys_invalid_key_name() {
+        let keys = vec![KeyAction::Key { key: "ctrl+1".into() }];
+        let result = resolve_keys(&keys);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn resolve_keys_all_common_keys() {
+        let names = [
+            "enter", "tab", "escape", "backspace", "delete",
+            "up", "down", "left", "right",
+            "home", "end", "pageup", "pagedown",
+            "f1", "f2", "f3", "f4", "f5", "f6",
+            "f7", "f8", "f9", "f10", "f11", "f12",
+        ];
+        for name in names {
+            let keys = vec![KeyAction::Key { key: name.into() }];
+            assert!(
+                resolve_keys(&keys).is_ok(),
+                "Key '{}' should resolve",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_keys_all_ctrl_keys() {
+        for c in b'a'..=b'z' {
+            let name = format!("ctrl+{}", c as char);
+            let keys = vec![KeyAction::Key { key: name.clone() }];
+            let bytes = resolve_keys(&keys).unwrap();
+            assert_eq!(
+                bytes,
+                &[c - b'a' + 1],
+                "ctrl+{} should map to byte {}",
+                c as char,
+                c - b'a' + 1
+            );
+        }
+    }
+
+    // ── SendKeysParams ─────────────────────────────────────────────
+
+    #[test]
+    fn send_keys_params_basic() {
+        let json = serde_json::json!({
+            "session": "work",
+            "keys": [
+                {"text": "hello"},
+                {"key": "enter"}
+            ]
+        });
+        let params: SendKeysParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.session, "work");
+        assert_eq!(params.keys.len(), 2);
+    }
+
+    #[test]
+    fn send_keys_params_missing_keys() {
+        let json = serde_json::json!({"session": "s"});
+        let result = serde_json::from_value::<SendKeysParams>(json);
+        assert!(result.is_err());
+    }
+
+    // ── SendAndReadParams ──────────────────────────────────────────
+
+    #[test]
+    fn send_and_read_params_defaults() {
+        let json = serde_json::json!({
+            "session": "work",
+            "keys": [{"text": "ls"}, {"key": "enter"}]
+        });
+        let params: SendAndReadParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.session, "work");
+        assert_eq!(params.keys.len(), 2);
+        assert_eq!(params.timeout_ms, 2000);
+        assert_eq!(params.max_wait_ms, 30000);
+        assert!(matches!(params.format, ScreenFormat::Styled));
+    }
+
+    #[test]
+    fn send_and_read_params_all_fields() {
+        let json = serde_json::json!({
+            "session": "s",
+            "keys": [{"key": "ctrl+c"}],
+            "timeout_ms": 1000,
+            "max_wait_ms": 5000,
+            "format": "plain"
+        });
+        let params: SendAndReadParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.timeout_ms, 1000);
+        assert_eq!(params.max_wait_ms, 5000);
+        assert!(matches!(params.format, ScreenFormat::Plain));
+    }
+
+    #[test]
+    fn send_and_read_params_missing_keys() {
+        let json = serde_json::json!({"session": "s"});
+        let result = serde_json::from_value::<SendAndReadParams>(json);
         assert!(result.is_err());
     }
 }

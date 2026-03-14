@@ -34,7 +34,7 @@ const PROXY_IDLE_TIMEOUT: Duration = Duration::from_secs(330);
 use tools::{
     CreateSessionParams, ListSessionsParams, ManageSessionParams, ManageAction,
     SendInputParams, Encoding, GetScreenParams, GetScrollbackParams,
-    AwaitIdleParams, RunCommandParams,
+    AwaitIdleParams, SendAndReadParams,
     OverlayParams, RemoveOverlayParams, PanelParams, RemovePanelParams,
     InputModeParams, InputModeAction, ScreenModeParams, ScreenModeAction,
     ListServersParams, AddServerParams, RemoveServerParams, ServerStatusParams,
@@ -978,15 +978,20 @@ impl WshMcpServer {
     #[tool(description = "Send input to a terminal session, wait for idle, then return the screen contents. This is the primary 'run a command' primitive: send input, wait for output to settle, read the result. If idle is not reached within max_wait_ms, the screen is still returned but marked as an error. Use 'server' to target a remote federated server.")]
     async fn wsh_run_command(
         &self,
-        Parameters(params): Parameters<RunCommandParams>,
+        Parameters(params): Parameters<SendAndReadParams>,
     ) -> Result<CallToolResult, ErrorData> {
+        // Resolve key actions into raw bytes.
+        let input_raw = tools::resolve_keys(&params.keys).map_err(|e| {
+            ErrorData::invalid_params(format!("bad key sequence: {e}"), None)
+        })?;
+
         // Federation: proxy to remote if server is specified.
         // For run_command on a remote, we execute the three steps (send input,
         // await idle, get screen) as separate proxied HTTP calls so the remote
         // server's activity tracker handles the timing.
         if let McpSessionTarget::Remote(backend) = self.resolve_server(params.server.as_deref())? {
             // 1. Send input
-            let input_bytes = Bytes::from(params.input.into_bytes());
+            let input_bytes = Bytes::from(input_raw);
             proxy_post_bytes(
                 &backend,
                 &format!("/sessions/{}/input", params.session),
@@ -1032,7 +1037,7 @@ impl WshMcpServer {
             let session = self.get_session(&params.session)?;
 
             // 1. Send input
-            let data = Bytes::from(params.input.into_bytes());
+            let data = Bytes::from(input_raw);
             tokio::time::timeout(
                 Duration::from_secs(5),
                 session.input_tx.send(data),
