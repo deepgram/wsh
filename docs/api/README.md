@@ -178,13 +178,32 @@ Sends raw bytes to the terminal's PTY. The request body is forwarded verbatim
 -- there is no JSON wrapping. Use `Content-Type: application/octet-stream` or
 `text/plain`.
 
-**Response:** `204 No Content` on success.
+**Response:** `200 OK` with JSON body:
+
+```json
+{"generation": 42}
+```
+
+The `generation` counter is the activity generation captured **before** the
+input is delivered. Pass it to `GET /sessions/:name/idle?last_generation=42`
+to wait until the terminal has processed this input and gone idle again.
 
 **Errors:**
 
 | Status | Code | When |
 |--------|------|------|
 | 500 | `input_send_failed` | PTY channel closed or broken |
+
+**Example -- send a command and wait for idle:**
+
+```bash
+# Send input and capture the generation
+GEN=$(printf 'ls\n' | curl -s -X POST http://localhost:8080/sessions/default/input \
+  --data-binary @- | jq -r '.generation')
+
+# Wait for the terminal to go idle after processing
+curl "http://localhost:8080/sessions/default/idle?timeout_ms=3000&last_generation=$GEN"
+```
 
 **Example -- send Ctrl+C:**
 

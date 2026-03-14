@@ -86,12 +86,14 @@ pub(super) async fn proxy_post(
 
 /// Proxy a POST request with raw bytes body to a backend server.
 ///
-/// Returns the HTTP status code from the backend (no body expected).
+/// Returns the HTTP status code and parsed JSON body from the backend.
+/// Falls back to `serde_json::Value::Null` when the backend returns no
+/// JSON body (backwards compat with older backends that return 204).
 pub(super) async fn proxy_post_bytes(
     backend: &BackendEntry,
     path: &str,
     body: bytes::Bytes,
-) -> Result<StatusCode, ApiError> {
+) -> Result<(StatusCode, serde_json::Value), ApiError> {
     let url = backend.url_for(path);
     let client = build_client()?;
 
@@ -105,7 +107,13 @@ pub(super) async fn proxy_post_bytes(
         .await
         .map_err(|e| ApiError::ServerUnavailable(format!("{}: {}", backend.address, e)))?;
 
-    Ok(StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR))
+    let status = StatusCode::from_u16(resp.status().as_u16())
+        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .unwrap_or(serde_json::Value::Null);
+    Ok((status, body))
 }
 
 /// Proxy a DELETE request to a backend server.

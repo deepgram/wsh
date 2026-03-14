@@ -131,10 +131,11 @@ pub(super) async fn input(
     Path(name): Path<String>,
     AxumQuery(query): AxumQuery<ServerQuery>,
     body: Bytes,
-) -> Result<StatusCode, ApiError> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     match resolve_server_target(&state, query.server.as_deref())? {
         SessionTarget::Local => {
             let session = get_session(&state.sessions, &name)?;
+            let gen = session.activity.generation();
             tokio::time::timeout(
                 std::time::Duration::from_secs(5),
                 session.input_tx.send(body),
@@ -146,16 +147,16 @@ pub(super) async fn input(
                 ApiError::InputSendFailed
             })?;
             session.activity.touch();
-            Ok(StatusCode::NO_CONTENT)
+            Ok(Json(serde_json::json!({ "generation": gen })))
         }
         SessionTarget::Remote(backend) => {
-            let status = super::proxy::proxy_post_bytes(
+            let (_status, body) = super::proxy::proxy_post_bytes(
                 &backend,
                 &format!("/sessions/{}/input", name),
                 body,
             )
             .await?;
-            Ok(status)
+            Ok(Json(body))
         }
     }
 }

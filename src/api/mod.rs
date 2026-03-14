@@ -504,7 +504,14 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(body.get("generation").is_some());
     }
 
     #[tokio::test]
@@ -524,7 +531,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert_eq!(response.status(), StatusCode::OK);
 
         // Verify the data was forwarded to the channel
         let received = input_rx.recv().await.expect("should receive data");
@@ -556,7 +563,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert_eq!(response.status(), StatusCode::OK);
 
         // Test /sessions/test/ws/raw exists (GET) - will return upgrade required since we're not using WebSocket
         let response = app
