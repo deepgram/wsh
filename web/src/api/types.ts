@@ -85,7 +85,7 @@ export interface WsResponse {
   error?: { code: string; message: string };
 }
 
-export type EventType = "lines" | "cursor" | "mode" | "diffs" | "activity";
+export type EventType = "lines" | "cursor" | "mode" | "diffs" | "activity" | "overlay";
 
 export interface SessionInfo {
   name: string;
@@ -108,4 +108,61 @@ export interface ServerInfo {
 
 export interface SendInputResult {
   generation: number;
+}
+
+// Overlay color — different from terminal Color.
+// Named colors serialize as bare strings (e.g. "red"), RGB as {r, g, b}.
+// Serde #[serde(untagged)] on the Rust enum produces this shape.
+export type OverlayColor = string | { r: number; g: number; b: number };
+
+export interface OverlaySpan {
+  text: string;
+  id?: string;
+  fg?: OverlayColor;
+  bg?: OverlayColor;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+}
+
+export interface RegionWrite {
+  row: number;
+  col: number;
+  text: string;
+  fg?: OverlayColor;
+  bg?: OverlayColor;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+}
+
+export interface BackgroundStyle {
+  bg: OverlayColor;
+}
+
+export interface Overlay {
+  id: string;
+  x: number;
+  y: number;
+  z: number;
+  width: number;
+  height: number;
+  background?: BackgroundStyle;
+  spans: OverlaySpan[];
+  region_writes: RegionWrite[];
+  focusable?: boolean;
+  screen_mode?: "normal" | "alt";
+}
+
+export interface Panel {
+  id: string;
+  position: "top" | "bottom";
+  height: number;
+  z: number;
+  background?: BackgroundStyle;
+  spans: OverlaySpan[];
+  region_writes: RegionWrite[];
+  visible: boolean;
+  focusable?: boolean;
+  screen_mode?: "normal" | "alt";
 }
