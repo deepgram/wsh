@@ -149,7 +149,7 @@ export interface Overlay {
   height: number;
   background?: BackgroundStyle;
   spans: OverlaySpan[];
-  region_writes: RegionWrite[];
+  region_writes?: RegionWrite[];
   focusable?: boolean;
   screen_mode?: "normal" | "alt";
 }
@@ -161,7 +161,7 @@ export interface Panel {
   z: number;
   background?: BackgroundStyle;
   spans: OverlaySpan[];
-  region_writes: RegionWrite[];
+  region_writes?: RegionWrite[];
   visible: boolean;
   focusable?: boolean;
   screen_mode?: "normal" | "alt";

@@ -1,39 +1,12 @@
 import { h } from "preact";
-import type { Overlay, OverlaySpan, RegionWrite } from "../api/types";
-import { overlaySpanStyle, overlayColorToCSS } from "../utils/terminal";
+import type { Overlay } from "../api/types";
+import { overlayColorToCSS } from "../utils/terminal";
+import { renderSpans, renderRegionWrites } from "./overlayRendering";
 
 interface OverlayLayerProps {
   overlays: Overlay[];
   charWidth: number;
   charHeight: number;
-}
-
-function renderSpans(spans: OverlaySpan[]): h.JSX.Element[] {
-  return spans.map((span, i) => (
-    <span key={i} style={overlaySpanStyle(span)}>
-      {span.text}
-    </span>
-  ));
-}
-
-function renderRegionWrites(
-  writes: RegionWrite[],
-  charWidth: number,
-  charHeight: number,
-): h.JSX.Element[] {
-  return writes.map((rw, i) => (
-    <span
-      key={`rw-${i}`}
-      class="region-write"
-      style={{
-        left: `${rw.col * charWidth}px`,
-        top: `${rw.row * charHeight}px`,
-        ...overlaySpanStyle(rw),
-      }}
-    >
-      {rw.text}
-    </span>
-  ));
 }
 
 export function OverlayLayer({ overlays, charWidth, charHeight }: OverlayLayerProps) {
