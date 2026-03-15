@@ -16,33 +16,36 @@ The wsh server stores overlay and panel data, notifies connected clients via `ov
 
 New TypeScript types mirror the Rust types. Added to `web/src/api/types.ts`.
 
+**Important: Overlay colors differ from terminal colors.** The terminal `Color` type uses `indexed` (0-255 ANSI palette) or `rgb`. The overlay `Color` type (from `src/overlay/types.rs`) uses `Named` (string: "black", "red", etc.) or `Rgb`. Serde's `#[serde(untagged)]` serializes Named as a bare string and Rgb as `{r, g, b}`.
+
 ```typescript
-// Color is already defined in types.ts as the existing Span color type.
-// OverlaySpan extends the concept with optional id.
+// Overlay color — different from the terminal Color type.
+// Named colors serialize as bare strings, RGB as {r, g, b}.
+type OverlayColor = string | { r: number; g: number; b: number };
 
 interface OverlaySpan {
   text: string;
   id?: string;
-  fg?: Color;
-  bg?: Color;
-  bold: boolean;
-  italic: boolean;
-  underline: boolean;
+  fg?: OverlayColor;
+  bg?: OverlayColor;
+  bold?: boolean;     // omitted when false (serde skip_serializing_if)
+  italic?: boolean;
+  underline?: boolean;
 }
 
 interface RegionWrite {
   row: number;
   col: number;
   text: string;
-  fg?: Color;
-  bg?: Color;
-  bold: boolean;
-  italic: boolean;
-  underline: boolean;
+  fg?: OverlayColor;
+  bg?: OverlayColor;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
 }
 
 interface BackgroundStyle {
-  bg: Color;
+  bg: OverlayColor;
 }
 
 interface Overlay {
@@ -75,6 +78,8 @@ interface Panel {
 
 Add `"overlay"` to the `EventType` union.
 
+A new `overlayColorToCSS()` function converts `OverlayColor` to CSS color strings. Named colors map to CSS named colors directly (they are valid CSS color names). RGB maps to `rgb(r, g, b)`. This is separate from the existing `colorToCSS()` which handles indexed/RGB terminal colors.
+
 ## State Changes
 
 Add overlay and panel arrays to `ScreenState` in `web/src/state/terminal.ts`:
@@ -89,7 +94,15 @@ interface ScreenState {
 
 Initialize both as empty arrays in `defaultScreenState()`. Updates arrive as full replacements (not diffs) — each `overlay_sync` message contains the complete overlay list, and each `panel_sync` contains the complete panel list.
 
-## WebSocket Subscription
+## WebSocket Message Routing
+
+**Important: `overlay_sync` and `panel_sync` messages use `"type"` as their discriminator, not `"event"`.** They are structured as `{"type": "overlay_sync", "overlays": [...]}` — the same pattern as the existing `"lagged"` notification. They do NOT carry a `session` field.
+
+The current `handleMessage()` in `ws.ts` has three paths: messages with `id` (responses), messages with `connected` (hello), and messages with `event` (events routed to callbacks). The `overlay_sync`/`panel_sync` messages match none of these — they'd be silently dropped.
+
+**Fix:** Add `overlay_sync` and `panel_sync` handling in `handleMessage()` alongside the existing `lagged` check, forwarding them to event callbacks. Since these messages lack a `session` field, they route through the "broadcast to all" path — which is correct because the per-session WS connection context already scopes them.
+
+### Subscription
 
 Update the event subscription in `app.tsx` to include `"overlay"`:
 
@@ -97,15 +110,20 @@ Update the event subscription in `app.tsx` to include `"overlay"`:
 subscribe(["lines", "cursor", "mode", "activity", "overlay"])
 ```
 
-Handle new message types in the event handler:
+### Event Handling
+
+In `app.tsx`'s event handler:
 
 ```typescript
-case "overlay_sync":
+// overlay_sync / panel_sync arrive as {type: ...} not {event: ...}
+if ("type" in msg && msg.type === "overlay_sync") {
   updateScreen(session, { overlays: msg.overlays });
-  break;
-case "panel_sync":
+  return;
+}
+if ("type" in msg && msg.type === "panel_sync") {
   updateScreen(session, { panels: msg.panels });
-  break;
+  return;
+}
 ```
 
 ## Panel Rendering
@@ -125,12 +143,12 @@ Panels carve dedicated rows from the top or bottom of the terminal viewport. The
 
 ### Layout Computation
 
-The web UI performs client-side layout computation matching the server's `compute_layout()` algorithm:
+The web UI performs client-side layout computation matching the server's `compute_layout()` algorithm (see `src/panel/layout.rs`):
 
-1. Filter panels by `visible == true` and matching `screen_mode`.
-2. Sort by z-index descending (highest priority first).
-3. Greedily allocate space: each panel claims `height` rows from its edge (top or bottom). If insufficient rows remain, the panel is hidden.
-4. The remaining rows are the terminal content area.
+1. **Filter** panels by `visible == true` and matching `screen_mode`. (`compute_layout()` itself does not filter — the caller is responsible.)
+2. **Merge** top and bottom panels into a single list and sort by z-index descending (highest priority first). Allocation is global by z-priority, not per-edge — a high-z bottom panel beats a low-z top panel.
+3. **Greedily allocate** space: for each panel (in z-order), claim `height` rows from its edge (top or bottom). If insufficient rows remain, the panel is hidden.
+4. The remaining rows are the terminal content area. **Panels can consume all rows**, leaving zero terminal rows — the web UI must handle this edge case gracefully (e.g., hide the terminal content area entirely).
 
 This is a pure function: `(panels: Panel[], totalRows: number) => { topPanels: Panel[], bottomPanels: Panel[], terminalRows: number }`.
 
@@ -184,21 +202,26 @@ The overlay layer uses `pointer-events: none` so clicks pass through to the term
 
 ## Screen Mode Filtering
 
-Both overlays and panels have a `screen_mode` field (`"normal"` or `"alt"`). Only items whose mode matches the current terminal state are rendered:
+Overlays and panels have different filtering models:
+
+- **Overlays** are **server-side filtered** by screen mode. The server calls `list_by_mode(mode)` before sending `overlay_sync`, so the web UI only receives overlays matching the current mode. No client-side filtering needed.
+- **Panels** are sent **unfiltered** — `panel_sync` contains all panels. The web UI must filter by `visible == true` and matching `screen_mode` at render time.
 
 ```typescript
-const activeOverlays = overlays.filter(o =>
-  o.screen_mode === (alternateActive ? "alt" : "normal")
+const activePanels = panels.filter(p =>
+  p.visible && p.screen_mode === (alternateActive ? "alt" : "normal")
 );
 ```
 
-This filtering happens at render time, not in state updates — state always holds the full list.
+**Mode change handling:** When the terminal switches between normal and alt screen, the server does NOT automatically re-send `overlay_sync` for the new mode. The web UI should **clear overlays** when it receives a `mode` event (since the current overlay list is for the old mode), and wait for the next `overlay_sync` to repopulate. Panels don't need this treatment since they arrive unfiltered.
 
 ## Shared Span Styling
 
-The existing terminal renderer converts `Span` objects to inline CSS styles. Overlay/panel spans use the same type shape (`OverlaySpan` is a superset of `Span`). Extract the span-to-style logic into a shared utility function so terminal lines, overlays, and panels all use the same rendering path.
+The existing terminal renderer converts `Span` objects to inline CSS styles via `spanStyle()` in `web/src/utils/terminal.ts`. Terminal spans have additional attributes (`faint`, `strikethrough`, `blink`, `inverse`) that overlay spans do not.
 
-The shared function handles: `fg`, `bg` (both indexed and RGB colors), `bold`, `italic`, `underline`.
+Rather than forcing a single polymorphic function, add a parallel `overlaySpanStyle()` function that handles the overlay-specific type (`OverlaySpan` with `OverlayColor`). This avoids coupling the terminal and overlay rendering paths. The overlay function handles: `fg`, `bg` (using `overlayColorToCSS()`), `bold`, `italic`, `underline`.
+
+The `charWidth` and `charHeight` values (computed from the measurement span in `Terminal.tsx`) need to be accessible to the overlay/panel rendering code. Lift these into a ref or signal that child components can read.
 
 ## Region Write Rendering
 
@@ -219,9 +242,10 @@ Region writes are cell-level positioned text within an overlay or panel. Each re
 |------|--------|
 | `web/src/api/types.ts` | Add Overlay, Panel, OverlaySpan, RegionWrite, BackgroundStyle types; add `"overlay"` to EventType |
 | `web/src/state/terminal.ts` | Add `overlays` and `panels` to ScreenState; initialize as `[]` |
-| `web/src/api/ws.ts` | Handle `overlay_sync` and `panel_sync` message types |
-| `web/src/app.tsx` | Add `"overlay"` to subscribe list; route new events to state |
-| `web/src/components/Terminal.tsx` | Add panel layout regions, overlay positioning layer, screen mode filtering, shared span styling |
+| `web/src/api/ws.ts` | Route `overlay_sync` and `panel_sync` messages (by `type` field) to event callbacks |
+| `web/src/app.tsx` | Add `"overlay"` to subscribe list; handle overlay_sync/panel_sync; clear overlays on mode change |
+| `web/src/utils/terminal.ts` | Add `overlayColorToCSS()` and `overlaySpanStyle()` functions for overlay color/styling |
+| `web/src/components/Terminal.tsx` | Add panel layout regions, overlay positioning layer, lift charWidth/charHeight into accessible state |
 | `web/src/styles/terminal.css` | Add `.overlay-layer`, `.overlay`, `.panel-region`, `.panel` CSS classes |
 
 ## What This Does NOT Cover
