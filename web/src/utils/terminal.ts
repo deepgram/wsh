@@ -1,4 +1,4 @@
-import type { Span, Color } from "../api/types";
+import type { Span, Color, OverlayColor, OverlaySpan } from "../api/types";
 
 // ANSI 256-color palette (first 16 use CSS vars, rest computed)
 const ANSI_256: string[] = [];
@@ -35,6 +35,12 @@ export function colorToCSS(c: Color): string {
   return "inherit";
 }
 
+/** Convert overlay color to CSS. Named colors are valid CSS color names. */
+export function overlayColorToCSS(c: OverlayColor): string {
+  if (typeof c === "string") return c;
+  return `rgb(${c.r},${c.g},${c.b})`;
+}
+
 export function spanStyle(span: Span): Record<string, string> {
   const s: Record<string, string> = {};
 
@@ -58,5 +64,16 @@ export function spanStyle(span: Span): Record<string, string> {
   if (span.strikethrough) decorations.push("line-through");
   if (decorations.length > 0) s.textDecoration = decorations.join(" ");
 
+  return s;
+}
+
+/** Convert an OverlaySpan to a CSS style object. */
+export function overlaySpanStyle(span: OverlaySpan): Record<string, string> {
+  const s: Record<string, string> = {};
+  if (span.fg) s.color = overlayColorToCSS(span.fg);
+  if (span.bg) s.backgroundColor = overlayColorToCSS(span.bg);
+  if (span.bold) s.fontWeight = "bold";
+  if (span.italic) s.fontStyle = "italic";
+  if (span.underline) s.textDecoration = "underline";
   return s;
 }
