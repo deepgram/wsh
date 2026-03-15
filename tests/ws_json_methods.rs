@@ -651,3 +651,211 @@ async fn test_ws_subscribe_panel_events() {
         "should receive panel_sync event after creating panel via HTTP"
     );
 }
+
+/// Verify that overlay_sync JSON can be deserialized into Vec<Overlay> and
+/// produces ANSI rendering output — tests the full client-side rendering path.
+#[tokio::test]
+async fn test_overlay_sync_client_rendering() {
+    use wsh::overlay::{self, Overlay};
+
+    let (state, _rx, _parser_tx) = create_test_state();
+    let app = api::router(state, api::RouterConfig::default());
+    let addr = start_server(app).await;
+
+    let (ws, _) = connect_async(format!("ws://{}/sessions/test/ws/json", addr))
+        .await
+        .unwrap();
+    let (mut tx, mut rx) = ws.split();
+
+    // Read "connected" message
+    let _ = recv_json(&mut rx).await;
+
+    // Subscribe to overlay events
+    tx.send(Message::Text(
+        serde_json::json!({
+            "method": "subscribe",
+            "params": {"events": ["overlay"]}
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+
+    // Read subscribe response
+    let _ = recv_json(&mut rx).await;
+
+    // Drain initial sync events
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while tokio::time::Instant::now() < deadline {
+        if tokio::time::timeout(Duration::from_millis(200), rx.next())
+            .await
+            .is_err()
+        {
+            break;
+        }
+    }
+
+    // Create an overlay with styled text
+    let http = reqwest::Client::new();
+    let resp = http
+        .post(format!("http://{}/sessions/test/overlay", addr))
+        .json(&serde_json::json!({
+            "x": 5, "y": 3, "width": 20, "height": 1,
+            "spans": [{"text": "Status OK", "fg": "green", "bold": true}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+
+    // Receive overlay_sync and verify client-side deserialization + rendering
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    let mut found = false;
+    while tokio::time::Instant::now() < deadline {
+        if let Ok(Some(Ok(Message::Text(text)))) =
+            tokio::time::timeout(Duration::from_millis(500), rx.next()).await
+        {
+            let msg: serde_json::Value = serde_json::from_str(&text).unwrap();
+            if msg.get("type") == Some(&serde_json::json!("overlay_sync")) {
+                // This is exactly what the thin client does in ws_streaming_loop
+                let overlays_value = msg.get("overlays").cloned().unwrap_or_default();
+                let overlays: Vec<Overlay> = serde_json::from_value(overlays_value)
+                    .expect("overlay_sync JSON must deserialize to Vec<Overlay>");
+
+                assert_eq!(overlays.len(), 1, "should have 1 overlay");
+                let o = &overlays[0];
+                assert_eq!(o.x, 5);
+                assert_eq!(o.y, 3);
+                assert_eq!(o.width, 20);
+                assert_eq!(o.height, 1);
+                assert_eq!(o.spans.len(), 1);
+                assert_eq!(o.spans[0].text, "Status OK");
+                assert!(o.spans[0].bold);
+
+                // Now verify ANSI rendering produces output
+                let rendered = overlay::render_all_overlays(&overlays);
+                assert!(!rendered.is_empty(), "rendered overlay must not be empty");
+                // Should contain cursor save/restore
+                assert!(rendered.starts_with("\x1b[s"), "should start with cursor save");
+                assert!(rendered.ends_with("\x1b[u"), "should end with cursor restore");
+                // Should contain cursor positioning for (y=3, x=5) -> 1-indexed (4, 6)
+                assert!(
+                    rendered.contains("\x1b[4;6H"),
+                    "should position cursor at row 4, col 6, got: {:?}",
+                    rendered
+                );
+                // Should contain the text
+                assert!(rendered.contains("Status OK"));
+                // Should contain green foreground (SGR 32)
+                assert!(rendered.contains("\x1b[32m"), "should have green fg");
+                // Should contain bold (SGR 1)
+                assert!(rendered.contains("\x1b[1m"), "should have bold");
+
+                found = true;
+                break;
+            }
+        }
+    }
+    assert!(found, "should receive overlay_sync with renderable overlay data");
+}
+
+/// Verify that panel_sync JSON can be deserialized into Vec<Panel> and
+/// the panel rendering functions produce ANSI output.
+#[tokio::test]
+async fn test_panel_sync_client_rendering() {
+    use wsh::panel::{self, Panel};
+
+    let (state, _rx, _parser_tx) = create_test_state();
+    let app = api::router(state, api::RouterConfig::default());
+    let addr = start_server(app).await;
+
+    let (ws, _) = connect_async(format!("ws://{}/sessions/test/ws/json", addr))
+        .await
+        .unwrap();
+    let (mut tx, mut rx) = ws.split();
+
+    let _ = recv_json(&mut rx).await;
+
+    tx.send(Message::Text(
+        serde_json::json!({
+            "method": "subscribe",
+            "params": {"events": ["overlay"]}
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+
+    let _ = recv_json(&mut rx).await;
+
+    // Drain initial events
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while tokio::time::Instant::now() < deadline {
+        if tokio::time::timeout(Duration::from_millis(200), rx.next())
+            .await
+            .is_err()
+        {
+            break;
+        }
+    }
+
+    // Create a panel
+    let http = reqwest::Client::new();
+    let resp = http
+        .post(format!("http://{}/sessions/test/panel", addr))
+        .json(&serde_json::json!({
+            "position": "bottom",
+            "height": 2,
+            "spans": [{"text": "Panel Line 1\nPanel Line 2", "fg": "cyan"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+
+    // Receive panel_sync and verify client-side deserialization + rendering
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    let mut found = false;
+    while tokio::time::Instant::now() < deadline {
+        if let Ok(Some(Ok(Message::Text(text)))) =
+            tokio::time::timeout(Duration::from_millis(500), rx.next()).await
+        {
+            let msg: serde_json::Value = serde_json::from_str(&text).unwrap();
+            if msg.get("type") == Some(&serde_json::json!("panel_sync")) {
+                let panels_value = msg.get("panels").cloned().unwrap_or_default();
+                let panels: Vec<Panel> = serde_json::from_value(panels_value)
+                    .expect("panel_sync JSON must deserialize to Vec<Panel>");
+
+                if panels.is_empty() {
+                    continue; // initial empty sync, skip
+                }
+
+                assert_eq!(panels.len(), 1, "should have 1 panel");
+                let p = &panels[0];
+                assert_eq!(p.height, 2);
+                assert_eq!(p.spans.len(), 1);
+                assert!(p.spans[0].text.contains("Panel Line 1"));
+
+                // Verify panel rendering functions produce ANSI output
+                let layout = panel::compute_layout(&panels, 24, 80);
+                let rendered = panel::render_all_panels(&layout, 80);
+                assert!(
+                    !rendered.is_empty(),
+                    "panel rendering must produce ANSI output"
+                );
+                // Should contain panel text
+                assert!(
+                    rendered.contains("Panel Line 1"),
+                    "rendered panel should contain text, got: {:?}",
+                    rendered
+                );
+
+                found = true;
+                break;
+            }
+        }
+    }
+    assert!(found, "should receive panel_sync with renderable panel data");
+}
