@@ -334,6 +334,22 @@ export class WshClient {
       return;
     }
 
+    // Overlay/panel sync — uses "type" field, not "event". No "session" field.
+    // Route through event callbacks via broadcast (no session scoping needed —
+    // per-session WS connections scope these messages implicitly).
+    if ("type" in msg && (msg.type === "overlay_sync" || msg.type === "panel_sync")) {
+      for (const [, callbacks] of this.eventCallbacks) {
+        for (const cb of callbacks) {
+          try {
+            cb(msg);
+          } catch (e) {
+            console.error("Error in overlay/panel sync handler:", e);
+          }
+        }
+      }
+      return;
+    }
+
     // Otherwise it's an event — route to callbacks
     if ("event" in msg) {
       const eventName = msg.event as string;
