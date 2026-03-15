@@ -58,8 +58,8 @@ interface Overlay {
   background?: BackgroundStyle;
   spans: OverlaySpan[];
   region_writes: RegionWrite[];
-  focusable: boolean;
-  screen_mode: "normal" | "alt";
+  focusable?: boolean;    // omitted when false
+  screen_mode?: "normal" | "alt";  // omitted when "normal" (default)
 }
 
 interface Panel {
@@ -71,8 +71,8 @@ interface Panel {
   spans: OverlaySpan[];
   region_writes: RegionWrite[];
   visible: boolean;
-  focusable: boolean;
-  screen_mode: "normal" | "alt";
+  focusable?: boolean;    // omitted when false
+  screen_mode?: "normal" | "alt";  // omitted when "normal" (default)
 }
 ```
 
@@ -93,6 +93,8 @@ interface ScreenState {
 ```
 
 Initialize both as empty arrays in `defaultScreenState()`. Updates arrive as full replacements (not diffs) — each `overlay_sync` message contains the complete overlay list, and each `panel_sync` contains the complete panel list.
+
+**Reconnection timing:** During session setup, the flow is `getScreen` → `setFullScreen` (resets state) → `subscribe` → server sends initial `overlay_sync`/`panel_sync`. Overlay/panel state is intentionally not preserved across `setFullScreen` — fresh state arrives automatically from the server after subscribe.
 
 ## WebSocket Message Routing
 
@@ -209,11 +211,19 @@ Overlays and panels have different filtering models:
 
 ```typescript
 const activePanels = panels.filter(p =>
-  p.visible && p.screen_mode === (alternateActive ? "alt" : "normal")
+  p.visible && (p.screen_mode ?? "normal") === (alternateActive ? "alt" : "normal")
 );
 ```
 
 **Mode change handling:** When the terminal switches between normal and alt screen, the server does NOT automatically re-send `overlay_sync` for the new mode. The web UI should **clear overlays** when it receives a `mode` event (since the current overlay list is for the old mode), and wait for the next `overlay_sync` to repopulate. Panels don't need this treatment since they arrive unfiltered.
+
+In the mode event handler:
+
+```typescript
+case "mode":
+  updateScreen(session, { alternateActive: raw.alternate_active, overlays: [] });
+  break;
+```
 
 ## Shared Span Styling
 
