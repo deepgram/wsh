@@ -1,5 +1,5 @@
 import { signal, type Signal } from "@preact/signals";
-import type { FormattedLine, Cursor } from "../api/types";
+import type { FormattedLine, Cursor, Overlay, Panel } from "../api/types";
 
 export interface ScreenState {
   lines: FormattedLine[];
@@ -18,6 +18,8 @@ export interface ScreenState {
   scrollbackComplete: boolean;
   /** Whether a scrollback fetch is currently in flight. */
   scrollbackLoading: boolean;
+  overlays: Overlay[];
+  panels: Panel[];
 }
 
 function makeEmptyScreen(): ScreenState {
@@ -33,6 +35,8 @@ function makeEmptyScreen(): ScreenState {
     scrollbackOffset: 0,
     scrollbackComplete: false,
     scrollbackLoading: false,
+    overlays: [],
+    panels: [],
   };
 }
 
