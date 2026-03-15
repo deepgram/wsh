@@ -13,7 +13,7 @@ import {
   sessionInfoMap,
   sidebarCollapsed,
 } from "./state/sessions";
-import type { SessionInfo } from "./api/types";
+import type { SessionInfo, Overlay, Panel } from "./api/types";
 import {
   setFullScreen,
   updateScreen,
@@ -293,12 +293,23 @@ async function setupSession(
     scrollbackOffset: 0,
     scrollbackComplete: false,
     scrollbackLoading: false,
+    overlays: [],
+    panels: [],
   });
 
   const unsub = client.subscribe(
     name,
-    ["lines", "cursor", "mode", "activity"],
+    ["lines", "cursor", "mode", "activity", "overlay"],
     (event) => {
+      // overlay_sync / panel_sync arrive as {type: ...} not {event: ...}
+      if ("type" in event && event.type === "overlay_sync") {
+        updateScreen(name, { overlays: event.overlays as Overlay[] });
+        return;
+      }
+      if ("type" in event && event.type === "panel_sync") {
+        updateScreen(name, { panels: event.panels as Panel[] });
+        return;
+      }
       // Use event.session if available (handles renames without re-subscribe)
       const target = (event.session as string) ?? name;
       handleEvent(client, target, event);
@@ -444,6 +455,8 @@ function handleEvent(client: WshClient, session: string, raw: any): void {
         scrollbackOffset: current.scrollbackOffset,
         scrollbackComplete: complete,
         scrollbackLoading: current.scrollbackLoading,
+        overlays: current.overlays,
+        panels: current.panels,
       });
       break;
     }
@@ -469,7 +482,7 @@ function handleEvent(client: WshClient, session: string, raw: any): void {
       break;
 
     case "mode":
-      updateScreen(session, { alternateActive: raw.alternate_active });
+      updateScreen(session, { alternateActive: raw.alternate_active, overlays: [] });
       break;
 
     case "reset":
@@ -487,6 +500,8 @@ function handleEvent(client: WshClient, session: string, raw: any): void {
           scrollbackOffset: 0,
           scrollbackComplete: false,
           scrollbackLoading: false,
+          overlays: getScreen(session).overlays,
+          panels: getScreen(session).panels,
         });
       }).catch((e) => {
         console.error(`Failed to re-fetch screen after reset for "${session}":`, e);
