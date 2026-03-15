@@ -168,6 +168,42 @@ html, body, #app {
   pointer-events: none;
 }
 
+/* Overlay layer: covers terminal content area, passes clicks through */
+.overlay-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+/* Individual overlay: positioned by character grid coordinates */
+.overlay-item {
+  position: absolute;
+  pointer-events: auto;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  white-space: pre;
+  overflow: hidden;
+}
+
+/* Region write: cell-level positioned text within an overlay or panel */
+.region-write {
+  position: absolute;
+  white-space: pre;
+}
+
+/* Panel region: fixed-height block above or below terminal content */
+.panel-region {
+  position: relative;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  white-space: pre;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
 /* ==========================================================================
    Input Bar
    ========================================================================== */
