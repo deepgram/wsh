@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback } from "preact/hooks";
+import { useRef, useEffect, useCallback, useState } from "preact/hooks";
 import { useTerminalGestures } from "../hooks/useTerminalGestures";
 import { getScreenSignal, updateScreen } from "../state/terminal";
 import { connectionState, focusedSession, zoomLevel } from "../state/sessions";
@@ -6,6 +6,8 @@ import { spanStyle } from "../utils/terminal";
 import { keyToSequence } from "../utils/keymap";
 import type { WshClient } from "../api/ws";
 import type { FormattedLine } from "../api/types";
+import { OverlayLayer } from "./OverlayLayer";
+import { PanelRegion, computePanelLayout } from "./PanelRegion";
 
 /** How many scrollback lines to fetch per page. */
 const SCROLLBACK_PAGE_SIZE = 200;
@@ -122,6 +124,7 @@ export function Terminal({ session, client, captureInput }: TerminalProps) {
   const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSizeRef = useRef<{ cols: number; rows: number } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [cellSize, setCellSize] = useState<{ w: number; h: number } | null>(null);
 
   // Subscribe only to this session's signal (not all sessions)
   const screen = getScreenSignal(session).value;
@@ -204,7 +207,7 @@ export function Terminal({ session, client, captureInput }: TerminalProps) {
     const cols = Math.floor((container.clientWidth - padX) / cellWidth);
     const rows = Math.floor((container.clientHeight - padY) / cellHeight);
 
-    return { cols: Math.max(cols, 1), rows: Math.max(rows, 1) };
+    return { cols: Math.max(cols, 1), rows: Math.max(rows, 1), cellWidth, cellHeight };
   }, []);
 
   // ResizeObserver — debounced resize sent to server
@@ -218,6 +221,7 @@ export function Terminal({ session, client, captureInput }: TerminalProps) {
       resizeTimerRef.current = setTimeout(() => {
         const size = computeGridSize();
         if (!size) return;
+        setCellSize({ w: size.cellWidth, h: size.cellHeight });
         const last = lastSizeRef.current;
         if (last && last.cols === size.cols && last.rows === size.rows) return;
         lastSizeRef.current = size;
@@ -239,6 +243,7 @@ export function Terminal({ session, client, captureInput }: TerminalProps) {
     const timer = setTimeout(() => {
       const size = computeGridSize();
       if (!size) return;
+      setCellSize({ w: size.cellWidth, h: size.cellHeight });
       const last = lastSizeRef.current;
       if (last && last.cols === size.cols && last.rows === size.rows) return;
       lastSizeRef.current = size;
@@ -367,6 +372,16 @@ export function Terminal({ session, client, captureInput }: TerminalProps) {
     ? screen.lines
     : [...screen.scrollbackLines, ...screen.lines];
 
+  // Extract overlays and panels from screen state
+  const overlays = screen.overlays || [];
+  const panels = screen.panels || [];
+
+  // Compute panel layout based on current screen mode
+  const activePanels = panels.filter(
+    (p) => p.visible && (p.screen_mode ?? "normal") === (screen.alternateActive ? "alt" : "normal"),
+  );
+  const panelLayout = computePanelLayout(activePanels, screen.rows);
+
   return (
     <div
       class="terminal-wrapper"
@@ -385,6 +400,9 @@ export function Terminal({ session, client, captureInput }: TerminalProps) {
           spellcheck={false}
           aria-label={`Terminal input for ${session}`}
         />
+      )}
+      {cellSize && panelLayout.topPanels.length > 0 && (
+        <PanelRegion panels={panelLayout.topPanels} charWidth={cellSize.w} charHeight={cellSize.h} />
       )}
       <div
         class={containerClass}
@@ -407,10 +425,16 @@ export function Terminal({ session, client, captureInput }: TerminalProps) {
         {allLines.map((line, i) =>
           renderLine(line, i, i === cursorLineIndex ? { col: screen.cursor.col } : null),
         )}
+        {cellSize && overlays.length > 0 && (
+          <OverlayLayer overlays={overlays} charWidth={cellSize.w} charHeight={cellSize.h} />
+        )}
         {disconnected && (
           <div class="terminal-disconnected">Connection lost</div>
         )}
       </div>
+      {cellSize && panelLayout.bottomPanels.length > 0 && (
+        <PanelRegion panels={panelLayout.bottomPanels} charWidth={cellSize.w} charHeight={cellSize.h} />
+      )}
     </div>
   );
 }
