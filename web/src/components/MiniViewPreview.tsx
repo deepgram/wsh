@@ -2,6 +2,8 @@ import { useRef, useEffect, useState } from "preact/hooks";
 import { getScreenSignal } from "../state/terminal";
 import { spanStyle } from "../utils/terminal";
 import type { FormattedLine } from "../api/types";
+import { OverlayLayer } from "./OverlayLayer";
+import { PanelRegion, computePanelLayout } from "./PanelRegion";
 
 /** Base font size used for rendering the inner terminal content. */
 const BASE_FONT_PX = 12;
@@ -21,11 +23,21 @@ export function MiniTermContent({ session }: { session: string }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(0.1);
 
-  const { cols, rows, lines } = screen;
+  const { cols, rows, lines, overlays, panels, alternateActive } = screen;
   // Natural size of the terminal content at BASE_FONT_PX.
   // We'll measure charWidth from the DOM for accuracy, but also
   // set width in ch units on the inner div so layout is correct.
   const lineHeightPx = BASE_FONT_PX * LINE_HEIGHT;
+
+  // Cell dimensions for overlay and panel rendering
+  const charHeight = BASE_FONT_PX * LINE_HEIGHT;  // 14.4px
+  const charWidth = BASE_FONT_PX * 0.6;           // ~7.2px (approximation for monospace)
+
+  // Compute panel layout
+  const activePanels = (panels ?? []).filter(
+    (p) => p.visible && (p.screen_mode ?? "normal") === (alternateActive ? "alt" : "normal"),
+  );
+  const panelLayout = computePanelLayout(activePanels, rows);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -69,11 +81,22 @@ export function MiniTermContent({ session }: { session: string }) {
           width: `${cols}ch`,
         }}
       >
-        {lines.map((line: FormattedLine, i: number) => (
-          <div key={i} class="mini-term-line">
-            {renderMiniLine(line)}
-          </div>
-        ))}
+        {panelLayout.topPanels.length > 0 && (
+          <PanelRegion panels={panelLayout.topPanels} charWidth={charWidth} charHeight={charHeight} />
+        )}
+        <div style={{ position: "relative" }}>
+          {lines.map((line: FormattedLine, i: number) => (
+            <div key={i} class="mini-term-line">
+              {renderMiniLine(line)}
+            </div>
+          ))}
+          {(overlays ?? []).length > 0 && (
+            <OverlayLayer overlays={overlays ?? []} charWidth={charWidth} charHeight={charHeight} />
+          )}
+        </div>
+        {panelLayout.bottomPanels.length > 0 && (
+          <PanelRegion panels={panelLayout.bottomPanels} charWidth={charWidth} charHeight={charHeight} />
+        )}
       </div>
     </div>
   );
