@@ -256,14 +256,36 @@ Region writes are cell-level positioned text within an overlay or panel. Each re
 | `web/src/app.tsx` | Add `"overlay"` to subscribe list; handle overlay_sync/panel_sync; clear overlays on mode change |
 | `web/src/utils/terminal.ts` | Add `overlayColorToCSS()` and `overlaySpanStyle()` functions for overlay color/styling |
 | `web/src/components/Terminal.tsx` | Add panel layout regions, overlay positioning layer, lift charWidth/charHeight into accessible state |
+| `web/src/components/MiniViewPreview.tsx` | Add overlay layer and panel regions inside `mini-term-inner` |
 | `web/src/styles/terminal.css` | Add `.overlay-layer`, `.overlay`, `.panel-region`, `.panel` CSS classes |
+
+## Sidebar Mini-Preview Rendering
+
+The sidebar thumbnails (`MiniViewPreview.tsx` / `ThumbnailCell.tsx`) render a full-size terminal inside `mini-term-inner` and use CSS `transform: scale()` to shrink it to fit the 80px thumbnail container. This means **overlays and panels rendered inside `mini-term-inner` scale automatically** — no separate positioning math needed.
+
+### Approach
+
+Reuse the same overlay/panel rendering components from `Terminal.tsx` inside `MiniViewPreview.tsx`:
+
+1. **Overlays**: Add the same `.overlay-layer` div inside `mini-term-inner`, after the terminal lines. Overlays position at `(x * charWidth, y * charHeight)` in the unscaled coordinate space — CSS transform handles the rest.
+2. **Panels**: Add panel regions above/below the terminal lines within `mini-term-inner`. Same layout computation as the main terminal.
+
+Since thumbnails already read from `getScreenSignal(session)` and the overlay/panel data lives in `ScreenState`, the data flow requires no changes — thumbnails will reactively pick up overlay/panel updates.
+
+### Simplifications for Thumbnails
+
+- **No pointer events needed** — thumbnails are non-interactive (clicking opens the full session).
+- **No charWidth/charHeight lifting needed** — `MiniViewPreview` uses a fixed `BASE_FONT_PX = 12` and `LINE_HEIGHT = 1.2`, so `charWidth` and `charHeight` can be computed locally from these constants.
+
+### Shared Rendering
+
+Extract the overlay/panel rendering into reusable Preact components (e.g., `OverlayLayer`, `PanelRegion`) used by both `Terminal.tsx` and `MiniViewPreview.tsx`. These components accept overlays/panels + charWidth/charHeight as props and render the positioned DOM elements.
 
 ## What This Does NOT Cover
 
 - **Input capture in the web UI** — the input capture system (`/input/capture`, `/input/release`) is orthogonal and already works through the existing input API.
 - **Panel-induced PTY resize** — when panels carve space, the server handles PTY resize. The web UI receives the already-resized terminal output. The web UI layout computation is purely for visual positioning.
 - **Overlay/panel CRUD from the web UI** — this is read-only rendering. Creation and management happen through the API.
-- **Web UI mini-previews (sidebar thumbnails)** — overlays/panels in session preview thumbnails are out of scope for now.
 
 ## Testing
 
@@ -273,3 +295,4 @@ Region writes are cell-level positioned text within an overlay or panel. Each re
 - Test panel layout: create top and bottom panels, verify terminal content shrinks.
 - Test overlay positioning: create overlay at known (x, y), verify pixel position matches character grid.
 - Test region writes: create overlay with region_writes, verify cell-level positioning.
+- Test sidebar thumbnails: create overlay/panel, verify they appear scaled in the mini-preview.
