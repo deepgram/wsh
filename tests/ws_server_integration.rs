@@ -918,3 +918,196 @@ async fn test_server_ws_subscribe_activity_events() {
     assert!(got_running, "Should receive Running event after input");
     assert!(got_idle_after_running, "Should receive Idle event after activity settles");
 }
+
+// ── Test: overlay/panel sync via server WS ───────────────────────
+
+/// The global /ws/json endpoint must forward overlay_sync and panel_sync
+/// messages when the client subscribes with EventType::Overlay.
+#[tokio::test]
+async fn test_server_ws_overlay_panel_sync() {
+    let state = create_empty_state();
+
+    // Create a session with a PTY so we can create overlays/panels
+    let http_client = reqwest::Client::new();
+    let app = api::router(state, api::RouterConfig::default());
+    let addr = start_server(app).await;
+
+    // Create a session
+    let resp = http_client
+        .post(format!("http://{}/sessions", addr))
+        .json(&serde_json::json!({"name": "overlay-test"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+
+    // Create an overlay BEFORE subscribing (to test initial sync)
+    let resp = http_client
+        .post(format!(
+            "http://{}/sessions/overlay-test/overlay",
+            addr
+        ))
+        .json(&serde_json::json!({
+            "x": 10, "y": 5, "width": 20, "height": 3,
+            "spans": [{"text": "hello", "fg": "green"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+
+    // Create a panel BEFORE subscribing
+    let resp = http_client
+        .post(format!(
+            "http://{}/sessions/overlay-test/panel",
+            addr
+        ))
+        .json(&serde_json::json!({
+            "position": "bottom", "height": 1,
+            "spans": [{"text": "status bar"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+
+    // Connect to the global WS
+    let (mut tx, mut rx) = connect_server_ws(addr).await;
+
+    // Subscribe with overlay events
+    tx.send(Message::Text(
+        serde_json::json!({
+            "method": "subscribe",
+            "session": "overlay-test",
+            "params": {"events": ["overlay"]}
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+
+    // Collect messages for up to 3 seconds
+    let mut got_overlay_sync = false;
+    let mut got_panel_sync = false;
+    let mut overlay_count = 0;
+    let mut panel_count = 0;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+
+    while tokio::time::Instant::now() < deadline {
+        match try_recv_json(&mut rx, Duration::from_millis(500)).await {
+            Some(msg) => {
+                if msg.get("type").and_then(|v| v.as_str()) == Some("overlay_sync") {
+                    let overlays = msg["overlays"].as_array().unwrap();
+                    if !overlays.is_empty() {
+                        got_overlay_sync = true;
+                        overlay_count = overlays.len();
+                    }
+                }
+                if msg.get("type").and_then(|v| v.as_str()) == Some("panel_sync") {
+                    let panels = msg["panels"].as_array().unwrap();
+                    if !panels.is_empty() {
+                        got_panel_sync = true;
+                        panel_count = panels.len();
+                    }
+                }
+                if got_overlay_sync && got_panel_sync {
+                    break;
+                }
+            }
+            None => {}
+        }
+    }
+
+    assert!(
+        got_overlay_sync,
+        "Global WS must receive overlay_sync with existing overlays after subscribe"
+    );
+    assert_eq!(overlay_count, 1, "Should have 1 overlay");
+    assert!(
+        got_panel_sync,
+        "Global WS must receive panel_sync with existing panels after subscribe"
+    );
+    assert_eq!(panel_count, 1, "Should have 1 panel");
+}
+
+/// The global /ws/json endpoint must forward ongoing overlay/panel changes
+/// (not just initial state).
+#[tokio::test]
+async fn test_server_ws_overlay_sync_on_change() {
+    let state = create_empty_state();
+    let http_client = reqwest::Client::new();
+    let app = api::router(state, api::RouterConfig::default());
+    let addr = start_server(app).await;
+
+    // Create a session
+    let resp = http_client
+        .post(format!("http://{}/sessions", addr))
+        .json(&serde_json::json!({"name": "change-test"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+
+    // Connect and subscribe (no overlays yet)
+    let (mut tx, mut rx) = connect_server_ws(addr).await;
+    tx.send(Message::Text(
+        serde_json::json!({
+            "method": "subscribe",
+            "session": "change-test",
+            "params": {"events": ["overlay"]}
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+
+    // Drain initial messages (subscribe response, sync, empty overlay/panel syncs)
+    let drain_deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    while tokio::time::Instant::now() < drain_deadline {
+        if try_recv_json(&mut rx, Duration::from_millis(300)).await.is_none() {
+            break;
+        }
+    }
+
+    // NOW create an overlay — this should trigger a new overlay_sync
+    let resp = http_client
+        .post(format!(
+            "http://{}/sessions/change-test/overlay",
+            addr
+        ))
+        .json(&serde_json::json!({
+            "x": 0, "y": 0, "width": 10, "height": 1,
+            "spans": [{"text": "new!"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+
+    // Should receive overlay_sync with the new overlay
+    let mut got_overlay_sync = false;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while tokio::time::Instant::now() < deadline {
+        match try_recv_json(&mut rx, Duration::from_millis(500)).await {
+            Some(msg) => {
+                if msg.get("type").and_then(|v| v.as_str()) == Some("overlay_sync") {
+                    let overlays = msg["overlays"].as_array().unwrap();
+                    if !overlays.is_empty() {
+                        got_overlay_sync = true;
+                        assert_eq!(overlays.len(), 1);
+                        assert_eq!(overlays[0]["spans"][0]["text"], "new!");
+                        break;
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+
+    assert!(
+        got_overlay_sync,
+        "Global WS must receive overlay_sync when an overlay is created after subscribe"
+    );
+}

@@ -1120,6 +1120,12 @@ struct TaggedSessionEvent {
 }
 
 /// Tracks a per-session subscription's forwarding task.
+/// A tagged visual update forwarded from a per-session visual update task.
+struct TaggedVisualEvent {
+    session: String,
+    update: crate::session::VisualUpdate,
+}
+
 struct SubHandle {
     subscribed_types: Vec<EventType>,
     format: crate::parser::state::Format,
@@ -1127,6 +1133,9 @@ struct SubHandle {
     /// Optional background task that monitors activity and produces
     /// synthetic Idle/Running events via the shared mpsc channel.
     activity_task: Option<tokio::task::JoinHandle<()>>,
+    /// Optional background task that forwards visual updates (overlay/panel
+    /// changes) from the session's broadcast channel to the shared mpsc.
+    visual_task: Option<tokio::task::JoinHandle<()>>,
     _client_guard: Option<crate::session::ClientGuard>,
     /// Shared name that the forwarding task reads. Updated by
     /// `format_registry_event` on rename so the task tags events
@@ -1234,6 +1243,10 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
     let (sub_tx, mut sub_rx) =
         tokio::sync::mpsc::channel::<TaggedSessionEvent>(256);
 
+    // Per-session visual update forwarding (overlay/panel changes)
+    let (visual_tx, mut visual_rx) =
+        tokio::sync::mpsc::channel::<TaggedVisualEvent>(64);
+
     // Track active subscription tasks by session name
     let mut sub_handles: std::collections::HashMap<String, SubHandle> =
         std::collections::HashMap::new();
@@ -1288,6 +1301,7 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
                             &state,
                             &mut sub_handles,
                             &sub_tx,
+                            &visual_tx,
                         )
                         .await;
 
@@ -1325,6 +1339,23 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
                                             });
                                             if let Ok(json) = serde_json::to_string(&sync_event) {
                                                 ws_send!(ws_tx, Message::Text(json.into()));
+                                            }
+                                        }
+
+                                        // Send initial overlay/panel state if subscribed
+                                        if let Some(handle) = sub_handles.get(session_name) {
+                                            if handle.subscribed_types.contains(&EventType::Overlay) {
+                                                let mode = *session.screen_mode.read();
+                                                let overlays = session.overlays.list_by_mode(mode);
+                                                let overlay_event = serde_json::json!({"type": "overlay_sync", "overlays": overlays});
+                                                if let Ok(json) = serde_json::to_string(&overlay_event) {
+                                                    ws_send!(ws_tx, Message::Text(json.into()));
+                                                }
+                                                let panels = session.panels.list();
+                                                let panel_event = serde_json::json!({"type": "panel_sync", "panels": panels});
+                                                if let Ok(json) = serde_json::to_string(&panel_event) {
+                                                    ws_send!(ws_tx, Message::Text(json.into()));
+                                                }
                                             }
                                         }
 
@@ -1487,6 +1518,34 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
                 }
             }
 
+            // Per-session visual updates (overlay/panel changes)
+            Some(tagged) = visual_rx.recv() => {
+                let session_name = &tagged.session;
+                if let Some(handle) = sub_handles.get(session_name) {
+                    if handle.subscribed_types.contains(&EventType::Overlay) {
+                        if let Some(session) = state.sessions.get(session_name) {
+                            match tagged.update {
+                                crate::session::VisualUpdate::OverlaysChanged => {
+                                    let mode = *session.screen_mode.read();
+                                    let overlays = session.overlays.list_by_mode(mode);
+                                    let event = serde_json::json!({"type": "overlay_sync", "overlays": overlays});
+                                    if let Ok(json) = serde_json::to_string(&event) {
+                                        ws_send!(ws_tx, Message::Text(json.into()));
+                                    }
+                                }
+                                crate::session::VisualUpdate::PanelsChanged => {
+                                    let panels = session.panels.list();
+                                    let event = serde_json::json!({"type": "panel_sync", "panels": panels});
+                                    if let Ok(json) = serde_json::to_string(&event) {
+                                        ws_send!(ws_tx, Message::Text(json.into()));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Shutdown signal
             _ = shutdown_rx.changed() => {
                 if *shutdown_rx.borrow() {
@@ -1524,6 +1583,7 @@ async fn handle_server_ws_request(
     state: &AppState,
     sub_handles: &mut std::collections::HashMap<String, SubHandle>,
     sub_tx: &tokio::sync::mpsc::Sender<TaggedSessionEvent>,
+    visual_tx: &tokio::sync::mpsc::Sender<TaggedVisualEvent>,
 ) -> Option<super::ws_methods::WsResponse> {
     let id = req.id.clone();
     let method = req.method.as_str();
@@ -2082,6 +2142,9 @@ async fn handle_server_ws_request(
                     if let Some(at) = old.activity_task {
                         at.abort();
                     }
+                    if let Some(vt) = old.visual_task {
+                        vt.abort();
+                    }
                 }
 
                 // Spawn a task that reads from the parser event stream and
@@ -2321,6 +2384,50 @@ async fn handle_server_ws_request(
                     None
                 };
 
+                // Spawn visual update forwarding task if overlay events subscribed
+                let visual_task = if subscribed_types.contains(&EventType::Overlay) {
+                    let mut visual_rx = session.visual_update_tx.subscribe();
+                    let vtx = visual_tx.clone();
+                    let visual_name = shared_name.clone();
+                    let cancelled = session.cancelled.clone();
+                    Some(tokio::spawn(async move {
+                        loop {
+                            tokio::select! {
+                                result = visual_rx.recv() => {
+                                    match result {
+                                        Ok(update) => {
+                                            let current_name = visual_name.lock().clone();
+                                            if vtx.send(TaggedVisualEvent {
+                                                session: current_name,
+                                                update,
+                                            }).await.is_err() {
+                                                break;
+                                            }
+                                        }
+                                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                            // On lag, send both update types so the main loop
+                                            // re-fetches the full state
+                                            let current_name = visual_name.lock().clone();
+                                            let _ = vtx.send(TaggedVisualEvent {
+                                                session: current_name.clone(),
+                                                update: crate::session::VisualUpdate::OverlaysChanged,
+                                            }).await;
+                                            let _ = vtx.send(TaggedVisualEvent {
+                                                session: current_name,
+                                                update: crate::session::VisualUpdate::PanelsChanged,
+                                            }).await;
+                                        }
+                                    }
+                                }
+                                _ = cancelled.cancelled() => break,
+                            }
+                        }
+                    }))
+                } else {
+                    None
+                };
+
                 sub_handles.insert(
                     session_name.clone(),
                     SubHandle {
@@ -2328,6 +2435,7 @@ async fn handle_server_ws_request(
                         format: params.format,
                         task,
                         activity_task,
+                        visual_task,
                         _client_guard: session.connect(),
                         shared_name,
                         idle_timeout_ms: params.idle_timeout_ms,
