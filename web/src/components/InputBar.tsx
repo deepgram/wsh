@@ -144,11 +144,32 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(
   // Mobile virtual keyboards often bypass keydown for Enter, firing
   // a beforeinput with inputType "insertLineBreak" instead. Intercept
   // it here so Enter reliably sends \r to the PTY.
+  //
+  // When a sticky modifier is active, intercept character insertion
+  // here rather than in handleInput. This prevents the character from
+  // ever entering the input field, avoiding a race on mobile where the
+  // browser's composition system can re-insert the character *after*
+  // our revert in handleInput.
   const handleBeforeInput = (e: InputEvent) => {
     if (e.inputType === "insertLineBreak" || e.inputType === "insertParagraph") {
       e.preventDefault();
       send("\r");
       clearInput();
+      return;
+    }
+
+    if (
+      (ctrlActive.value || altActive.value) &&
+      e.inputType === "insertText" &&
+      e.data &&
+      e.data.length === 1
+    ) {
+      e.preventDefault();
+      const modSeq = synthesizeModifiedKey(e.data);
+      if (modSeq !== null) {
+        send(modSeq);
+      }
+      clearModifiers();
     }
   };
 
