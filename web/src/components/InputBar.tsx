@@ -7,6 +7,46 @@ import { sessionStatuses } from "../state/groups";
 import type { WshClient } from "../api/ws";
 import { keyToSequence, lineToPlainText } from "../utils/keymap";
 
+/**
+ * Given the current modifier state (ctrlActive / altActive) and a
+ * single-character key, return the terminal escape sequence that should
+ * be sent, or null if no modifier combination applies.
+ */
+function synthesizeModifiedKey(key: string): string | null {
+  const ctrl = ctrlActive.value;
+  const alt = altActive.value;
+
+  let ctrlSeq: string | null = null;
+  if (ctrl) {
+    const lower = key.toLowerCase();
+    if (lower.length === 1 && lower >= "a" && lower <= "z") {
+      ctrlSeq = String.fromCharCode(lower.charCodeAt(0) - 96);
+    } else if (key === "[") {
+      ctrlSeq = "\x1b";
+    } else if (key === "\\") {
+      ctrlSeq = "\x1c";
+    } else if (key === "]") {
+      ctrlSeq = "\x1d";
+    } else if (key === "^" || key === "6") {
+      ctrlSeq = "\x1e";
+    } else if (key === "_" || key === "-") {
+      ctrlSeq = "\x1f";
+    }
+  }
+
+  if (ctrl && alt && ctrlSeq !== null) {
+    // Ctrl+Alt: ESC prefix + control code
+    return "\x1b" + ctrlSeq;
+  }
+  if (ctrl && ctrlSeq !== null) {
+    return ctrlSeq;
+  }
+  if (alt && key.length === 1) {
+    return "\x1b" + key;
+  }
+  return null;
+}
+
 export interface InputBarHandle {
   scheduleSyncFromTerminal: () => void;
 }
@@ -117,28 +157,15 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(
     // instead of relying on the DOM event's native modifier flags.
     if (ctrlActive.value || altActive.value) {
       const key = e.key;
-      let modSeq: string | null = null;
 
-      if (ctrlActive.value) {
-        const lower = key.toLowerCase();
-        if (lower.length === 1 && lower >= "a" && lower <= "z") {
-          modSeq = String.fromCharCode(lower.charCodeAt(0) - 96);
-        } else if (key === "[") {
-          modSeq = "\x1b";
-        } else if (key === "\\") {
-          modSeq = "\x1c";
-        } else if (key === "]") {
-          modSeq = "\x1d";
-        } else if (key === "^" || key === "6") {
-          modSeq = "\x1e";
-        } else if (key === "_" || key === "-") {
-          modSeq = "\x1f";
-        }
-      } else if (altActive.value) {
-        if (key.length === 1) {
-          modSeq = "\x1b" + key;
-        }
+      // Mobile soft keyboards fire keydown with "Unidentified" or
+      // keyCode 229 (IME/composition). Skip — let handleInput deal
+      // with the actual character once it arrives.
+      if (key === "Unidentified" || key === "Process" || e.keyCode === 229) {
+        return;
       }
+
+      const modSeq = synthesizeModifiedKey(key);
 
       if (modSeq !== null) {
         e.preventDefault();
@@ -192,23 +219,9 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(
     if (ctrlActive.value || altActive.value) {
       const added = current.slice(prev.length);
       if (added.length === 1) {
-        if (ctrlActive.value) {
-          const lower = added.toLowerCase();
-          if (lower >= "a" && lower <= "z") {
-            send(String.fromCharCode(lower.charCodeAt(0) - 96));
-          } else if (added === "[") {
-            send("\x1b"); // Ctrl+[ = Escape
-          } else if (added === "\\") {
-            send("\x1c"); // Ctrl+\
-          } else if (added === "]") {
-            send("\x1d"); // Ctrl+]
-          } else if (added === "^" || added === "6") {
-            send("\x1e"); // Ctrl+^
-          } else if (added === "_" || added === "-") {
-            send("\x1f"); // Ctrl+_
-          }
-        } else if (altActive.value) {
-          send("\x1b" + added);
+        const modSeq = synthesizeModifiedKey(added);
+        if (modSeq !== null) {
+          send(modSeq);
         }
         clearModifiers();
         // Revert the input field — the modified char shouldn't appear
@@ -249,11 +262,13 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(
         placeholder={
           !connected
             ? "Disconnected"
-            : ctrlActive.value
-              ? "Ctrl + ..."
-              : altActive.value
-                ? "Alt + ..."
-                : "Type here..."
+            : ctrlActive.value && altActive.value
+              ? "Ctrl+Alt + ..."
+              : ctrlActive.value
+                ? "Ctrl + ..."
+                : altActive.value
+                  ? "Alt + ..."
+                  : "Type here..."
         }
         disabled={!connected}
         onBeforeInput={handleBeforeInput}

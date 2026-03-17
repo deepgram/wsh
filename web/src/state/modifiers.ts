@@ -3,24 +3,14 @@ import { signal } from "@preact/signals";
 export const ctrlActive = signal(false);
 export const altActive = signal(false);
 
-/** Activate ctrl, deactivating alt. */
+/** Toggle ctrl (independent of alt — both can be active). */
 export function toggleCtrl(): void {
-  if (ctrlActive.value) {
-    ctrlActive.value = false;
-  } else {
-    altActive.value = false;
-    ctrlActive.value = true;
-  }
+  ctrlActive.value = !ctrlActive.value;
 }
 
-/** Activate alt, deactivating ctrl. */
+/** Toggle alt (independent of ctrl — both can be active). */
 export function toggleAlt(): void {
-  if (altActive.value) {
-    altActive.value = false;
-  } else {
-    ctrlActive.value = false;
-    altActive.value = true;
-  }
+  altActive.value = !altActive.value;
 }
 
 /** Clear all modifiers. Called after a modified keypress is sent. */
