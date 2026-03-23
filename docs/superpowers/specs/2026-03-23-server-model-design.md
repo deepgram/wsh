@@ -53,7 +53,7 @@ The meatiest section. Covers the full life of a server process.
 3. Signal existing WebSocket handlers to close (ShutdownCoordinator)
 4. Wait up to 5s total for connections to drain (includes a 100ms post-drain grace period; the 100ms is inside the 5s timeout, not additive)
 5. Shut down federation backend connections
-6. Drain sessions: SIGHUP child processes, schedule SIGKILL after 2s
+6. Drain sessions: SIGHUP child processes, schedule SIGKILL after 3s
 7. Await server tasks with 5s timeout
 8. Wait for SIGKILL escalation if sessions were drained
 
