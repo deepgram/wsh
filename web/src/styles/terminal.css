@@ -33,6 +33,7 @@
 
 html, body, #app {
   height: 100%;
+  overflow: hidden;
   background: var(--bg);
   color: var(--fg);
 }
@@ -106,6 +107,7 @@ html, body, #app {
 .terminal-container {
   flex: 1;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 4px 8px;
   font-family: inherit;
   font-size: inherit;
