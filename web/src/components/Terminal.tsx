@@ -340,11 +340,36 @@ export function Terminal({ session, client, captureInput }: TerminalProps) {
         fetchScrollback();
       }
     };
+    // Touch-based equivalent of the wheel handler for mobile.  On mobile
+    // there are no wheel events; touch scrolling only produces "scroll"
+    // events when the element already overflows.  This detects an upward
+    // scroll gesture (finger moves down) while at scrollTop === 0 and
+    // triggers the initial scrollback load so the container gains overflow
+    // and native touch scrolling takes over.
+    let touchStartY = 0;
+    const handleTouchStart = (e: TouchEvent) => {
+      if (e.touches.length === 1) {
+        touchStartY = e.touches[0].clientY;
+      }
+    };
+    const handleTouchMove = (e: TouchEvent) => {
+      if (e.touches.length === 1 && el.scrollTop === 0) {
+        const dy = e.touches[0].clientY - touchStartY;
+        if (dy > 10) {
+          userScrolledRef.current = true;
+          fetchScrollback();
+        }
+      }
+    };
     el.addEventListener("scroll", handleScroll);
     el.addEventListener("wheel", handleWheel, { passive: true });
+    el.addEventListener("touchstart", handleTouchStart, { passive: true });
+    el.addEventListener("touchmove", handleTouchMove, { passive: true });
     return () => {
       el.removeEventListener("scroll", handleScroll);
       el.removeEventListener("wheel", handleWheel);
+      el.removeEventListener("touchstart", handleTouchStart);
+      el.removeEventListener("touchmove", handleTouchMove);
     };
   }, [fetchScrollback]);
 
