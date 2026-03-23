@@ -6,7 +6,15 @@
 
 ## Purpose
 
-Document the `wsh` server process lifecycle and communication architecture with enough detail — both design patterns and concrete implementation techniques — that another agent or developer can reproduce this architecture in an unrelated project.
+Document the `wsh` server process lifecycle and communication architecture as a **blueprint for applying these patterns in new projects**. The document is not primarily an overview of `wsh` internals for their own sake — it teaches the general-purpose patterns (auto-spawn, locking, HTTP-over-UDS, ephemeral lifecycle, dual-transport) with enough detail that another agent or developer can reproduce this architecture in an unrelated project. Where `wsh`-specific features are referenced, they serve as concrete illustrations of the pattern, framed conditionally (e.g., "if your project manages multiple sessions, consider...").
+
+## Framing Principle
+
+Every `wsh`-specific detail should pass one test: **is this a universal pattern, or a `wsh`-specific concern?**
+
+- **Universal patterns** (auto-spawn, locking, ephemeral lifecycle, HTTP-over-UDS, dual-router, graceful shutdown, interest tracking): describe directly as the pattern to implement.
+- **Common-but-optional patterns** (session management, client enumeration, state replay on reconnect, persistence toggle): frame conditionally — "if your project needs X, here's how `wsh` solves it."
+- **`wsh`-specific concerns** (PTY management, terminal state machine, overlay/panel rendering, scrollback): omit or mention only in passing as the domain-specific payload that rides on top of the infrastructure.
 
 ## Document Structure
 
@@ -14,11 +22,11 @@ Document the `wsh` server process lifecycle and communication architecture with 
 
 Establish the core mental model:
 
-- Client/server architecture where the daemon owns all state (PTY sessions, terminal state, overlays, panels) and clients are disposable thin connections.
-- Why: sessions survive client disconnects, multiple clients share sessions, server can run headless for API-only access.
-- Two modes: **dedicated** (`wsh server`) for persistent multi-session operation, **ephemeral** (auto-spawned) for transparent single-user experience.
+- Client/server architecture where a daemon process owns all state and clients are disposable thin connections. In `wsh`, "state" means PTY sessions, terminal buffers, and visual overlays; in your project it could be anything that needs to survive client disconnects.
+- Why this pattern: state survives client disconnects, multiple clients can share it, and the server can run headless for API-only access.
+- Two modes: **dedicated** for persistent operation, **ephemeral** (auto-spawned) for transparent single-user experience where the server is an invisible implementation detail.
 - Communication is unified: HTTP-over-UDS is always available, TCP is opt-in. The same API serves both transports with transport-aware middleware for security differences.
-- The doc covers both design patterns and concrete implementation techniques.
+- The doc teaches general-purpose patterns using `wsh` as the reference implementation, with `wsh`-specific details framed conditionally.
 
 ### Section 2: Server Lifecycle
 
@@ -82,14 +90,16 @@ Why separate from instance lock: instance lock is held by the server for its lif
 **3.4 Connection Wait:**
 - Poll `GET /health` over UDS every 50ms, 5s timeout
 
-**3.5 Full Client Flow** (default `wsh` command):
-1. Resolve socket path
-2. Health check → auto-spawn if needed
-3. `POST /sessions` to create session
-4. Open WebSocket to `/sessions/{name}/ws/json` over UDS
-5. Protocol handshake: read `{"connected": true}` initial message, then send `subscribe` with event types (e.g., `["output", "overlay"]`)
-6. Bidirectional streaming: local TTY ↔ WebSocket ↔ PTY
-7. On disconnect: clean up terminal state
+**3.5 Full Client Flow** — The general pattern for a client that auto-spawns and connects:
+1. Resolve socket path from instance name or explicit override
+2. Health check → auto-spawn if needed (steps 3.1–3.4)
+3. Create a resource on the server (in `wsh`: `POST /sessions`; in your project: whatever your domain requires)
+4. Open a WebSocket over UDS for bidirectional streaming
+5. Protocol handshake: exchange an initial confirmation message, then subscribe to relevant event streams
+6. Bidirectional streaming loop
+7. On disconnect: clean up local state
+
+The key insight: steps 1–2 are universal infrastructure (every client does them identically), while steps 3–7 carry domain-specific payload.
 
 ### Section 4: Communication Architecture
 
@@ -112,41 +122,40 @@ Why separate from instance lock: instance lock is held by the server for its lif
   - Bearer token in `Authorization` header
   - `/auth/ws-ticket` for short-lived tickets (browsers can't set WS headers)
 
-**4.4 WebSocket Overview:**
-- Per-session: `/ws/raw` (binary PTY I/O) and `/ws/json` (JSON-RPC with subscriptions)
-- Server-level: `/ws/json` (multiplexed, includes session lifecycle events)
-- Lifecycle: upgrade → `{"connected": true}` → subscribe → stream → close
-- Binary frames: raw PTY output / stdin input. Text frames: JSON method calls and events.
-- Backpressure: bounded mpsc (256 slots) with event coalescing
-- Keepalive: 30s ping interval, 10s timeout
+**4.4 WebSocket Overview** — Universal patterns for real-time bidirectional communication:
+- **Connection lifecycle**: upgrade → initial handshake message → subscribe to event streams → bidirectional streaming → close frame. In `wsh`: `{"connected": true}` handshake, then `subscribe` with event types.
+- **Binary vs text frames**: use binary frames for high-throughput opaque data (in `wsh`: raw PTY I/O), text frames for structured messages (JSON method calls and events).
+- **Backpressure**: bounded channel between handler and send task (in `wsh`: 256 slots) with event coalescing to prevent slow clients from blocking the server.
+- **Keepalive**: ping/pong at regular intervals (in `wsh`: 30s ping, 10s timeout) to detect dead connections.
+- **Scoped vs multiplexed**: per-resource WebSockets (one connection per session) vs server-level multiplexed WebSockets (one connection, events tagged with resource ID). Choose based on your client patterns.
 
-**4.5 MCP Transport:**
-- Streamable HTTP at `/mcp` (served on both UDS and TCP)
-- Stdio bridge via `wsh mcp`: connects to `/mcp/ws` over UDS, bridges stdin/stdout ↔ WebSocket. The WebSocket connection registers a `ConnectionGuard`, which provides interest signaling for the ephemeral monitor (prevents premature shutdown while MCP stdio is active). In contrast, HTTP MCP sessions (Streamable HTTP) are deliberately excluded from interest tracking.
+**4.5 Persistent Connections and Interest Tracking** — A critical pattern for ephemeral servers:
+- Some clients need persistent connections (WebSocket, long-lived streams) that should keep an ephemeral server alive. Others (stateless HTTP requests) should not.
+- The pattern: persistent connections register a `ConnectionGuard` (RAII) that increments the server's interest counter. Stateless connections do not.
+- Example from `wsh`: The MCP stdio bridge (`wsh mcp`) connects via WebSocket and registers a guard — the server stays alive while the bridge is active. In contrast, Streamable HTTP MCP sessions are deliberately excluded from interest tracking because they are stateless request/response cycles.
+- This distinction is essential: without it, an ephemeral server cannot know when it's safe to shut down.
 
 ### Section 5: Discovery & Management
 
-**5.1 Named Instances:**
-- `-L`/`--server-name` (env: `WSH_SERVER_NAME`, default: `"default"`)
-- File layout under `$XDG_RUNTIME_DIR/wsh/` (fallback: `/tmp/wsh-$USER/wsh/`):
+**5.1 Named Instances** — Universal pattern for running multiple server instances on one machine:
+- A `--server-name` flag (with env var fallback and a sensible default like `"default"`)
+- Each instance gets its own file set under a well-known runtime directory (`$XDG_RUNTIME_DIR/<app>/`; fallback: `/tmp/<app>-$USER/`):
   - `<name>.http.sock`, `<name>.lock`, `<name>.spawn.lock`
-- `--socket` overrides instance name for custom paths
-- All subcommands accept `-L`
+- An explicit `--socket` flag overrides the name-derived path for custom socket placement
+- All subcommands accept the instance name so they target the right server
 
-**5.2 Discovery (`wsh info`):**
-- `GET /server/info` over UDS
-- Returns: instance name, hostname, version, server ID, socket path, TCP address (if bound), persistence mode, session count
-- Enables tooling to discover connection parameters without hardcoding
+**5.2 Discovery** — Pattern: a `GET /server/info` endpoint over UDS:
+- Returns: instance name, hostname, version, server ID, socket path, TCP address (if bound), persistence mode, plus domain-specific state (in `wsh`: session count)
+- Enables tooling and agents to discover connection parameters without hardcoding paths or ports
 
-**5.3 Server Control:**
-- `wsh stop` — `POST /server/shutdown` over UDS, wait up to 10s for socket file to disappear
-- `wsh persist on/off` — `PUT /server/persist`, toggles ephemeral↔persistent at runtime
-- `wsh list` — `GET /sessions`, table of sessions with name, PID, command, size, client count
+**5.3 Server Control** — Universal patterns:
+- **Stop**: `POST /server/shutdown` over UDS, then poll for socket file disappearance as confirmation (in `wsh`: 10s timeout)
+- **Persistence toggle**: `PUT /server/persist` to convert ephemeral↔persistent at runtime. Useful for promoting an auto-spawned ephemeral server when you want it to outlive current work.
 
-**5.4 Session Management CLI:**
-- `wsh kill <name>` — `DELETE /sessions/{name}`
-- `wsh attach <name>` — replay scrollback + screen, then stream via WebSocket
-- All commands resolve socket path: `--socket` > `-L`/env > default
+**5.4 Domain-Specific Management** — Conditional patterns. Include these if your project needs them:
+- **If your project manages multiple resources** (sessions, connections, jobs, etc.): a list endpoint (`GET /resources`) and a CLI command to display them. In `wsh`: `wsh list` shows sessions with PID, command, terminal size, and connected client count.
+- **If clients need to reconnect to existing resources**: a reconnect/attach flow that replays state before entering the streaming loop. In `wsh`: `wsh attach` replays scrollback and screen contents, then resumes WebSocket streaming.
+- **If resources can be destroyed individually**: a delete endpoint. In `wsh`: `wsh kill <name>` sends `DELETE /sessions/{name}`.
 
 ### Section 6: Security Model
 
@@ -193,8 +202,10 @@ Concrete techniques for reproducing this architecture:
 
 ## Key Principles
 
+- **Blueprint, not tour:** The doc teaches patterns you can apply in new projects, not `wsh` internals for their own sake
 - **Lifecycle-first narrative:** Sections build on each other; readers understand *why* before *how*
 - **Patterns + implementation:** Every design decision includes the concrete technique
-- **Race-aware:** Explicit coverage of race conditions and their mitigations (spawn lock, ephemeral grace periods, atomic detach+remove)
+- **Conditional framing:** Domain-specific features (session management, state replay, resource listing) are framed as "if your project needs X" rather than presented as universal requirements
+- **Race-aware:** Explicit coverage of race conditions and their mitigations (spawn lock, ephemeral grace periods, TOCTOU-safe interest checking)
 - **Transport-agnostic API:** One set of handlers, transport-specific middleware
 - **Reproducible:** An agent reading this doc should be able to implement the pattern in any language/framework
