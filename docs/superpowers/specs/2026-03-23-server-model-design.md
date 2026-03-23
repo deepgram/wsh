@@ -44,14 +44,14 @@ The meatiest section. Covers the full life of a server process.
 - **Interest** = sessions exist OR active persistent connections (WebSocket, MCP WS) are held
 - Two-phase monitoring:
   - **Phase 1 (orphan guard):** 30-second idle timeout. Shut down if no interest materializes. Prevents orphaned daemons when spawning client crashes before creating a session.
-  - **Phase 2 (normal monitoring):** Wait for interest to drain to zero. React immediately to session destruction events. 2-second grace period on event lag for rapid session churn (destroy-then-create).
+  - **Phase 2 (normal monitoring):** Wait for interest to drain to zero. Wakes on session events AND connection count changes (via `interest_changed` notify). On a `Destroyed` event, checks interest immediately (no grace). On event lag (rapid churn), applies a 2-second grace period before rechecking (handles destroy-then-create sequences).
 - Checks persistence toggle every iteration — `wsh persist on` converts ephemeral to persistent at runtime.
 
 **2.4 Graceful Shutdown** — Ordered teardown:
 1. Stop accepting new connections (cancel HTTP listeners)
 2. Remove UDS socket file immediately (prevents new connection attempts)
 3. Signal existing WebSocket handlers to close (ShutdownCoordinator)
-4. Wait up to 5s for connections to drain + 100ms grace
+4. Wait up to 5s total for connections to drain (includes a 100ms post-drain grace period; the 100ms is inside the 5s timeout, not additive)
 5. Shut down federation backend connections
 6. Drain sessions: SIGHUP child processes, schedule SIGKILL after 2s
 7. Await server tasks with 5s timeout
@@ -63,10 +63,10 @@ Each subsection includes design rationale (why this order, why these timeouts, w
 
 How clients transparently get a server when none is running.
 
-**3.1 Detection:** Client sends `GET /health` over UDS. Socket missing or connection refused → no server.
+**3.1 Detection:** Client creates a `UdsHttpClient` targeting the HTTP socket (`<name>.http.sock`) and sends `GET /health`. Socket file missing or connection refused → no server.
 
 **3.2 Race Prevention** — Spawn lock protocol:
-1. Acquire separate spawn lock (`<name>.spawn.lock`) with blocking flock, 5s timeout (50 retries x 100ms)
+1. Acquire spawn lock (`<name>.spawn.lock`): first try 50 non-blocking attempts at 100ms intervals (5s bounded), then fall back to a single blocking `flock` call (unbounded worst case, but in practice the lock is held only briefly)
 2. Re-check health after lock (another client may have spawned while we waited)
 3. If still no server, spawn daemon
 4. If server appeared during lock wait, use it
@@ -87,8 +87,9 @@ Why separate from instance lock: instance lock is held by the server for its lif
 2. Health check → auto-spawn if needed
 3. `POST /sessions` to create session
 4. Open WebSocket to `/sessions/{name}/ws/json` over UDS
-5. Bidirectional streaming: local TTY ↔ WebSocket ↔ PTY
-6. On disconnect: clean up terminal state
+5. Protocol handshake: read `{"connected": true}` initial message, then send `subscribe` with event types (e.g., `["output", "overlay"]`)
+6. Bidirectional streaming: local TTY ↔ WebSocket ↔ PTY
+7. On disconnect: clean up terminal state
 
 ### Section 4: Communication Architecture
 
@@ -100,13 +101,13 @@ Why separate from instance lock: instance lock is held by the server for its lif
 **4.2 HTTP-over-UDS** — The key unifying decision:
 - Standard HTTP/1.1 served over Unix socket (hyper accepts from `UnixListener` instead of `TcpListener`)
 - Benefits: one API implementation, standard HTTP tooling works (`curl --unix-socket`), WebSocket upgrade works identically
-- Socket path uses `.http.sock` extension
+- Socket path uses `.http.sock` extension to distinguish it as an HTTP-speaking socket (a legacy `<name>.sock` path exists in the codebase for the former binary protocol but is no longer created by the server)
 
 **4.3 TCP Binding & Authentication:**
-- Dual-stack: binding `127.0.0.1` also binds `[::1]`
+- Secondary IPv6 loopback: when binding `127.0.0.1`, attempts to also bind `[::1]` as a separate listener (best-effort; failure is non-fatal, only a debug log)
 - TLS: manual accept loop with tokio-rustls; warning logged on non-loopback without TLS
 - Auth resolution:
-  - Loopback: no token required (trusted)
+  - Loopback: no token required (trusted), but an Origin header check is applied for CSWSH protection on WebSocket upgrades
   - Non-loopback: token mandatory. `--token`/`WSH_TOKEN` (≥16 chars), auto-generated (32-char alphanumeric) if unspecified, or `--no-auth` to disable (warning logged)
   - Bearer token in `Authorization` header
   - `/auth/ws-ticket` for short-lived tickets (browsers can't set WS headers)
@@ -121,7 +122,7 @@ Why separate from instance lock: instance lock is held by the server for its lif
 
 **4.5 MCP Transport:**
 - Streamable HTTP at `/mcp` (served on both UDS and TCP)
-- Stdio bridge via `wsh mcp`: connects to `/mcp/ws` over UDS, bridges stdin/stdout ↔ WebSocket
+- Stdio bridge via `wsh mcp`: connects to `/mcp/ws` over UDS, bridges stdin/stdout ↔ WebSocket. The WebSocket connection registers a `ConnectionGuard`, which provides interest signaling for the ephemeral monitor (prevents premature shutdown while MCP stdio is active). In contrast, HTTP MCP sessions (Streamable HTTP) are deliberately excluded from interest tracking.
 
 ### Section 5: Discovery & Management
 
@@ -161,7 +162,7 @@ Why separate from instance lock: instance lock is held by the server for its lif
 6. Base prefix (`--base-prefix` for reverse proxy; `/health` stays at root)
 
 **6.3 UDS-Only Endpoints:**
-- `/server/shutdown` restricted to UDS — transport middleware makes this possible without separate routers
+- `/server/shutdown` restricted to UDS — handlers check a `Transport` extension (injected by transport middleware) and reject non-UDS requests at the handler level, avoiding the need for separate routers
 
 ### Section 7: Implementation Guide
 
@@ -177,7 +178,7 @@ Concrete techniques for reproducing this architecture:
 
 **7.5 Dual-Router Pattern:** Build routes once, wrap in transport-specific middleware, inject connection metadata.
 
-**7.6 Ephemeral Lifecycle:** Composite interest signal, atomic counters with notification, RAII guards for connection counting, two-phase monitor, grace period on churn.
+**7.6 Ephemeral Lifecycle:** Composite interest signal, atomic counters with notification, RAII guards for connection counting, two-phase monitor, grace period on churn. Critical technique: TOCTOU-safe interest checking — register a `Notified` future *before* checking the interest predicate, so that changes between the check and the `select!` are not missed.
 
 **7.7 Graceful Shutdown Ordering:** Stop accepting → remove socket → signal handlers → wait for drain → kill children. Separate cancellation tokens for "stop accepting" vs "close existing." SIGHUP → wait → SIGKILL escalation.
 
