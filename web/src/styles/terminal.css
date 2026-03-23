@@ -1110,6 +1110,7 @@ html, body, #app {
 .layout-shell {
   display: flex;
   height: 100vh;
+  height: 100dvh;
   width: 100vw;
   overflow: hidden;
 }
@@ -1606,6 +1607,7 @@ html, body, #app {
 .thumb-tag-popover {
   z-index: 10000;
   max-height: calc(100vh - 16px);
+  max-height: calc(100dvh - 16px);
   overflow-y: auto;
 }
 
@@ -2365,6 +2367,7 @@ html, body, #app {
 .shortcut-sheet {
   width: min(480px, 90vw);
   max-height: 80vh;
+  max-height: 80dvh;
   background: var(--chrome, #1a1a1a);
   border: 1px solid var(--border, #333);
   border-radius: 8px;
@@ -2810,6 +2813,7 @@ html, body, #app {
   left: 0;
   right: 0;
   max-height: 60vh;
+  max-height: 60dvh;
   background: var(--chrome, #1a1a1a);
   border-top: 1px solid var(--border, #333);
   border-radius: 12px 12px 0 0;
