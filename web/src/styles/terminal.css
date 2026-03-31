@@ -144,7 +144,8 @@ html, body, #app {
 
 .term-line {
   white-space: pre;
-  min-height: 1.4em;
+  height: 1.4em;
+  contain: content;
 }
 
 .term-cursor {

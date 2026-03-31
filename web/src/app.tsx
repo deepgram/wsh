@@ -20,6 +20,8 @@ import {
   updateLine,
   removeScreen,
   getScreen,
+  batchUpdateLine,
+  batchUpdateScreen,
 } from "./state/terminal";
 import { selectedGroups, groups, activeGroupSessions, sessionStatuses } from "./state/groups";
 import { LayoutShell } from "./components/LayoutShell";
@@ -468,13 +470,13 @@ function handleEvent(client: WshClient, session: string, raw: any): void {
 
     case "line":
       if (pendingResets.has(session)) break;  // suppress during reset fetch
-      updateLine(session, raw.index, raw.line);
+      batchUpdateLine(session, raw.index, raw.line);
       if (raw.total_lines !== undefined) {
         const current = getScreen(session);
         const newAvailable = Math.max(0, raw.total_lines - current.rows);
         // Reset scrollbackComplete when new unfetched scrollback becomes available
         const resetComplete = current.scrollbackComplete && newAvailable > current.scrollbackOffset;
-        updateScreen(session, {
+        batchUpdateScreen(session, {
           totalLines: raw.total_lines,
           ...(resetComplete ? { scrollbackComplete: false } : {}),
         });
@@ -483,7 +485,7 @@ function handleEvent(client: WshClient, session: string, raw: any): void {
 
     case "cursor":
       if (pendingResets.has(session)) break;  // suppress during reset fetch
-      updateScreen(session, {
+      batchUpdateScreen(session, {
         cursor: { row: raw.row, col: raw.col, visible: raw.visible },
       });
       break;

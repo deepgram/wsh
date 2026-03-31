@@ -92,3 +92,87 @@ export function updateLine(
     sig.value = { ...current, lines };
   }
 }
+
+// ---------------------------------------------------------------------------
+// rAF-batched updates: accumulate rapid changes and flush once per frame
+// ---------------------------------------------------------------------------
+
+interface PendingBatch {
+  /** Map from line index to latest FormattedLine — deduplicates rapid same-line updates. */
+  lineUpdates: Map<number, FormattedLine>;
+  screenUpdate: Partial<ScreenState>;
+}
+
+const pendingBatches = new Map<string, PendingBatch>();
+let rafId: number | null = null;
+
+function getOrCreateBatch(session: string): PendingBatch {
+  let batch = pendingBatches.get(session);
+  if (!batch) {
+    batch = { lineUpdates: new Map(), screenUpdate: {} };
+    pendingBatches.set(session, batch);
+  }
+  return batch;
+}
+
+function scheduleFlush(): void {
+  if (rafId === null) {
+    rafId = requestAnimationFrame(flushBatchedUpdates);
+  }
+}
+
+/** Flush all pending batched updates as a single signal write per session. */
+export function flushBatchedUpdates(): void {
+  rafId = null;
+  for (const [session, batch] of pendingBatches) {
+    const hasLines = batch.lineUpdates.size > 0;
+    const hasScreen = Object.keys(batch.screenUpdate).length > 0;
+    if (!hasLines && !hasScreen) continue;
+
+    const sig = getOrCreateSignal(session);
+    let current = sig.value;
+
+    // Apply line updates
+    if (hasLines) {
+      const lines = [...current.lines];
+      for (const [index, line] of batch.lineUpdates) {
+        if (index >= 0 && index < current.rows) {
+          while (lines.length <= index) {
+            lines.push("");
+          }
+          lines[index] = line;
+        }
+      }
+      current = { ...current, lines };
+    }
+
+    // Apply screen property updates
+    if (hasScreen) {
+      current = { ...current, ...batch.screenUpdate };
+    }
+
+    sig.value = current;
+  }
+  pendingBatches.clear();
+}
+
+/** Buffer a line update to be flushed on the next animation frame. */
+export function batchUpdateLine(
+  session: string,
+  index: number,
+  line: FormattedLine,
+): void {
+  const batch = getOrCreateBatch(session);
+  batch.lineUpdates.set(index, line);
+  scheduleFlush();
+}
+
+/** Buffer a screen property update to be flushed on the next animation frame. */
+export function batchUpdateScreen(
+  session: string,
+  update: Partial<ScreenState>,
+): void {
+  const batch = getOrCreateBatch(session);
+  Object.assign(batch.screenUpdate, update);
+  scheduleFlush();
+}

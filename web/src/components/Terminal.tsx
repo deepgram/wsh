@@ -1,4 +1,5 @@
 import { useRef, useEffect, useCallback, useState } from "preact/hooks";
+import { memo } from "preact/compat";
 import { useTerminalGestures } from "../hooks/useTerminalGestures";
 import { getScreenSignal, updateScreen } from "../state/terminal";
 import { connectionState, focusedSession, zoomLevel } from "../state/sessions";
@@ -14,6 +15,23 @@ const SCROLLBACK_PAGE_SIZE = 200;
 
 /** Trigger scrollback fetch when scrollTop is within this many px of top. */
 const SCROLLBACK_THRESHOLD = 100;
+
+/** Lines to render above/below the visible viewport for smooth scrolling. */
+const OVERSCAN = 20;
+
+// ---------------------------------------------------------------------------
+// Memoized line component — skips VDOM diffing when the line ref is unchanged
+// ---------------------------------------------------------------------------
+
+interface MemoLineProps {
+  line: FormattedLine;
+  lineIdx: number;
+  cursor: { col: number } | null;
+}
+
+const MemoLine = memo(function MemoLine({ line, lineIdx, cursor }: MemoLineProps) {
+  return renderLine(line, lineIdx, cursor);
+});
 
 function renderLine(
   line: FormattedLine,
@@ -117,6 +135,21 @@ interface TerminalProps {
   captureInput?: boolean;
 }
 
+/**
+ * Index-based line accessor — avoids creating a new
+ * [...scrollbackLines, ...lines] array on every render.
+ */
+function getLine(
+  scrollbackLines: FormattedLine[],
+  screenLines: FormattedLine[],
+  index: number,
+): FormattedLine {
+  if (index < scrollbackLines.length) {
+    return scrollbackLines[index];
+  }
+  return screenLines[index - scrollbackLines.length];
+}
+
 export function Terminal({ session, client, captureInput }: TerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const measureRef = useRef<HTMLSpanElement>(null);
@@ -125,12 +158,37 @@ export function Terminal({ session, client, captureInput }: TerminalProps) {
   const lastSizeRef = useRef<{ cols: number; rows: number } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [cellSize, setCellSize] = useState<{ w: number; h: number } | null>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const prevScrollbackLenRef = useRef(0);
 
   // Subscribe only to this session's signal (not all sessions)
   const screen = getScreenSignal(session).value;
   const disconnected = connectionState.value !== "connected";
   const zoom = zoomLevel.value;
   const fontSize = BASE_FONT_SIZE * zoom;
+
+  // Line height: use measured cell height, fall back to fontSize * 1.4
+  const lineHeight = cellSize ? cellSize.h : fontSize * 1.4;
+
+  // Total line count (scrollback + screen) — without allocating an array
+  const scrollbackLen = screen.scrollbackLines.length;
+  const totalLines = screen.alternateActive
+    ? screen.lines.length
+    : scrollbackLen + screen.lines.length;
+
+  // Adjust scrollTop after scrollback prepend to maintain visual position
+  useEffect(() => {
+    const prevLen = prevScrollbackLenRef.current;
+    const curLen = screen.scrollbackLines.length;
+    if (curLen > prevLen && prevLen > 0) {
+      const el = containerRef.current;
+      if (el) {
+        const delta = (curLen - prevLen) * lineHeight;
+        el.scrollTop += delta;
+      }
+    }
+    prevScrollbackLenRef.current = curLen;
+  }, [screen.scrollbackLines.length, lineHeight]);
 
   // Auto-focus textarea when this session is focused (desktop input capture)
   const isFocused = session === focusedSession.value;
@@ -321,6 +379,7 @@ export function Terminal({ session, client, captureInput }: TerminalProps) {
     const handleScroll = () => {
       const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 30;
       userScrolledRef.current = !atBottom;
+      setScrollTop(el.scrollTop);
 
       // Load more scrollback when near the top
       if (el.scrollTop < SCROLLBACK_THRESHOLD) {
@@ -375,27 +434,22 @@ export function Terminal({ session, client, captureInput }: TerminalProps) {
 
   // Auto-scroll to bottom when new content arrives (only in normal mode, only if at bottom)
   useEffect(() => {
+    if (screen.alternateActive || userScrolledRef.current) return;
     const el = containerRef.current;
     if (!el) return;
-    if (!screen.alternateActive && !userScrolledRef.current) {
+    requestAnimationFrame(() => {
       el.scrollTop = el.scrollHeight;
-    }
-  });
+    });
+  }, [screen.lines, screen.totalLines, screen.alternateActive]);
 
   const containerClass = screen.alternateActive
     ? "terminal-container alternate"
     : "terminal-container";
 
   // Cursor is relative to the screen lines (not scrollback)
-  const scrollbackLen = screen.scrollbackLines.length;
   const cursorLineIndex = screen.cursor.visible
     ? scrollbackLen + screen.cursor.row
     : -1;
-
-  // Combine scrollback + screen lines for rendering
-  const allLines: FormattedLine[] = screen.alternateActive
-    ? screen.lines
-    : [...screen.scrollbackLines, ...screen.lines];
 
   // Extract overlays and panels from screen state
   const overlays = screen.overlays || [];
@@ -406,6 +460,46 @@ export function Terminal({ session, client, captureInput }: TerminalProps) {
     (p) => p.visible && (p.screen_mode ?? "normal") === (screen.alternateActive ? "alt" : "normal"),
   );
   const panelLayout = computePanelLayout(activePanels, screen.rows);
+
+  // ---------------------------------------------------------------------------
+  // Virtualized rendering — only create DOM elements for visible lines + overscan
+  // In alternate screen mode, always render all lines (small fixed grid).
+  // ---------------------------------------------------------------------------
+  let lineElements: preact.JSX.Element | preact.JSX.Element[];
+  if (screen.alternateActive) {
+    // Alternate screen: render all lines directly (small fixed grid)
+    lineElements = screen.lines.map((line, i) =>
+      <MemoLine key={i} line={line} lineIdx={i} cursor={i === cursorLineIndex ? { col: screen.cursor.col } : null} />,
+    );
+  } else {
+    // Normal mode: virtualized rendering
+    const viewportHeight = containerRef.current?.clientHeight ?? 0;
+    const rangeStart = Math.max(0, Math.floor(scrollTop / lineHeight) - OVERSCAN);
+    const rangeEnd = Math.min(totalLines, Math.ceil((scrollTop + viewportHeight) / lineHeight) + OVERSCAN);
+
+    const topPad = rangeStart * lineHeight;
+    const bottomPad = (totalLines - rangeEnd) * lineHeight;
+
+    const visibleLines: preact.JSX.Element[] = [];
+    for (let i = rangeStart; i < rangeEnd; i++) {
+      const line = getLine(screen.scrollbackLines, screen.lines, i);
+      // Use stable keys: "sb-N" for scrollback, "sc-N" for screen lines.
+      // This prevents Preact from re-creating all DOM nodes when scrollback
+      // is prepended and indices shift.
+      const key = i < scrollbackLen ? `sb-${i}` : `sc-${i - scrollbackLen}`;
+      visibleLines.push(
+        <MemoLine key={key} line={line} lineIdx={i} cursor={i === cursorLineIndex ? { col: screen.cursor.col } : null} />,
+      );
+    }
+
+    lineElements = (
+      <>
+        {topPad > 0 && <div style={{ height: `${topPad}px` }} />}
+        {visibleLines}
+        {bottomPad > 0 && <div style={{ height: `${bottomPad}px` }} />}
+      </>
+    );
+  }
 
   return (
     <div
@@ -447,9 +541,7 @@ export function Terminal({ session, client, captureInput }: TerminalProps) {
         >
           X
         </span>
-        {allLines.map((line, i) =>
-          renderLine(line, i, i === cursorLineIndex ? { col: screen.cursor.col } : null),
-        )}
+        {lineElements}
         {cellSize && overlays.length > 0 && (
           <OverlayLayer overlays={overlays} charWidth={cellSize.w} charHeight={cellSize.h} />
         )}
