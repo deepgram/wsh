@@ -40,16 +40,18 @@ pub async fn reconfigure_layout(
         panels.set_visible(&panel.id, visible);
     }
 
-    // Resize PTY and parser (use at least 1 row to avoid invalid resize)
+    // Resize parser first, then PTY. The parser must be at the new dimensions
+    // before SIGWINCH triggers the child's redraw, so it correctly interprets
+    // the output at the new size.
     let effective_pty_rows = layout.pty_rows.max(1);
-    if let Err(e) = pty.lock().resize(effective_pty_rows, layout.pty_cols) {
-        tracing::error!(?e, "failed to resize PTY");
-    }
     if let Err(e) = parser
         .resize(layout.pty_cols as usize, effective_pty_rows as usize)
         .await
     {
         tracing::error!(?e, "failed to resize parser");
+    }
+    if let Err(e) = pty.lock().resize(effective_pty_rows, layout.pty_cols) {
+        tracing::error!(?e, "failed to resize PTY");
     }
 }
 

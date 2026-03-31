@@ -9,7 +9,7 @@
 //! - JSON text frames for `overlay_sync` and `panel_sync` events
 //! - JSON request/response for `subscribe`, `resize`, and other methods
 
-use std::io;
+use std::io::{self, Write};
 use std::path::Path;
 
 use bytes::Bytes;
@@ -21,6 +21,8 @@ use tokio_tungstenite::WebSocketStream;
 use crate::client::render_panel_sync;
 use crate::overlay::{self, Overlay};
 use crate::panel::Panel;
+use crate::parser::ansi::line_to_ansi;
+use crate::parser::state::ScreenResponse;
 
 /// Connect a WebSocket over a Unix domain socket to a session's WS endpoint.
 ///
@@ -122,13 +124,66 @@ async fn subscribe_events(
     }
 }
 
-/// Send a resize request over the WebSocket.
+/// Resize state machine for the client-side SIGWINCH → server round-trip.
+///
+/// When SIGWINCH arrives, the client enters a buffering phase to avoid
+/// writing stale PTY output (generated at the old dimensions) to the
+/// terminal that is already at the new dimensions. The state machine
+/// transitions:
+///
+///   Idle → AwaitingResizeAck → AwaitingScreenSync → Idle
+///
+/// Binary WS frames are buffered during AwaitingResizeAck and discarded
+/// (the screen sync repaint replaces them). Text frames (overlays, panels)
+/// continue processing normally. A 2-second timeout returns to Idle if the
+/// server is unresponsive. Rapid successive SIGWINCHs coalesce by
+/// restarting the state machine with new dimensions.
+#[derive(Debug)]
+enum ResizeState {
+    /// Normal operation — forward Binary frames to stdout.
+    Idle,
+    /// Resize request sent, buffering output. Waiting for resize response.
+    AwaitingResizeAck {
+        resize_id: String,
+        buffer: Vec<Bytes>,
+    },
+    /// Resize ack received, screen request sent. Waiting for screen response.
+    AwaitingScreenSync {
+        screen_id: String,
+    },
+}
+
+impl ResizeState {
+    fn is_idle(&self) -> bool {
+        matches!(self, ResizeState::Idle)
+    }
+}
+
+/// Render a full screen sync to the terminal output.
+///
+/// Clears the screen, writes each line with ANSI formatting, and restores
+/// the cursor to the position reported by the server.
+fn render_screen_sync(screen: &ScreenResponse, output: &mut impl Write) -> io::Result<()> {
+    output.write_all(b"\x1b[H\x1b[2J")?; // home + clear
+    for (i, line) in screen.lines.iter().enumerate() {
+        output.write_all(line_to_ansi(line).as_bytes())?;
+        if i + 1 < screen.lines.len() {
+            output.write_all(b"\r\n")?;
+        }
+    }
+    write!(output, "\x1b[{};{}H", screen.cursor.row + 1, screen.cursor.col + 1)?;
+    output.flush()
+}
+
+/// Send a resize request over the WebSocket with a request ID.
 async fn send_resize(
     ws: &mut futures::stream::SplitSink<WebSocketStream<UnixStream>, Message>,
+    id: &str,
     rows: u16,
     cols: u16,
 ) -> io::Result<()> {
     let resize_msg = serde_json::json!({
+        "id": id,
         "method": "resize",
         "params": {
             "cols": cols,
@@ -136,6 +191,21 @@ async fn send_resize(
         }
     });
     ws.send(Message::Text(resize_msg.to_string().into()))
+        .await
+        .map_err(|e| io::Error::new(io::ErrorKind::BrokenPipe, e))
+}
+
+/// Send a get_screen request over the WebSocket with a request ID.
+async fn send_get_screen(
+    ws: &mut futures::stream::SplitSink<WebSocketStream<UnixStream>, Message>,
+    id: &str,
+) -> io::Result<()> {
+    let msg = serde_json::json!({
+        "id": id,
+        "method": "get_screen",
+        "params": { "format": "styled" }
+    });
+    ws.send(Message::Text(msg.to_string().into()))
         .await
         .map_err(|e| io::Error::new(io::ErrorKind::BrokenPipe, e))
 }
@@ -304,6 +374,13 @@ pub(crate) async fn ws_streaming_loop(
     let mut cached_overlays: Vec<Overlay> = Vec::new();
     let mut cached_panels: Vec<Panel> = Vec::new();
 
+    // Resize state machine: buffers output during the SIGWINCH → server
+    // round-trip to prevent garbled output from stale dimensions.
+    let mut resize_state = ResizeState::Idle;
+    let mut resize_seq: u64 = 0;
+    let resize_deadline = tokio::time::sleep(std::time::Duration::from_secs(86400));
+    tokio::pin!(resize_deadline);
+
     loop {
         tokio::select! {
             // Stdin data -> binary WS frame to server
@@ -346,22 +423,43 @@ pub(crate) async fn ws_streaming_loop(
             msg = ws_rx.next() => {
                 match msg {
                     Some(Ok(Message::Binary(data))) => {
-                        // Raw PTY output
-                        if !cached_overlays.is_empty() {
-                            // Erase overlays, write PTY output, re-render overlays
-                            let _ = output.write_all(overlay::begin_sync().as_bytes());
-                            let _ = output.write_all(overlay::erase_all_overlays(&cached_overlays).as_bytes());
-                            let _ = output.write_all(&data);
-                            let _ = output.write_all(overlay::render_all_overlays(&cached_overlays).as_bytes());
-                            let _ = output.write_all(overlay::end_sync().as_bytes());
-                        } else {
-                            let _ = output.write_all(&data);
+                        // Raw PTY output — behavior depends on resize state
+                        match &mut resize_state {
+                            ResizeState::Idle => {
+                                if !cached_overlays.is_empty() {
+                                    let _ = output.write_all(overlay::begin_sync().as_bytes());
+                                    let _ = output.write_all(overlay::erase_all_overlays(&cached_overlays).as_bytes());
+                                    let _ = output.write_all(&data);
+                                    let _ = output.write_all(overlay::render_all_overlays(&cached_overlays).as_bytes());
+                                    let _ = output.write_all(overlay::end_sync().as_bytes());
+                                } else {
+                                    let _ = output.write_all(&data);
+                                }
+                                let _ = output.flush();
+                            }
+                            ResizeState::AwaitingResizeAck { buffer, .. } => {
+                                // Buffer output generated at old dimensions
+                                buffer.push(Bytes::from(data.to_vec()));
+                            }
+                            ResizeState::AwaitingScreenSync { .. } => {
+                                // Post-resize output at new dimensions — write through
+                                if !cached_overlays.is_empty() {
+                                    let _ = output.write_all(overlay::begin_sync().as_bytes());
+                                    let _ = output.write_all(overlay::erase_all_overlays(&cached_overlays).as_bytes());
+                                    let _ = output.write_all(&data);
+                                    let _ = output.write_all(overlay::render_all_overlays(&cached_overlays).as_bytes());
+                                    let _ = output.write_all(overlay::end_sync().as_bytes());
+                                } else {
+                                    let _ = output.write_all(&data);
+                                }
+                                let _ = output.flush();
+                            }
                         }
-                        let _ = output.flush();
                     }
                     Some(Ok(Message::Text(text))) => {
                         // Parse JSON events
                         if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&text) {
+                            // Handle overlay_sync and panel_sync events (always processed)
                             match msg.get("type").and_then(|t| t.as_str()) {
                                 Some("overlay_sync") => {
                                     if let Ok(overlays) = serde_json::from_value::<Vec<Overlay>>(
@@ -369,9 +467,7 @@ pub(crate) async fn ws_streaming_loop(
                                     ) {
                                         let _ = output.write_all(overlay::begin_sync().as_bytes());
                                         let _ = output.write_all(overlay::save_cursor().as_bytes());
-                                        // Erase old overlays
                                         let _ = output.write_all(overlay::erase_all_overlays(&cached_overlays).as_bytes());
-                                        // Render new overlays
                                         let _ = output.write_all(overlay::render_all_overlays(&overlays).as_bytes());
                                         let _ = output.write_all(overlay::restore_cursor().as_bytes());
                                         let _ = output.write_all(overlay::end_sync().as_bytes());
@@ -395,14 +491,50 @@ pub(crate) async fn ws_streaming_loop(
                                     }
                                 }
                                 _ => {
-                                    // Ignore other JSON messages (subscribe responses, Sync events, etc.)
-                                    // Check for error responses
-                                    if let Some(err) = msg.get("error") {
-                                        if let (Some(code), Some(message)) = (
-                                            err.get("code").and_then(|c| c.as_str()),
-                                            err.get("message").and_then(|m| m.as_str()),
-                                        ) {
-                                            eprintln!("wsh: server error: {}: {}", code, message);
+                                    // Check for resize/screen response IDs from the resize state machine
+                                    let msg_id = msg.get("id").and_then(|v| v.as_str()).map(|s| s.to_string());
+                                    let mut handled = false;
+
+                                    if let Some(ref id) = msg_id {
+                                        match &resize_state {
+                                            ResizeState::AwaitingResizeAck { resize_id, .. } if id == resize_id => {
+                                                // Resize ack received — transition to screen sync
+                                                resize_seq += 1;
+                                                let screen_id = format!("s-{}", resize_seq);
+                                                let dl = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+                                                resize_state = ResizeState::AwaitingScreenSync {
+                                                    screen_id: screen_id.clone(),
+                                                };
+                                                resize_deadline.as_mut().reset(dl);
+                                                let _ = send_get_screen(&mut ws_tx, &screen_id).await;
+                                                handled = true;
+                                            }
+                                            ResizeState::AwaitingScreenSync { screen_id, .. } if id == screen_id => {
+                                                // Screen response received — repaint and resume
+                                                if let Some(result) = msg.get("result") {
+                                                    if let Ok(screen) = serde_json::from_value::<ScreenResponse>(result.clone()) {
+                                                        let _ = render_screen_sync(&screen, output);
+                                                    }
+                                                }
+                                                resize_state = ResizeState::Idle;
+                                                resize_deadline.as_mut().reset(
+                                                    tokio::time::Instant::now() + std::time::Duration::from_secs(86400)
+                                                );
+                                                handled = true;
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+
+                                    if !handled {
+                                        // Check for error responses
+                                        if let Some(err) = msg.get("error") {
+                                            if let (Some(code), Some(message)) = (
+                                                err.get("code").and_then(|c| c.as_str()),
+                                                err.get("message").and_then(|m| m.as_str()),
+                                            ) {
+                                                eprintln!("wsh: server error: {}: {}", code, message);
+                                            }
                                         }
                                     }
                                 }
@@ -422,16 +554,40 @@ pub(crate) async fn ws_streaming_loop(
                 }
             }
 
-            // SIGWINCH -> resize request to server
+            // SIGWINCH -> resize request to server with buffering state machine
             size = sigwinch_rx.recv() => {
                 if let Some((rows, cols)) = size {
-                    let _ = send_resize(&mut ws_tx, rows, cols).await;
+                    // Start (or restart) the resize state machine
+                    resize_seq += 1;
+                    let id = format!("r-{}", resize_seq);
+                    let dl = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+                    resize_state = ResizeState::AwaitingResizeAck {
+                        resize_id: id.clone(),
+                        buffer: Vec::new(),
+                    };
+                    resize_deadline.as_mut().reset(dl);
+                    let _ = send_resize(&mut ws_tx, &id, rows, cols).await;
                 }
             }
 
             // Ctrl+\ double-tap timeout expired -- no detach
             () = &mut detach_timer, if pending_detach => {
                 pending_detach = false;
+            }
+
+            // Resize state machine timeout — abandon and resume normal output
+            () = &mut resize_deadline, if !resize_state.is_idle() => {
+                if let ResizeState::AwaitingResizeAck { buffer, .. } = &resize_state {
+                    // Flush buffered output to avoid losing data
+                    for chunk in buffer {
+                        let _ = output.write_all(chunk);
+                    }
+                    let _ = output.flush();
+                }
+                resize_state = ResizeState::Idle;
+                resize_deadline.as_mut().reset(
+                    tokio::time::Instant::now() + std::time::Duration::from_secs(86400)
+                );
             }
         }
     }
@@ -453,4 +609,97 @@ pub(crate) async fn ws_streaming_loop(
     // Close the WS connection
     let _ = ws_tx.send(Message::Close(None)).await;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::state::{Cursor, FormattedLine, ScreenResponse, Span, Style};
+
+    #[test]
+    fn resize_state_is_idle() {
+        assert!(ResizeState::Idle.is_idle());
+        assert!(!ResizeState::AwaitingResizeAck {
+            resize_id: "r-1".to_string(),
+            buffer: Vec::new(),
+        }.is_idle());
+        assert!(!ResizeState::AwaitingScreenSync {
+            screen_id: "s-1".to_string(),
+        }.is_idle());
+    }
+
+    #[test]
+    fn render_screen_sync_empty_screen() {
+        let screen = ScreenResponse {
+            lines: vec![],
+            cursor: Cursor { row: 0, col: 0, visible: true },
+            ..Default::default()
+        };
+        let mut buf = Vec::new();
+        render_screen_sync(&screen, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        // Should have home+clear and cursor position
+        assert!(output.starts_with("\x1b[H\x1b[2J"));
+        assert!(output.contains("\x1b[1;1H"));
+    }
+
+    #[test]
+    fn render_screen_sync_with_lines() {
+        let screen = ScreenResponse {
+            lines: vec![
+                FormattedLine::Plain("hello".to_string()),
+                FormattedLine::Plain("world".to_string()),
+            ],
+            cursor: Cursor { row: 1, col: 3, visible: true },
+            cols: 80,
+            rows: 24,
+            ..Default::default()
+        };
+        let mut buf = Vec::new();
+        render_screen_sync(&screen, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.starts_with("\x1b[H\x1b[2J"));
+        assert!(output.contains("hello"));
+        assert!(output.contains("\r\n"));
+        assert!(output.contains("world"));
+        // Cursor at row 2 (1+1), col 4 (3+1)
+        assert!(output.ends_with("\x1b[2;4H"));
+    }
+
+    #[test]
+    fn render_screen_sync_with_styled_lines() {
+        let screen = ScreenResponse {
+            lines: vec![
+                FormattedLine::Styled(vec![
+                    Span {
+                        text: "bold".to_string(),
+                        style: Style { bold: true, ..Style::default() },
+                    },
+                ]),
+            ],
+            cursor: Cursor { row: 0, col: 4, visible: true },
+            cols: 80,
+            rows: 24,
+            ..Default::default()
+        };
+        let mut buf = Vec::new();
+        render_screen_sync(&screen, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("\x1b[1mbold\x1b[0m"));
+    }
+
+    #[test]
+    fn render_screen_sync_single_line_no_trailing_newline() {
+        let screen = ScreenResponse {
+            lines: vec![FormattedLine::Plain("only".to_string())],
+            cursor: Cursor { row: 0, col: 0, visible: true },
+            ..Default::default()
+        };
+        let mut buf = Vec::new();
+        render_screen_sync(&screen, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        // No \r\n between lines since there's only one
+        assert!(!output.contains("\r\n"));
+        assert!(output.contains("only"));
+    }
 }

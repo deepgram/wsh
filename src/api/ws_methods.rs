@@ -634,11 +634,11 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
             };
             let rows = params.rows.clamp(1, 1000);
             let cols = params.cols.clamp(1, 1000);
-            if let Err(e) = session.pty.lock().resize(rows, cols) {
-                tracing::warn!(?e, "failed to resize PTY via WS");
-            }
             if let Err(e) = session.parser.resize(cols as usize, rows as usize).await {
                 tracing::warn!(?e, "failed to resize parser via WS");
+            }
+            if let Err(e) = session.pty.lock().resize(rows, cols) {
+                tracing::warn!(?e, "failed to resize PTY via WS");
             }
             session.terminal_size.set(rows, cols);
             WsResponse::success(id, method, serde_json::json!({}))

@@ -31,6 +31,11 @@ import { ServerList } from "./components/ServerList";
 // Track unsubscribe functions for per-session subscriptions
 const unsubscribes = new Map<string, () => void>();
 
+/** Per-session generation counter for reset events. Incremented on each reset,
+ *  used to suppress stale line/cursor events during async screen re-fetch. */
+const resetGenerations = new Map<string, number>();
+const pendingResets = new Set<string>();
+
 function TokenPrompt({ client }: { client: WshClient }) {
   const error = authError.value;
   const hasStoredToken = !!authToken.value;
@@ -462,6 +467,7 @@ function handleEvent(client: WshClient, session: string, raw: any): void {
     }
 
     case "line":
+      if (pendingResets.has(session)) break;  // suppress during reset fetch
       updateLine(session, raw.index, raw.line);
       if (raw.total_lines !== undefined) {
         const current = getScreen(session);
@@ -476,6 +482,7 @@ function handleEvent(client: WshClient, session: string, raw: any): void {
       break;
 
     case "cursor":
+      if (pendingResets.has(session)) break;  // suppress during reset fetch
       updateScreen(session, {
         cursor: { row: raw.row, col: raw.col, visible: raw.visible },
       });
@@ -485,9 +492,17 @@ function handleEvent(client: WshClient, session: string, raw: any): void {
       updateScreen(session, { alternateActive: raw.alternate_active, overlays: [] });
       break;
 
-    case "reset":
-      // Re-fetch full screen state after reset (resize, clear, alt screen, parser restart)
+    case "reset": {
+      // Re-fetch full screen state after reset (resize, clear, alt screen, parser restart).
+      // Track a generation counter to suppress stale line/cursor events that arrive
+      // while the async screen fetch is in flight.
+      const gen = (resetGenerations.get(session) ?? 0) + 1;
+      resetGenerations.set(session, gen);
+      pendingResets.add(session);
       client.getScreen(session, "styled").then((screen) => {
+        // Only apply if no newer reset has arrived
+        if (resetGenerations.get(session) !== gen) return;
+        pendingResets.delete(session);
         setFullScreen(session, {
           lines: screen.lines,
           cursor: screen.cursor,
@@ -504,9 +519,11 @@ function handleEvent(client: WshClient, session: string, raw: any): void {
           panels: getScreen(session).panels,
         });
       }).catch((e) => {
+        pendingResets.delete(session);
         console.error(`Failed to re-fetch screen after reset for "${session}":`, e);
       });
       break;
+    }
 
     case "idle": {
       const updated = new Map(sessionStatuses.value);

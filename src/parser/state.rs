@@ -25,7 +25,8 @@ pub enum QueryResponse {
     Ok,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ScreenResponse {
     pub epoch: u64,
     pub first_line_index: usize,
@@ -51,7 +52,8 @@ pub struct CursorResponse {
     pub cursor: Cursor,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Cursor {
     pub row: usize,
     pub col: usize,
