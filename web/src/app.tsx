@@ -300,6 +300,7 @@ async function setupSession(
     scrollbackOffset: 0,
     scrollbackComplete: false,
     scrollbackLoading: false,
+    scrollbackAnchorTotalLines: null,
     overlays: [],
     panels: [],
   });
@@ -462,6 +463,7 @@ function handleEvent(client: WshClient, session: string, raw: any): void {
         scrollbackOffset: current.scrollbackOffset,
         scrollbackComplete: complete,
         scrollbackLoading: current.scrollbackLoading,
+        scrollbackAnchorTotalLines: current.scrollbackAnchorTotalLines,
         overlays: current.overlays,
         panels: current.panels,
       });
@@ -517,6 +519,7 @@ function handleEvent(client: WshClient, session: string, raw: any): void {
           scrollbackOffset: 0,
           scrollbackComplete: false,
           scrollbackLoading: false,
+          scrollbackAnchorTotalLines: null,
           overlays: getScreen(session).overlays,
           panels: getScreen(session).panels,
         });

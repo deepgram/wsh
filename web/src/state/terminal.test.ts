@@ -25,6 +25,7 @@ function makeScreen(overrides: Partial<ScreenState> = {}): ScreenState {
     scrollbackOffset: 0,
     scrollbackComplete: false,
     scrollbackLoading: false,
+    scrollbackAnchorTotalLines: null,
     overlays: [],
     panels: [],
     ...overrides,
@@ -192,5 +193,56 @@ describe("flushBatchedUpdates when nothing pending", () => {
     const after = getScreen("test");
     // Same reference — no write occurred
     expect(after).toBe(before);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Scrollback anchor state management
+// ---------------------------------------------------------------------------
+
+describe("scrollbackAnchorTotalLines", () => {
+  it("starts as null in empty screen", () => {
+    setFullScreen("test", makeScreen());
+    expect(getScreen("test").scrollbackAnchorTotalLines).toBeNull();
+  });
+
+  it("is preserved through updateScreen", () => {
+    setFullScreen(
+      "test",
+      makeScreen({ scrollbackAnchorTotalLines: 500, totalLines: 600 }),
+    );
+    updateScreen("test", { totalLines: 700 });
+    expect(getScreen("test").scrollbackAnchorTotalLines).toBe(500);
+    expect(getScreen("test").totalLines).toBe(700);
+  });
+
+  it("is preserved through batched screen updates", () => {
+    setFullScreen(
+      "test",
+      makeScreen({ scrollbackAnchorTotalLines: 500 }),
+    );
+    batchUpdateScreen("test", { totalLines: 999 });
+    flushBatchedUpdates();
+    expect(getScreen("test").scrollbackAnchorTotalLines).toBe(500);
+  });
+
+  it("can be reset to null via setFullScreen", () => {
+    setFullScreen(
+      "test",
+      makeScreen({ scrollbackAnchorTotalLines: 500 }),
+    );
+    expect(getScreen("test").scrollbackAnchorTotalLines).toBe(500);
+    setFullScreen(
+      "test",
+      makeScreen({ scrollbackAnchorTotalLines: null }),
+    );
+    expect(getScreen("test").scrollbackAnchorTotalLines).toBeNull();
+  });
+
+  it("can be set via updateScreen for first fetch", () => {
+    setFullScreen("test", makeScreen({ totalLines: 1000 }));
+    expect(getScreen("test").scrollbackAnchorTotalLines).toBeNull();
+    updateScreen("test", { scrollbackAnchorTotalLines: 1000 });
+    expect(getScreen("test").scrollbackAnchorTotalLines).toBe(1000);
   });
 });
