@@ -64,6 +64,15 @@ struct Cli {
     #[arg(long)]
     alt_screen: bool,
 
+    /// Start recording the session immediately after it is created.
+    /// The cast file is stored on the server; use `wsh record stop` to finalize.
+    #[arg(long)]
+    record: bool,
+
+    /// Title to embed in the recording header (implies --record)
+    #[arg(long)]
+    record_title: Option<String>,
+
     /// Server instance name (like tmux -L). Each instance gets its own socket.
     #[arg(short = 'L', long = "server-name", env = "WSH_SERVER_NAME", default_value = "default", global = true)]
     server_name: String,
@@ -215,6 +224,21 @@ enum Commands {
     /// Show server information (hostname, version, socket, sessions)
     Info,
 
+    /// Manage session recordings
+    ///
+    /// Record terminal sessions to asciinema v2 (.cast) files.
+    /// Recordings persist after the session ends and can be played in any browser.
+    ///
+    /// Examples:
+    ///   wsh record start build --title "CI Build"
+    ///   wsh record stop build
+    ///   wsh record list
+    ///   wsh record download <id> --output build.cast
+    Record {
+        #[command(subcommand)]
+        action: RecordAction,
+    },
+
     /// Start an MCP server over stdio (for AI hosts like Claude Desktop)
     Mcp {},
 
@@ -248,6 +272,73 @@ enum HubAction {
 
     /// Reload federation config from file
     Reload,
+}
+
+#[derive(Subcommand, Debug)]
+enum RecordAction {
+    /// Start recording a session
+    Start {
+        /// Session name to record
+        name: String,
+
+        /// Title to embed in the asciinema header
+        #[arg(long, short)]
+        title: Option<String>,
+    },
+
+    /// Stop the active recording for a session
+    Stop {
+        /// Session name whose recording to stop
+        name: String,
+    },
+
+    /// Show the active recording status for a session
+    Status {
+        /// Session name to check
+        name: String,
+    },
+
+    /// List recordings
+    ///
+    /// With no options, lists all recordings on the server.
+    List {
+        /// Filter by session name
+        #[arg(long, short)]
+        session: Option<String>,
+
+        /// Filter by status: recording, stopped, failed
+        #[arg(long)]
+        status: Option<String>,
+    },
+
+    /// Show details for a single recording
+    Get {
+        /// Recording ID
+        id: String,
+    },
+
+    /// Delete a recording and its cast file
+    Delete {
+        /// Recording ID
+        id: String,
+    },
+
+    /// Download a recording's cast file
+    ///
+    /// Writes the raw asciinema v2 cast file to a local path or stdout.
+    /// Works for both active (partial) and completed recordings.
+    ///
+    /// Examples:
+    ///   wsh record download <id> --output build.cast
+    ///   wsh record download <id> | asciinema play /dev/stdin
+    Download {
+        /// Recording ID
+        id: String,
+
+        /// Output file path. Use "-" for stdout.
+        #[arg(long, short, default_value = "-")]
+        output: String,
+    },
 }
 
 #[derive(Error, Debug)]
@@ -377,6 +468,9 @@ async fn main() -> Result<(), WshError> {
         }
         Some(Commands::Info) => {
             run_info(socket, server_name).await
+        }
+        Some(Commands::Record { action }) => {
+            run_record(action, socket, server_name).await
         }
         Some(Commands::Mcp {}) => {
             run_mcp(socket, server_name).await
@@ -1282,6 +1376,13 @@ async fn run_default(cli: Cli) -> Result<(), WshError> {
         None => cli.shell.clone(),
     };
 
+    // Build optional recording config from --record / --record-title flags.
+    let recording_opts = if cli.record || cli.record_title.is_some() {
+        Some(serde_json::json!({ "title": cli.record_title }))
+    } else {
+        None
+    };
+
     // Create session via REST API
     let create_body = serde_json::json!({
         "name": cli.name,
@@ -1289,6 +1390,7 @@ async fn run_default(cli: Cli) -> Result<(), WshError> {
         "rows": rows,
         "cols": cols,
         "tags": cli.tags,
+        "recording": recording_opts,
     });
 
     let resp = http_client.post_json("/sessions", &create_body).await.map_err(|e| {
@@ -1317,6 +1419,12 @@ async fn run_default(cli: Cli) -> Result<(), WshError> {
         .to_string();
 
     tracing::info!(session = %session_name, "session created");
+
+    // If auto-recording was requested, print the recording ID so the user can
+    // reference it after the session ends.
+    if let Some(rec_id) = session_info["recording_id"].as_str() {
+        eprintln!("wsh: recording started ({})", rec_id);
+    }
 
     // Connect WebSocket for streaming I/O
     let ws = ws_client::connect_ws_uds(&http_socket_path, &session_name).await.map_err(|e| {
@@ -1834,6 +1942,253 @@ async fn run_hub(
     }
 
     Ok(())
+}
+
+async fn run_record(
+    action: RecordAction,
+    socket: Option<PathBuf>,
+    server_name: String,
+) -> Result<(), WshError> {
+    let http_socket_path = resolve_http_socket_path(socket, &server_name);
+    let client = wsh::uds_client::UdsHttpClient::new(&http_socket_path);
+
+    match action {
+        RecordAction::Start { name, title } => {
+            let body = serde_json::json!({ "title": title });
+            let resp = match client
+                .post_json(&format!("/sessions/{}/recording", name), &body)
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("wsh record start: could not connect to wsh server — is it running? ({})", e);
+                    std::process::exit(1);
+                }
+            };
+            if !resp.status.is_success() {
+                let body = resp.text().await.unwrap_or_default();
+                eprintln!("wsh record start: {}", body);
+                std::process::exit(1);
+            }
+            let info: serde_json::Value = resp.json().await.unwrap_or_default();
+            print_recording_info(&info, "started");
+        }
+
+        RecordAction::Stop { name } => {
+            let resp = match client
+                .delete(&format!("/sessions/{}/recording", name))
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("wsh record stop: could not connect to wsh server — is it running? ({})", e);
+                    std::process::exit(1);
+                }
+            };
+            if !resp.status.is_success() {
+                let body = resp.text().await.unwrap_or_default();
+                eprintln!("wsh record stop: {}", body);
+                std::process::exit(1);
+            }
+            let info: serde_json::Value = resp.json().await.unwrap_or_default();
+            print_recording_info(&info, "stopped");
+        }
+
+        RecordAction::Status { name } => {
+            let resp = match client
+                .get(&format!("/sessions/{}/recording", name))
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("wsh record status: could not connect to wsh server — is it running? ({})", e);
+                    std::process::exit(1);
+                }
+            };
+            if resp.status == hyper::StatusCode::NOT_FOUND {
+                println!("No active recording for session '{}'.", name);
+                return Ok(());
+            }
+            if !resp.status.is_success() {
+                let body = resp.text().await.unwrap_or_default();
+                eprintln!("wsh record status: {}", body);
+                std::process::exit(1);
+            }
+            let info: serde_json::Value = resp.json().await.unwrap_or_default();
+            print_recording_info(&info, "active");
+        }
+
+        RecordAction::List { session, status } => {
+            let mut path = "/recordings".to_string();
+            let mut params: Vec<String> = Vec::new();
+            if let Some(ref s) = session {
+                params.push(format!("session={}", s));
+            }
+            if let Some(ref st) = status {
+                params.push(format!("status={}", st));
+            }
+            if !params.is_empty() {
+                path.push('?');
+                path.push_str(&params.join("&"));
+            }
+            let resp = match client.get(&path).await {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("wsh record list: could not connect to wsh server — is it running? ({})", e);
+                    std::process::exit(1);
+                }
+            };
+            if !resp.status.is_success() {
+                let body = resp.text().await.unwrap_or_default();
+                eprintln!("wsh record list: {}", body);
+                std::process::exit(1);
+            }
+            let body: serde_json::Value = resp.json().await.unwrap_or_default();
+            let recordings = body["recordings"].as_array().cloned().unwrap_or_default();
+            if recordings.is_empty() {
+                println!("No recordings.");
+            } else {
+                println!(
+                    "{:<38} {:<20} {:<12} {:<10} {}",
+                    "ID", "SESSION", "STATUS", "DURATION", "TITLE"
+                );
+                for r in &recordings {
+                    let id = &r["id"].as_str().unwrap_or("-")[..36.min(r["id"].as_str().unwrap_or("-").len())];
+                    let sess = r["session"].as_str().unwrap_or("-");
+                    let status = r["status"].as_str().unwrap_or("-");
+                    let duration = match r["duration_secs"].as_f64() {
+                        Some(d) => format_duration(d),
+                        None => "-".to_string(),
+                    };
+                    let title = r["title"].as_str().unwrap_or("");
+                    println!(
+                        "{:<38} {:<20} {:<12} {:<10} {}",
+                        id, sess, status, duration, title
+                    );
+                }
+            }
+        }
+
+        RecordAction::Get { id } => {
+            let resp = match client.get(&format!("/recordings/{}", id)).await {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("wsh record get: could not connect to wsh server — is it running? ({})", e);
+                    std::process::exit(1);
+                }
+            };
+            if !resp.status.is_success() {
+                let body = resp.text().await.unwrap_or_default();
+                eprintln!("wsh record get: {}", body);
+                std::process::exit(1);
+            }
+            let info: serde_json::Value = resp.json().await.unwrap_or_default();
+            print_recording_info(&info, "");
+        }
+
+        RecordAction::Delete { id } => {
+            let resp = match client.delete(&format!("/recordings/{}", id)).await {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("wsh record delete: could not connect to wsh server — is it running? ({})", e);
+                    std::process::exit(1);
+                }
+            };
+            if !resp.status.is_success() {
+                let body = resp.text().await.unwrap_or_default();
+                eprintln!("wsh record delete: {}", body);
+                std::process::exit(1);
+            }
+            println!("Recording {} deleted.", id);
+        }
+
+        RecordAction::Download { id, output } => {
+            let resp = match client.get(&format!("/recordings/{}/cast", id)).await {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("wsh record download: could not connect to wsh server — is it running? ({})", e);
+                    std::process::exit(1);
+                }
+            };
+            if !resp.status.is_success() {
+                let body = resp.text().await.unwrap_or_default();
+                eprintln!("wsh record download: {}", body);
+                std::process::exit(1);
+            }
+            let bytes = match resp.bytes().await {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("wsh record download: failed to read response: {}", e);
+                    std::process::exit(1);
+                }
+            };
+            if output == "-" {
+                use std::io::Write;
+                std::io::stdout().write_all(&bytes).map_err(WshError::Io)?;
+            } else {
+                tokio::fs::write(&output, &bytes).await.map_err(WshError::Io)?;
+                eprintln!("wsh: saved {} bytes to {}", bytes.len(), output);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Format elapsed seconds as a human-readable duration string (e.g. "1h 23m 45s").
+fn format_duration(secs: f64) -> String {
+    let total = secs as u64;
+    let h = total / 3600;
+    let m = (total % 3600) / 60;
+    let s = total % 60;
+    if h > 0 {
+        format!("{}h {}m {}s", h, m, s)
+    } else if m > 0 {
+        format!("{}m {}s", m, s)
+    } else {
+        format!("{}s", s)
+    }
+}
+
+/// Print a recording info block to stdout.
+///
+/// `verb` is an optional past-tense word printed in the first line
+/// (e.g. "started", "stopped"). Pass "" to omit it.
+fn print_recording_info(info: &serde_json::Value, verb: &str) {
+    let id = info["id"].as_str().unwrap_or("-");
+    let session = info["session"].as_str().unwrap_or("-");
+    let status = info["status"].as_str().unwrap_or("-");
+    let title = info["title"].as_str();
+    let bytes = info["bytes_written"].as_u64().unwrap_or(0);
+    let duration = info["duration_secs"]
+        .as_f64()
+        .map(format_duration)
+        .unwrap_or_else(|| "-".to_string());
+    let cast_url = info["urls"]["cast"].as_str().unwrap_or("");
+    let player_url = info["urls"]["player"].as_str().unwrap_or("");
+    let embed_url = info["urls"]["embed"].as_str().unwrap_or("");
+
+    if verb.is_empty() {
+        println!("Recording {}", id);
+    } else {
+        println!("Recording {} {}", id, verb);
+    }
+    println!("  Session:  {}", session);
+    println!("  Status:   {}", status);
+    if let Some(t) = title {
+        println!("  Title:    {}", t);
+    }
+    println!("  Duration: {}", duration);
+    println!("  Size:     {} bytes", bytes);
+    if !cast_url.is_empty() {
+        println!("  Cast:     {}", cast_url);
+    }
+    if !player_url.is_empty() {
+        println!("  Player:   {}", player_url);
+    }
+    if !embed_url.is_empty() {
+        println!("  Embed:    {}", embed_url);
+    }
 }
 
 async fn run_info(socket: Option<PathBuf>, server_name: String) -> Result<(), WshError> {
