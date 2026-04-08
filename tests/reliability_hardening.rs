@@ -128,6 +128,7 @@ async fn test_max_sessions_http_503() {
             tcp_addr: None,
             instance_name: "test".to_string(),
             http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
+            recordings: wsh::recording::RecordingRegistry::new(),
     };
     let app = router(state, RouterConfig::default());
 

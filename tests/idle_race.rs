@@ -76,6 +76,7 @@ fn create_test_state() -> (api::AppState, mpsc::Receiver<Bytes>, ActivityTracker
         tcp_addr: None,
         instance_name: "test".to_string(),
         http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
+            recordings: wsh::recording::RecordingRegistry::new(),
     };
     (state, input_rx, activity, parser_tx)
 }

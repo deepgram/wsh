@@ -35,6 +35,7 @@ fn create_test_app_with_config(config: RouterConfig) -> axum::Router {
         tcp_addr: None,
         instance_name: "test".to_string(),
         http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
+            recordings: wsh::recording::RecordingRegistry::new(),
     };
     router(state, config)
 }
@@ -270,6 +271,7 @@ async fn tls_federation_servers_endpoint() {
         tcp_addr: None,
         instance_name: "test".to_string(),
         http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
+            recordings: wsh::recording::RecordingRegistry::new(),
     };
     let app = router(state, RouterConfig::default());
 
@@ -342,6 +344,7 @@ async fn tls_base_prefix_federation_combined() {
         tcp_addr: None,
         instance_name: "test".to_string(),
         http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
+            recordings: wsh::recording::RecordingRegistry::new(),
     };
     let app = router(
         state,

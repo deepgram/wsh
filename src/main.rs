@@ -593,6 +593,7 @@ async fn run_server(
         http_socket_path: socket.as_ref()
             .map(|p| p.with_extension("http.sock"))
             .unwrap_or_else(|| server::http_socket_path_for_instance(&server_name)),
+        recordings: wsh::recording::RecordingRegistry::new(),
     };
 
     if !cors_origins.is_empty() {

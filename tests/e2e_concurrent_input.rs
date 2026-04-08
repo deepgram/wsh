@@ -112,6 +112,7 @@ async fn test_concurrent_input_from_multiple_sources() {
             tcp_addr: None,
             instance_name: "test".to_string(),
             http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
+            recordings: wsh::recording::RecordingRegistry::new(),
     };
     let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
@@ -292,6 +293,7 @@ async fn test_rapid_http_requests() {
             tcp_addr: None,
             instance_name: "test".to_string(),
             http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
+            recordings: wsh::recording::RecordingRegistry::new(),
     };
     let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;

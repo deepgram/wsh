@@ -114,6 +114,7 @@ async fn test_websocket_input_reaches_pty_and_output_returns() {
             tcp_addr: None,
             instance_name: "test".to_string(),
             http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
+            recordings: wsh::recording::RecordingRegistry::new(),
     };
     let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
@@ -274,6 +275,7 @@ async fn test_websocket_text_input_reaches_pty() {
             tcp_addr: None,
             instance_name: "test".to_string(),
             http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
+            recordings: wsh::recording::RecordingRegistry::new(),
     };
     let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;

@@ -67,6 +67,7 @@ fn create_test_state() -> (api::AppState, mpsc::Receiver<Bytes>, mpsc::Sender<By
             tcp_addr: None,
             instance_name: "test".to_string(),
             http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
+            recordings: wsh::recording::RecordingRegistry::new(),
     };
     (state, input_rx, parser_tx)
 }
@@ -236,6 +237,7 @@ async fn test_ws_subscribe_then_events() {
             tcp_addr: None,
             instance_name: "test".to_string(),
             http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
+            recordings: wsh::recording::RecordingRegistry::new(),
     };
     let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
@@ -386,6 +388,7 @@ async fn test_ws_methods_interleaved_with_events() {
             tcp_addr: None,
             instance_name: "test".to_string(),
             http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
+            recordings: wsh::recording::RecordingRegistry::new(),
     };
     let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;
