@@ -18,6 +18,13 @@ export interface ScreenState {
   scrollbackComplete: boolean;
   /** Whether a scrollback fetch is currently in flight. */
   scrollbackLoading: boolean;
+  /**
+   * Snapshot of totalLines at the time scrollback fetching began.
+   * Used to anchor pagination offsets so that new output arriving between
+   * fetches doesn't cause gaps or overlaps in the scrollback cache.
+   * Reset to null when the scrollback cache is cleared (e.g., on reset).
+   */
+  scrollbackAnchorTotalLines: number | null;
   overlays: Overlay[];
   panels: Panel[];
 }
@@ -35,6 +42,7 @@ function makeEmptyScreen(): ScreenState {
     scrollbackOffset: 0,
     scrollbackComplete: false,
     scrollbackLoading: false,
+    scrollbackAnchorTotalLines: null,
     overlays: [],
     panels: [],
   };

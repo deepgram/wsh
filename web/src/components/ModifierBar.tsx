@@ -52,7 +52,9 @@ export function ModifierBar({ session, client, onTabSent }: ModifierBarProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const repeatTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const repeatIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const didRepeatRef = useRef(false);
+  /** Timestamp of the last key sent via touchstart (repeatable keys).
+   *  Used to suppress the synthetic click that follows. */
+  const lastTouchSendRef = useRef(0);
   const connected = connectionState.value === "connected";
 
   useEffect(() => {
@@ -90,12 +92,13 @@ export function ModifierBar({ session, client, onTabSent }: ModifierBarProps) {
     [connected, client, session],
   );
 
+  /** Click handler — used for all keys.  For repeatable keys the initial
+   *  press is handled by startRepeat on touchstart; the synthetic click
+   *  that follows is suppressed via lastTouchSendRef. */
   const handleTap = useCallback(
     (key: KeyDef) => {
-      // On touch devices, touchstart handlers already performed the
-      // action. Suppress the synthetic click that follows.
-      if (didRepeatRef.current) {
-        didRepeatRef.current = false;
+      // Suppress the synthetic click that follows a touch-initiated send
+      if (Date.now() - lastTouchSendRef.current < 400) {
         return;
       }
       if (key.modifier === "ctrl") {
@@ -114,41 +117,10 @@ export function ModifierBar({ session, client, onTabSent }: ModifierBarProps) {
     [send, onTabSent],
   );
 
+  /** Prevent focus steal on mouse-based interactions (desktop). */
   const preventFocusSteal = useCallback((e: Event) => {
     e.preventDefault();
   }, []);
-
-  const handleTouchStart = useCallback(
-    (key: KeyDef, e: TouchEvent) => {
-      e.preventDefault(); // prevent focus steal from input
-      didRepeatRef.current = true;
-      if (key.modifier === "ctrl") {
-        toggleCtrl();
-      } else if (key.modifier === "alt") {
-        toggleAlt();
-      } else if (key.seq) {
-        send(key.seq);
-        if (key.seq === "\t" && onTabSent) onTabSent();
-      }
-    },
-    [send, onTabSent],
-  );
-
-  const startRepeat = useCallback(
-    (key: KeyDef, e: TouchEvent) => {
-      e.preventDefault(); // prevent focus steal from input
-      if (!key.repeatable || !key.seq) return;
-      const seq = key.seq;
-      // Send the initial key immediately and mark that touch handled it,
-      // so the synthetic onClick that follows touchend is suppressed.
-      didRepeatRef.current = true;
-      send(seq);
-      repeatTimerRef.current = setTimeout(() => {
-        repeatIntervalRef.current = setInterval(() => send(seq), REPEAT_INTERVAL);
-      }, REPEAT_DELAY);
-    },
-    [send],
-  );
 
   const stopRepeat = useCallback(() => {
     if (repeatTimerRef.current) {
@@ -160,6 +132,32 @@ export function ModifierBar({ session, client, onTabSent }: ModifierBarProps) {
       repeatIntervalRef.current = null;
     }
   }, []);
+
+  /** Start repeat-send for repeatable keys (arrows, backspace).
+   *  Does NOT call e.preventDefault() so the browser can still
+   *  initiate horizontal scroll on the modifier bar. */
+  const startRepeat = useCallback(
+    (key: KeyDef, _e: TouchEvent) => {
+      if (!key.repeatable || !key.seq) return;
+      const seq = key.seq;
+      lastTouchSendRef.current = Date.now();
+      send(seq);
+      repeatTimerRef.current = setTimeout(() => {
+        repeatIntervalRef.current = setInterval(() => send(seq), REPEAT_INTERVAL);
+      }, REPEAT_DELAY);
+    },
+    [send],
+  );
+
+  // Cancel any active repeat when the modifier bar scrolls — the user
+  // is panning, not holding a key.
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const handleBarScroll = () => stopRepeat();
+    el.addEventListener("scroll", handleBarScroll, { passive: true });
+    return () => el.removeEventListener("scroll", handleBarScroll);
+  }, [stopRepeat]);
 
   const wrapClass =
     "modifier-bar-wrap" +
@@ -174,18 +172,19 @@ export function ModifierBar({ session, client, onTabSent }: ModifierBarProps) {
             (key.modifier === "ctrl" && ctrlActive.value) ||
             (key.modifier === "alt" && altActive.value);
           return (
-            <button
+            <div
+              role="button"
               key={key.label}
-              class={`modifier-key${isActive ? " active" : ""}`}
-              disabled={!connected}
+              class={`modifier-key${isActive ? " active" : ""}${!connected ? " disabled" : ""}`}
+              aria-disabled={!connected || undefined}
               onMouseDown={preventFocusSteal}
-              onTouchStart={key.repeatable ? (e: TouchEvent) => startRepeat(key, e) : (e: TouchEvent) => handleTouchStart(key, e)}
+              onTouchStart={key.repeatable ? (e: TouchEvent) => startRepeat(key, e) : undefined}
               onClick={() => handleTap(key)}
               onTouchEnd={key.repeatable ? stopRepeat : undefined}
               onTouchCancel={key.repeatable ? stopRepeat : undefined}
             >
               {key.label}
-            </button>
+            </div>
           );
         })}
       </div>

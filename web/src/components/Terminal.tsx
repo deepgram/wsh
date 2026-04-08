@@ -180,7 +180,7 @@ export function Terminal({ session, client, captureInput }: TerminalProps) {
   useEffect(() => {
     const prevLen = prevScrollbackLenRef.current;
     const curLen = screen.scrollbackLines.length;
-    if (curLen > prevLen && prevLen > 0) {
+    if (curLen > prevLen) {
       const el = containerRef.current;
       if (el) {
         const delta = (curLen - prevLen) * lineHeight;
@@ -316,17 +316,24 @@ export function Terminal({ session, client, captureInput }: TerminalProps) {
     if (screen.scrollbackComplete || screen.scrollbackLoading) return;
     if (screen.alternateActive) return;
 
-    // Derive scrollback available from totalLines and rows — these are kept
-    // current by line events, unlike firstLineIndex which only updates on
-    // sync/diff/reset.
-    const scrollbackAvailable = Math.max(0, screen.totalLines - screen.rows);
+    // On the first fetch, snapshot totalLines as the anchor for pagination.
+    // Subsequent fetches reuse this anchor so that new output arriving between
+    // fetches doesn't shift offsets and cause gaps or overlaps.
+    const anchorTotal = screen.scrollbackAnchorTotalLines ?? screen.totalLines;
+    const scrollbackAvailable = Math.max(0, anchorTotal - screen.rows);
     if (scrollbackAvailable <= 0) return;
     if (screen.scrollbackOffset >= scrollbackAvailable) {
       updateScreen(session, { scrollbackComplete: true });
       return;
     }
 
-    updateScreen(session, { scrollbackLoading: true });
+    updateScreen(session, {
+      scrollbackLoading: true,
+      // Persist the anchor on the first fetch
+      ...(screen.scrollbackAnchorTotalLines == null
+        ? { scrollbackAnchorTotalLines: screen.totalLines }
+        : {}),
+    });
 
     // Fetch from the end of scrollback backwards
     const remaining = scrollbackAvailable - screen.scrollbackOffset;
@@ -338,7 +345,8 @@ export function Terminal({ session, client, captureInput }: TerminalProps) {
       .then((resp) => {
         const sig = getScreenSignal(session);
         const current = sig.value;
-        const currentAvailable = Math.max(0, current.totalLines - current.rows);
+        const currentAnchor = current.scrollbackAnchorTotalLines ?? resp.total_lines;
+        const currentAvailable = Math.max(0, currentAnchor - current.rows);
 
         // If the server returned 0 lines, our request was likely based on stale
         // state (e.g., a resize happened between request and response, absorbing
@@ -370,7 +378,7 @@ export function Terminal({ session, client, captureInput }: TerminalProps) {
       .catch(() => {
         updateScreen(session, { scrollbackLoading: false });
       });
-  }, [client, session, screen.scrollbackComplete, screen.scrollbackLoading, screen.alternateActive, screen.totalLines, screen.rows, screen.scrollbackOffset]);
+  }, [client, session, screen.scrollbackComplete, screen.scrollbackLoading, screen.alternateActive, screen.totalLines, screen.rows, screen.scrollbackOffset, screen.scrollbackAnchorTotalLines]);
 
   // Track manual scrolling + trigger scrollback fetch near top
   useEffect(() => {

@@ -107,6 +107,7 @@ html, body, #app {
 .terminal-container {
   flex: 1;
   overflow-y: auto;
+  overflow-x: auto;
   overscroll-behavior: contain;
   padding: 4px 8px;
   font-family: inherit;
@@ -279,6 +280,7 @@ html, body, #app {
   overflow-x: auto;
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
+  touch-action: pan-x;
 }
 
 .modifier-bar::-webkit-scrollbar {
@@ -300,6 +302,9 @@ html, body, #app {
   user-select: none;
   -webkit-user-select: none;
   transition: background 0.1s, border-color 0.1s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .modifier-key:active {
@@ -312,9 +317,10 @@ html, body, #app {
   color: var(--cursor-color);
 }
 
-.modifier-key:disabled {
+.modifier-key[aria-disabled="true"] {
   opacity: 0.3;
   cursor: default;
+  pointer-events: none;
 }
 
 @media (max-width: 374px) {
