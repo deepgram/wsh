@@ -71,6 +71,7 @@ fn create_burst_test_state() -> (wsh::api::AppState, mpsc::Receiver<Bytes>, toki
         tcp_addr: None,
         instance_name: "test".to_string(),
         http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
+            recordings: wsh::recording::RecordingRegistry::new(),
     };
     (state, ts.input_rx, output_tx, large_parser_tx)
 }

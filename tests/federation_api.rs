@@ -49,6 +49,7 @@ fn create_test_app_with_registry() -> (axum::Router, wsh::federation::registry::
         tcp_addr: None,
         instance_name: "test".to_string(),
         http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
+            recordings: wsh::recording::RecordingRegistry::new(),
     };
     (router(state, RouterConfig::default()), backends)
 }

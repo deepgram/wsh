@@ -3,6 +3,7 @@ pub mod error;
 mod handlers;
 pub mod origin;
 mod proxy;
+mod recording;
 pub mod ticket;
 pub mod transport;
 mod web;
@@ -98,6 +99,8 @@ pub struct AppState {
     pub instance_name: String,
     /// Path to the HTTP UDS socket.
     pub http_socket_path: std::path::PathBuf,
+    /// Registry of all recordings on this server.
+    pub recordings: crate::recording::RecordingRegistry,
 }
 
 pub(crate) fn get_session(
@@ -211,7 +214,23 @@ fn api_routes(state: AppState) -> Router {
         .route("/panel/{id}/write", post(panel_region_write))
         .route("/screen_mode", get(screen_mode_get))
         .route("/screen_mode/enter_alt", post(enter_alt_screen))
-        .route("/screen_mode/exit_alt", post(exit_alt_screen));
+        .route("/screen_mode/exit_alt", post(exit_alt_screen))
+        .route(
+            "/recording",
+            get(recording::recording_status)
+                .post(recording::recording_start)
+                .delete(recording::recording_stop),
+        );
+
+    let recording_routes = Router::new()
+        .route("/recordings", get(recording::recording_list))
+        .route(
+            "/recordings/{id}",
+            get(recording::recording_get).delete(recording::recording_delete),
+        )
+        .route("/recordings/{id}/cast", get(recording::recording_cast))
+        .route("/recordings/{id}/player", get(recording::recording_player))
+        .route("/recordings/{id}/embed", get(recording::recording_embed));
 
     let session_mgmt_routes = Router::new()
         .route(
@@ -237,6 +256,7 @@ fn api_routes(state: AppState) -> Router {
 
     Router::new()
         .merge(session_mgmt_routes)
+        .merge(recording_routes)
         .nest("/sessions/{name}", session_routes)
         .route("/auth/ws-ticket", post(ws_ticket))
         .route("/openapi.yaml", get(openapi_spec))
@@ -465,6 +485,7 @@ mod tests {
             tcp_addr: None,
             instance_name: "test".to_string(),
             http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
+            recordings: crate::recording::RecordingRegistry::new(),
         };
         (state, input_rx, "test".to_string())
     }
@@ -1067,6 +1088,7 @@ mod tests {
             tcp_addr: None,
             instance_name: "test".to_string(),
             http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
+            recordings: crate::recording::RecordingRegistry::new(),
         }
     }
 
@@ -1606,6 +1628,7 @@ mod tests {
                 tcp_addr: None,
                 instance_name: "test".to_string(),
                 http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
+            recordings: crate::recording::RecordingRegistry::new(),
             },
             RouterConfig::default(),
         );
@@ -1678,6 +1701,7 @@ mod tests {
                 tcp_addr: None,
                 instance_name: "test".to_string(),
                 http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
+            recordings: crate::recording::RecordingRegistry::new(),
             },
             RouterConfig::default(),
         );
@@ -1747,6 +1771,7 @@ mod tests {
                 tcp_addr: None,
                 instance_name: "test".to_string(),
                 http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
+            recordings: crate::recording::RecordingRegistry::new(),
             },
             RouterConfig::default(),
         );
@@ -1905,6 +1930,7 @@ mod tests {
                 tcp_addr: None,
                 instance_name: "test".to_string(),
                 http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
+            recordings: crate::recording::RecordingRegistry::new(),
             },
             RouterConfig::default(),
         );
@@ -1977,6 +2003,7 @@ mod tests {
                 tcp_addr: None,
                 instance_name: "test".to_string(),
                 http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
+            recordings: crate::recording::RecordingRegistry::new(),
             },
             RouterConfig::default(),
         );
@@ -2925,6 +2952,7 @@ mod tests {
             tcp_addr: None,
             instance_name: "test".to_string(),
             http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
+            recordings: crate::recording::RecordingRegistry::new(),
         }
     }
 

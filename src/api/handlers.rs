@@ -3242,6 +3242,16 @@ pub(super) struct CreateSessionRequest {
     /// Target a specific server in the federation for session creation.
     #[serde(default)]
     pub server: Option<String>,
+    /// When present, start recording immediately after the session is created.
+    #[serde(default)]
+    pub recording: Option<CreateSessionRecordingRequest>,
+}
+
+/// Recording options for auto-record on session create.
+#[derive(serde::Deserialize, serde::Serialize)]
+pub(super) struct CreateSessionRecordingRequest {
+    /// Optional display title embedded in the asciinema header.
+    pub title: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -3255,12 +3265,20 @@ pub(super) struct SessionInfo {
     pub clients: usize,
     pub tags: Vec<String>,
     pub last_activity_ms: u64,
+    /// Active recording ID for this session, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recording_id: Option<String>,
 }
 
-fn build_session_info(session: &crate::session::Session, hostname: &str) -> SessionInfo {
+fn build_session_info(
+    session: &crate::session::Session,
+    hostname: &str,
+    recordings: Option<&crate::recording::RecordingRegistry>,
+) -> SessionInfo {
     let (rows, cols) = session.terminal_size.get();
     let mut tags: Vec<String> = session.tags.read().iter().cloned().collect();
     tags.sort();
+    let recording_id = recordings.and_then(|r| r.active_for_session(&session.name));
     SessionInfo {
         name: session.name.clone(),
         server: hostname.to_string(),
@@ -3271,6 +3289,7 @@ fn build_session_info(session: &crate::session::Session, hostname: &str) -> Sess
         clients: session.clients(),
         tags,
         last_activity_ms: session.activity.last_activity_ms(),
+        recording_id,
     }
 }
 
@@ -3344,7 +3363,7 @@ pub(super) async fn session_list(
         .into_iter()
         .filter_map(|name| {
             let session = state.sessions.get(&name)?;
-            serde_json::to_value(build_session_info(&session, &state.hostname)).ok()
+            serde_json::to_value(build_session_info(&session, &state.hostname, Some(&state.recordings))).ok()
         })
         .collect();
 
@@ -3395,6 +3414,7 @@ pub(super) async fn session_create(
 
     let req_name = req.name;
     let req_tags = req.tags;
+    let req_recording = req.recording;
     let command = match req.command {
         Some(cmd) => SpawnCommand::Command {
             command: cmd,
@@ -3460,9 +3480,26 @@ pub(super) async fn session_create(
     // Monitor child exit so the session is auto-removed when the process dies.
     state.sessions.monitor_child_exit(assigned_name.clone(), session.client_count.clone(), session.child_exited.clone(), child_exit_rx);
 
+    // Auto-record if requested.
+    if let Some(rec_req) = req_recording {
+        let (rows, cols) = session.terminal_size.get();
+        let output_rx = session.output_rx.subscribe();
+        let session_cancelled = session.cancelled.clone();
+        if let Err(e) = state.recordings.start(
+            &assigned_name,
+            rec_req.title,
+            cols,
+            rows,
+            output_rx,
+            session_cancelled,
+        ) {
+            tracing::warn!(%e, session = %assigned_name, "auto-record start failed");
+        }
+    }
+
     Ok((
         StatusCode::CREATED,
-        Json(build_session_info(&session, &state.hostname)),
+        Json(build_session_info(&session, &state.hostname, Some(&state.recordings))),
     )
         .into_response())
 }
@@ -3481,7 +3518,7 @@ pub(super) async fn session_get(
         return Ok((status, Json(body)).into_response());
     }
     let session = get_session(&state.sessions, &name)?;
-    Ok(Json(build_session_info(&session, &state.hostname)).into_response())
+    Ok(Json(build_session_info(&session, &state.hostname, Some(&state.recordings))).into_response())
 }
 
 pub(super) async fn session_update(
@@ -3533,7 +3570,7 @@ pub(super) async fn session_update(
     }
 
     let session = get_session(&state.sessions, &current_name)?;
-    Ok(Json(build_session_info(&session, &state.hostname)).into_response())
+    Ok(Json(build_session_info(&session, &state.hostname, Some(&state.recordings))).into_response())
 }
 
 pub(super) async fn session_kill(

@@ -386,6 +386,7 @@ async fn federation_e2e_cross_server_proxy() {
         tcp_addr: None,
         instance_name: "test".to_string(),
         http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
+            recordings: wsh::recording::RecordingRegistry::new(),
     };
 
     // Start the in-process hub.

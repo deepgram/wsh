@@ -100,6 +100,7 @@ pub fn create_test_state_with_size(rows: u16, cols: u16) -> (wsh::api::AppState,
         tcp_addr: None,
         instance_name: "test".to_string(),
         http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
+            recordings: wsh::recording::RecordingRegistry::new(),
     };
     (state, ts.input_rx, output_tx, parser_tx)
 }

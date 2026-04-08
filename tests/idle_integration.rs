@@ -77,6 +77,7 @@ fn create_test_state() -> (api::AppState, mpsc::Receiver<Bytes>, ActivityTracker
             tcp_addr: None,
             instance_name: "test".to_string(),
             http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
+            recordings: wsh::recording::RecordingRegistry::new(),
     };
     (state, input_rx, activity, parser_tx)
 }
@@ -860,6 +861,7 @@ fn create_multi_session_state() -> (api::AppState, ActivityTracker, ActivityTrac
             tcp_addr: None,
             instance_name: "test".to_string(),
             http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
+            recordings: wsh::recording::RecordingRegistry::new(),
     };
     (state, activity_a, activity_b, parser_tx_a, parser_tx_b)
 }
@@ -1023,6 +1025,7 @@ async fn test_http_idle_any_no_sessions_returns_404() {
             tcp_addr: None,
             instance_name: "test".to_string(),
             http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
+            recordings: wsh::recording::RecordingRegistry::new(),
     };
     let app = api::router(state, api::RouterConfig::default());
     let addr = start_server(app).await;

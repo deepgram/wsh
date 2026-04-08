@@ -10,6 +10,7 @@ pub fn build_version() -> &'static str {
 }
 
 pub mod activity;
+pub mod recording;
 pub mod config;
 pub mod api;
 pub mod federation;

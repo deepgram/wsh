@@ -36,6 +36,7 @@ fn create_test_app() -> axum::Router {
             tcp_addr: None,
             instance_name: "test".to_string(),
             http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
+            recordings: wsh::recording::RecordingRegistry::new(),
     };
     router(state, RouterConfig::default())
 }
@@ -299,6 +300,7 @@ async fn test_mcp_endpoint_exempt_from_auth() {
             tcp_addr: None,
             instance_name: "test".to_string(),
             http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
+            recordings: wsh::recording::RecordingRegistry::new(),
     };
     // Create router WITH auth token
     let app = router(state, RouterConfig { token: Some("secret-token".to_string()), ..Default::default() });
@@ -1588,6 +1590,7 @@ async fn test_http_and_mcp_coexist() {
             tcp_addr: None,
             instance_name: "test".to_string(),
             http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
+            recordings: wsh::recording::RecordingRegistry::new(),
     };
     let app = router(state, RouterConfig::default());
     let addr = start_test_server(app).await;

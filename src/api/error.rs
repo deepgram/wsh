@@ -73,6 +73,10 @@ pub enum ApiError {
     ServerUnavailable(String),
     /// 500 - Catch-all internal error.
     InternalError(String),
+    /// 404 - No active recording for the session, or no recording with the given ID.
+    RecordingNotFound,
+    /// 409 - Session already has an active recording.
+    RecordingAlreadyActive,
 }
 
 impl ApiError {
@@ -110,6 +114,8 @@ impl ApiError {
             ApiError::ServerAlreadyRegistered(_) => StatusCode::CONFLICT,
             ApiError::ServerUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             ApiError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            ApiError::RecordingNotFound => StatusCode::NOT_FOUND,
+            ApiError::RecordingAlreadyActive => StatusCode::CONFLICT,
         }
     }
 
@@ -147,6 +153,8 @@ impl ApiError {
             ApiError::ServerAlreadyRegistered(_) => "server_already_registered",
             ApiError::ServerUnavailable(_) => "server_unavailable",
             ApiError::InternalError(_) => "internal_error",
+            ApiError::RecordingNotFound => "recording_not_found",
+            ApiError::RecordingAlreadyActive => "recording_already_active",
         }
     }
 
@@ -208,6 +216,10 @@ impl ApiError {
                 format!("Server unavailable: {}.", detail)
             }
             ApiError::InternalError(detail) => format!("Internal error: {}.", detail),
+            ApiError::RecordingNotFound => "Recording not found.".to_string(),
+            ApiError::RecordingAlreadyActive => {
+                "Session already has an active recording.".to_string()
+            }
         }
     }
 }

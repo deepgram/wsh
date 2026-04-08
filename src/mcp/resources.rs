@@ -360,6 +360,7 @@ mod tests {
             tcp_addr: None,
             instance_name: "test".to_string(),
             http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
+            recordings: crate::recording::RecordingRegistry::new(),
         };
 
         let request = ReadResourceRequestParams {
@@ -392,6 +393,7 @@ mod tests {
             tcp_addr: None,
             instance_name: "test".to_string(),
             http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
+            recordings: crate::recording::RecordingRegistry::new(),
         };
 
         let request = ReadResourceRequestParams {
@@ -424,6 +426,7 @@ mod tests {
             tcp_addr: None,
             instance_name: "test".to_string(),
             http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
+            recordings: crate::recording::RecordingRegistry::new(),
         };
 
         let request = ReadResourceRequestParams {
@@ -466,6 +469,7 @@ mod tests {
             tcp_addr: None,
             instance_name: "test".to_string(),
             http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
+            recordings: crate::recording::RecordingRegistry::new(),
         };
 
         let request = ReadResourceRequestParams {
@@ -500,6 +504,7 @@ mod tests {
             tcp_addr: None,
             instance_name: "test".to_string(),
             http_socket_path: std::path::PathBuf::from("/tmp/test.http.sock"),
+            recordings: crate::recording::RecordingRegistry::new(),
         };
 
         let result = list_resources(&state).await.unwrap();
