@@ -1,9 +1,6 @@
 ---
 name: monitor
-description: >
-  Use when you need to watch, observe, or react to human terminal activity.
-  Examples: "monitor the terminal for errors", "watch what the user is doing
-  and provide help", "audit terminal activity for security issues".
+description: "Watches terminal activity in real time, detects errors and dangerous commands, summarizes long output, and provides contextual help via overlays and panels. Use when you need to monitor the terminal for errors, watch what the user is doing and offer suggestions, audit terminal activity for security issues, flag dangerous commands before execution, or track session state across commands."
 ---
 
 > **IMPORTANT: EXECUTION CONTEXT**

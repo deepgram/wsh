@@ -1,10 +1,6 @@
 ---
 name: drive-process
-description: >
-  Use when you need to drive a CLI program through command-and-response
-  interaction via wsh. Examples: "run a build command and check the output",
-  "interact with an installer that asks questions", "execute a sequence of
-  shell commands and handle errors".
+description: "Drives interactive CLI programs through wsh by sending commands, reading terminal output, handling interactive prompts, and detecting success or failure. Use when you need to run a command and check the output, interact with an installer that asks questions, execute a sequence of shell commands, handle interactive prompts, or manage long-running processes in the terminal."
 ---
 
 > **IMPORTANT: EXECUTION CONTEXT**

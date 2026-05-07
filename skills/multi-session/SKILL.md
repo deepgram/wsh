@@ -1,10 +1,6 @@
 ---
 name: multi-session
-description: >
-  Use when you need to orchestrate multiple parallel terminal sessions
-  via wsh server mode. Examples: "run builds in parallel across several
-  projects", "tail logs in one session while working in another",
-  "fan out tests across multiple sessions and gather results".
+description: "Spawns and manages multiple parallel terminal sessions, coordinates concurrent commands, and collects results across sessions using wsh. Use when you need to run commands simultaneously, execute builds in parallel, tail logs in one terminal while working in another, fan out tests across multiple sessions, or run background tasks alongside interactive work."
 ---
 
 > **IMPORTANT: EXECUTION CONTEXT**
