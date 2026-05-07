@@ -1,9 +1,6 @@
 ---
 name: visual-feedback
-description: >
-  Use when you need to communicate with the human visually through the terminal.
-  Examples: "show a status panel", "display an overlay notification",
-  "build a visual dashboard in the terminal".
+description: "Renders styled overlays, status panels, progress displays, and contextual annotations in the terminal using wsh visual elements. Use when you need to show a status bar, display a notification overlay, build a visual dashboard, annotate terminal output with warnings or tips, or present structured information like tables and styled text to the user."
 ---
 
 > **IMPORTANT: EXECUTION CONTEXT**

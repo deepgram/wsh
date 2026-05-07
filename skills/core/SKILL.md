@@ -1,12 +1,6 @@
 ---
 name: core
-description: >
-  REQUIRED before any wsh terminal operation when you do NOT have wsh_*
-  MCP tools. Contains the complete HTTP API reference with working curl
-  examples, bootstrap sequence, and authentication guide. wsh has no CLI
-  subcommands for programmatic use — do NOT run 'wsh <verb>' commands or
-  guess endpoints. Load this skill first.
-user-invocable: false
+description: "REQUIRED before any wsh terminal operation when you do NOT have wsh_* MCP tools. Contains the complete HTTP API reference with working curl examples, bootstrap sequence, and authentication guide. Use when you need to send commands, read terminal output, manage sessions, or create visual elements via the wsh HTTP API. Do NOT run 'wsh verb' commands or guess endpoints — load this skill first."
 ---
 
 # wsh: Terminal as a Service
