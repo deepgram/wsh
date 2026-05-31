@@ -998,6 +998,15 @@ async fn serve_tls(
             };
 
             let io = TokioIo::new(tls_stream);
+            // Inject ConnectInfo<SocketAddr> so tcp_transport_middleware can extract it.
+            // axum::serve does this automatically, but hyper_util's manual serve does not.
+            let app = app.layer(tower::util::MapRequestLayer::new(
+                move |mut req: axum::extract::Request| {
+                    req.extensions_mut()
+                        .insert(axum::extract::connect_info::ConnectInfo(peer_addr));
+                    req
+                },
+            ));
             let service = hyper_util::service::TowerToHyperService::new(app);
             let builder = hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new());
             let conn = builder.serve_connection_with_upgrades(io, service);
